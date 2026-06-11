@@ -23,6 +23,7 @@ app.get('/scan/:barcode', async (req, res) => {
     const product = offData.product;
     if (!product) return res.status(404).json({ error: 'Product not found' });
     const productName = product.product_name || 'Unknown Product';
+    const imageUrl = product.image_url || '';
     const ingredients = product.ingredients_text || '';
     const nutriScore = product.nutriscore_grade || 'c';
     const novaGroup = product.nova_group || 3;
