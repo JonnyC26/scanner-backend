@@ -48,7 +48,7 @@ app.get('/scan/:barcode', async (req, res) => {
     const explanation = claudeData.content[0].text;
     const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
     const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
-    res.json({ productName, ingredients, nutriScore, score, explanation, scoreColor, imageUrl });
+    res.json({ productName, ingredients, nutriScore, score, explanation, scoreColor, imageUrl, scoreLabel });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
