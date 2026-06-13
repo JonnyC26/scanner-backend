@@ -28,9 +28,9 @@ app.get('/scan/:barcode', async (req, res) => {
     const nutriScore = product.nutriscore_grade || 'c';
     const novaGroup = product.nova_group || 3;
     const additivesCount = product.additives_n || 0;
-    const additiveNames = product.additives_tags?.map(a => a.replace('en:', '').replace(/-/g, ' ')).join(', ') || '';
-    const isOrganic = product.labels_tags?.includes('en:organic') || false;
-    const protein = product.nutriments?.proteins_100g || 0;
+    const additivesCount = product.additives_n || 0;
+const additiveNames = product.additives_tags?.map(a => a.replace('en:', '').replace(/-/g, ' ')).join(', ') || '';
+const isOrganic = product.labels_tags?.includes('en:organic') || false;
     const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein);
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
