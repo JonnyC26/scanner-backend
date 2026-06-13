@@ -28,6 +28,7 @@ app.get('/scan/:barcode', async (req, res) => {
     const nutriScore = product.nutriscore_grade || 'c';
     const novaGroup = product.nova_group || 3;
     const additivesCount = product.additives_n || 0;
+    const additivesCount = product.additives_n || 0;
     const isOrganic = product.labels_tags?.includes('en:organic') || false;
     const protein = product.nutriments?.proteins_100g || 0;
     const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein);
@@ -48,7 +49,7 @@ app.get('/scan/:barcode', async (req, res) => {
     const explanation = claudeData.content[0].text;
     const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
     const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
-    res.json({ productName, ingredients: ingredients.substring(0, 150) + (ingredients.length > 150 ? '...' : ''), nutriScore, novaGroup, additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives', isOrganic: isOrganic ? 'Yes' : 'No', protein: protein + 'g', score, explanation, scoreColor, imageUrl, scoreLabel });
+    res.json({ productName, additiveNames, ingredients: ingredients.substring(0, 150) + (ingredients.length > 150 ? '...' : ''), nutriScore, novaGroup, additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives', isOrganic: isOrganic ? 'Yes' : 'No', protein: protein + 'g', score, explanation, scoreColor, imageUrl, scoreLabel });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
