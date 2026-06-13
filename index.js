@@ -22,15 +22,18 @@ app.get('/scan/:barcode', async (req, res) => {
     const offData = await offRes.json();
     const product = offData.product;
     if (!product) return res.status(404).json({ error: 'Product not found' });
+
     const productName = product.product_name || 'Unknown Product';
     const imageUrl = product.image_front_url || '';
     const ingredients = product.ingredients_text || '';
     const nutriScore = product.nutriscore_grade || 'c';
     const novaGroup = product.nova_group || 3;
     const additivesCount = product.additives_n || 0;
-const additiveNames = product.additives_tags?.map(a => a.replace('en:', '').replace(/-/g, ' ')).join(', ') || '';
-const isOrganic = product.labels_tags?.includes('en:organic') || false;
+    const additiveNames = product.additives_tags?.map(a => a.replace('en:', '').replace(/-/g, ' ')).join(', ') || '';
+    const isOrganic = product.labels_tags?.includes('en:organic') || false;
+    const protein = product.nutriments?.proteins_100g || 0;
     const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein);
+
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -44,11 +47,27 @@ const isOrganic = product.labels_tags?.includes('en:organic') || false;
         messages: [{ role: 'user', content: `Food ingredients: ${ingredients}. In one plain English sentence (max 20 words), explain the main health concern or benefit for a regular consumer.` }]
       })
     });
+
     const claudeData = await claudeRes.json();
     const explanation = claudeData.content[0].text;
     const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
     const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
-    res.json({ productName, additiveNames, ingredients: ingredients.substring(0, 150) + (ingredients.length > 150 ? '...' : ''), nutriScore, novaGroup, additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives', isOrganic: isOrganic ? 'Yes' : 'No', protein: protein + 'g', score, explanation, scoreColor, imageUrl, scoreLabel });
+
+    res.json({
+      productName,
+      additiveNames,
+      ingredients: ingredients.substring(0, 150) + (ingredients.length > 150 ? '...' : ''),
+      nutriScore,
+      novaGroup,
+      additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
+      isOrganic: isOrganic ? 'Yes' : 'No',
+      protein: protein + 'g',
+      score,
+      explanation,
+      scoreColor,
+      imageUrl,
+      scoreLabel
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
