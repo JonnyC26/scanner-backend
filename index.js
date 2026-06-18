@@ -13,9 +13,7 @@ function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protei
   const proteinPts = (protein && protein >= 10) ? 5 : 0;
   // Sugar penalty: per 100g, >22.5g is "high" by UK FSA standard
   const sugarPenalty = sugar >= 22.5 ? 10 : sugar >= 5 ? 5 : 0;
-  // Sodium penalty: per 100g, >0.6g (600mg) is "high" by UK FSA standard
-  const sodiumPenalty = sodium >= 0.6 ? 10 : sodium >= 0.3 ? 5 : 0;
-  const rawScore = nutriPts + novaPts + additivePts + organicPts + proteinPts - sugarPenalty - sodiumPenalty;
+  const rawScore = nutriPts + novaPts + additivePts + organicPts + proteinPts - sugarPenalty;
   return Math.max(0, Math.min(100, Math.round(rawScore)));
 }
 
