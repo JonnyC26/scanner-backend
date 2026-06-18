@@ -198,7 +198,7 @@ app.get('/scan/:barcode', async (req, res) => {
       productName,
       additiveNames,
       additiveList: JSON.stringify(additiveList),
-      ingredients: ingredients.substring(0, 150) + (ingredients.length > 150 ? '...' : ''),
+      ingredients: ingredients,
       nutriScore,
       novaGroup,
       additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
