@@ -8,7 +8,7 @@ function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protei
   const nutriPts = nutriPoints[nutriScore?.toLowerCase()] || 25;
   const novaPoints = { 1: 20, 2: 15, 3: 10, 4: 0 };
   const novaPts = novaPoints[parseInt(novaGroup)] ?? 10;
-  const additivePts = Math.max(0, 20 - ((additivesCount || 0) * 5));
+  const additivePts = Math.max(0, 15 - ((additivesCount || 0) * 3));
   const organicPts = isOrganic ? 10 : 0;
   const proteinPts = (protein && protein >= 10) ? 5 : 0;
   // Sugar penalty: per 100g, >22.5g is "high" by UK FSA standard
@@ -205,9 +205,9 @@ app.get('/scan/:barcode', async (req, res) => {
       novaGroup,
       additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
       isOrganic: isOrganic ? 'Yes' : 'No',
-      protein: protein + 'g',
-      sugar: sugar + 'g',
-      sodium: sodium + 'g',
+      protein: Math.round(protein * 10) / 10 + 'g',
+      sugar: Math.round(sugar * 10) / 10 + 'g',
+      sodium: Math.round(sodium * 1000) + 'mg',
       score,
       explanation,
       scoreColor,
