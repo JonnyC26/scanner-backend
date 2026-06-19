@@ -186,7 +186,7 @@ app.get('/scan/:barcode', async (req, res) => {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 100,
-        messages: [{ role: 'user', content: `Product data: sugar ${Math.round(sugar * 10) / 10}g/100g, sodium ${Math.round(sodium * 1000)}mg/100g, protein ${Math.round(protein * 10) / 10}g/100g, ${additivesCount} additives, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above (e.g. name a specific additive, or say "high in sugar" only if sugar is actually high). Avoid vague filler.` }]
+        messages: [{ role: 'user', content: `Product data: sugar ${Math.round(sugar * 10) / 10}g/100g, sodium ${Math.round(sodium * 1000)}mg/100g, protein ${Math.round(protein * 10) / 10}g/100g, ${additivesCount} additives, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. Only call sodium "high" if it is 600mg or more per 100g, and only call sugar "high" if it is 22.5g or more per 100g — otherwise do not use the word "high" for these. Name a specific additive if relevant. Avoid vague filler.` }]
       })
     });
 
