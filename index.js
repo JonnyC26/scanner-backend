@@ -6,7 +6,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium) {
   const nutriPoints = { 'a': 50, 'b': 40, 'c': 30, 'd': 15, 'e': 5 };
   const nutriPts = nutriPoints[nutriScore?.toLowerCase()] || 25;
-  const novaPoints = { 1: 20, 2: 15, 3: 10, 4: 0 };
+  const novaPoints = { 1: 20, 2: 15, 3: 10, 4: 5 };
   const novaPts = novaPoints[parseInt(novaGroup)] ?? 10;
   const additivePts = Math.max(0, 15 - ((additivesCount || 0) * 3));
   const organicPts = isOrganic ? 10 : 0;
