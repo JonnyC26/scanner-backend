@@ -176,6 +176,24 @@ app.get('/scan/:barcode', async (req, res) => {
     const sodium = product.nutriments?.sodium_100g || 0;
     const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
 
+    // DEBUG: log raw scoring inputs so we can see exactly what produced a given score.
+    // Remove or comment out once formula is verified against real-world products.
+    console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${isOrganic} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
+
+    // Display values: OFF stores nutrients per 100g by default, but a "bar" or "serving"
+    // is rarely 100g. Convert to per-serving for display using OFF's own _serving fields
+    // when available, falling back to computing from serving_quantity, falling back to
+    // per-100g (rare — only when OFF has no serving size data at all for this product).
+    const servingQty = product.serving_quantity ? parseFloat(product.serving_quantity) : null;
+    const toServing = (val100g, servingVal) => {
+      if (servingVal != null) return servingVal;
+      if (servingQty) return val100g * servingQty / 100;
+      return val100g;
+    };
+    const proteinDisplay = toServing(protein, product.nutriments?.proteins_serving);
+    const sugarDisplay = toServing(sugar, product.nutriments?.sugars_serving);
+    const sodiumDisplay = toServing(sodium, product.nutriments?.sodium_serving);
+
     const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -204,9 +222,9 @@ app.get('/scan/:barcode', async (req, res) => {
       novaGroup,
       additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
       isOrganic: isOrganic ? 'Yes' : 'No',
-      protein: Math.round(protein * 10) / 10 + 'g',
-      sugar: Math.round(sugar * 10) / 10 + 'g',
-      sodium: Math.round(sodium * 1000) + 'mg',
+      protein: Math.round(proteinDisplay * 10) / 10 + 'g',
+      sugar: Math.round(sugarDisplay * 10) / 10 + 'g',
+      sodium: Math.round(sodiumDisplay * 1000) + 'mg',
       score,
       explanation,
       scoreColor,
