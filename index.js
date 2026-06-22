@@ -187,7 +187,7 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   }
 
   const searchRes = await fetch(
-    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url,categories_tags`,
+    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&countries_tags_en=United States&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url,categories_tags`,
     { headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' } }
   );
   if (!searchRes.ok) {
@@ -303,11 +303,15 @@ app.get('/scan/:barcode', async (req, res) => {
 
     // Category alternatives — best-effort. If this fails (no category data,
     // OFF search hiccup, etc.) the scan should still succeed with an empty list.
+    // Only bother looking for alternatives if this product actually needs one —
+    // no point suggesting something "better" for an already-Good/Excellent scan.
     let alternatives = [];
-    try {
-      alternatives = await getCategoryAlternatives(barcode, product.categories_tags, score);
-    } catch (altErr) {
-      console.log(`[ALTERNATIVES ERROR] barcode=${barcode} ${altErr.message}`);
+    if (score < 50) {
+      try {
+        alternatives = await getCategoryAlternatives(barcode, product.categories_tags, score);
+      } catch (altErr) {
+        console.log(`[ALTERNATIVES ERROR] barcode=${barcode} ${altErr.message}`);
+      }
     }
 
     // DEBUG: log raw scoring inputs so we can see exactly what produced a given score.
