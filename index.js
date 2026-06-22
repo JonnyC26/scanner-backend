@@ -187,8 +187,13 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   }
 
   const searchRes = await fetch(
-    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url,categories_tags`
+    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url,categories_tags`,
+    { headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' } }
   );
+  if (!searchRes.ok) {
+    console.log(`[ALT DEBUG] barcode=${currentBarcode} search request failed, status=${searchRes.status}`);
+    return [];
+  }
   const searchData = await searchRes.json();
   const candidates = (searchData.products || []).filter(p => p.code && p.code !== currentBarcode);
 
@@ -251,7 +256,9 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
 app.get('/scan/:barcode', async (req, res) => {
   try {
     const { barcode } = req.params;
-    const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
+    const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
+      headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
+    });
     const offData = await offRes.json();
     const product = offData.product;
     if (!product) return res.status(404).json({ error: 'Product not found' });
