@@ -156,6 +156,49 @@ const additiveDetails = {
   'e1200': { category: 'Bulking agent', riskLevel: 'safe', description: 'Polydextrose is a synthetic soluble fiber made from glucose, sorbitol, and citric acid. It is used as a bulking agent and fat replacer in low-calorie foods. It acts as a prebiotic, feeding beneficial gut bacteria, and may help with blood sugar regulation. It is considered safe by all major regulatory agencies.', learnMoreUrl: 'https://en.wikipedia.org/wiki/Polydextrose' },
 };
 
+async function getCategoryAlternatives(currentBarcode, categoriesTags) {
+  if (!categoriesTags || categoriesTags.length === 0) return [];
+
+  // OFF category tags go broad -> specific. Try the most specific first,
+  // fall back to a broader one if too few results come back.
+  const tagsToTry = [categoriesTags[categoriesTags.length - 1], categoriesTags[0]];
+  let candidates = [];
+
+  for (const tag of tagsToTry) {
+    if (!tag) continue;
+    const searchRes = await fetch(
+      `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(tag)}&page_size=20&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url`
+    );
+    const searchData = await searchRes.json();
+    candidates = (searchData.products || []).filter(p => p.code && p.code !== currentBarcode);
+    if (candidates.length >= 5) break;
+  }
+
+  const scored = candidates
+    .map(p => {
+      const pNutriScore = p.nutriscore_grade || 'c';
+      const pNovaGroup = p.nova_group || 3;
+      const pAdditivesCount = (p.additives_tags || []).length;
+      const pIsOrganic = p.labels_tags?.includes('en:organic') || false;
+      const pProtein = p.nutriments?.proteins_100g || 0;
+      const pSugar = p.nutriments?.sugars_100g || 0;
+      const pSodium = p.nutriments?.sodium_100g || 0;
+      const pScore = calculateScore(pNutriScore, pNovaGroup, pAdditivesCount, pIsOrganic, pProtein, pSugar, pSodium);
+      return {
+        barcode: p.code,
+        name: p.product_name || 'Unknown Product',
+        score: pScore,
+        scoreColor: pScore >= 75 ? '#2E7D32' : pScore >= 50 ? '#8BC34A' : pScore >= 25 ? '#FF9800' : '#F44336',
+        scoreLabel: pScore >= 75 ? 'Excellent' : pScore >= 50 ? 'Good' : pScore >= 25 ? 'Poor' : 'Bad',
+        imageUrl: p.image_front_url || '',
+      };
+    })
+    .filter(p => p.name !== 'Unknown Product')
+    .sort((a, b) => b.score - a.score);
+
+  return scored.slice(0, 2);
+}
+
 app.get('/scan/:barcode', async (req, res) => {
   try {
     const { barcode } = req.params;
@@ -199,6 +242,15 @@ app.get('/scan/:barcode', async (req, res) => {
     const sodium = product.nutriments?.sodium_100g || 0;
     const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
     const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
+
+    // Category alternatives — best-effort. If this fails (no category data,
+    // OFF search hiccup, etc.) the scan should still succeed with an empty list.
+    let alternatives = [];
+    try {
+      alternatives = await getCategoryAlternatives(barcode, product.categories_tags);
+    } catch (altErr) {
+      console.log(`[ALTERNATIVES ERROR] barcode=${barcode} ${altErr.message}`);
+    }
 
     // DEBUG: log raw scoring inputs so we can see exactly what produced a given score.
     // Remove or comment out once formula is verified against real-world products.
@@ -251,6 +303,7 @@ app.get('/scan/:barcode', async (req, res) => {
       sodium: Math.round(sodiumDisplay * 1000) + 'mg',
       score,
       scoreBreakdown: JSON.stringify(scoreBreakdown),
+      alternatives: JSON.stringify(alternatives),
       explanation,
       scoreColor,
       imageUrl,
