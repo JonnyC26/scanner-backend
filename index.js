@@ -162,12 +162,14 @@ const additiveDetails = {
 // entirely rather than show something irrelevant.
 const GENERIC_CATEGORY_TAGS = new Set([
   'en:plant-based-foods-and-beverages', 'en:plant-based-foods', 'en:beverages',
-  'en:foods', 'en:snacks', 'en:meals', 'en:groceries', 'en:fermented-foods',
-  'en:dietary-supplements', 'en:meal-replacements', 'en:non-alcoholic-beverages',
+  'en:foods', 'en:snacks', 'en:meals', 'en:groceries', 'en:non-alcoholic-beverages',
 ]);
 
 async function getCategoryAlternatives(currentBarcode, categoriesTags, currentScore) {
-  if (!categoriesTags || categoriesTags.length === 0) return [];
+  if (!categoriesTags || categoriesTags.length === 0) {
+    console.log(`[ALT DEBUG] barcode=${currentBarcode} EARLY EXIT — categoriesTags=${JSON.stringify(categoriesTags)}`);
+    return [];
+  }
 
   // Walk from most specific to least specific, skipping anything too generic
   // to use as a search anchor. This only determines the candidate POOL —
@@ -179,7 +181,10 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
       break;
     }
   }
-  if (!specificTag) return [];
+  if (!specificTag) {
+    console.log(`[ALT DEBUG] barcode=${currentBarcode} SILENT EXIT — all tags too generic. fullTagList=${JSON.stringify(categoriesTags)}`);
+    return [];
+  }
 
   const searchRes = await fetch(
     `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url,categories_tags`
