@@ -161,18 +161,17 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
 
   // OFF category tags go broad -> specific. Try the most specific first,
   // fall back to a broader one if too few results come back.
-  const tagsToTry = [categoriesTags[categoriesTags.length - 1], categoriesTags[0]];
-  let candidates = [];
+  // Only use the most specific category tag. Falling back to a broader tag
+  // (e.g. "snacks") pulls in products that aren't actually comparable —
+  // no recommendation is better than an irrelevant one.
+  const specificTag = categoriesTags[categoriesTags.length - 1];
+  if (!specificTag) return [];
 
-  for (const tag of tagsToTry) {
-    if (!tag) continue;
-    const searchRes = await fetch(
-      `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(tag)}&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url`
-    );
-    const searchData = await searchRes.json();
-    candidates = (searchData.products || []).filter(p => p.code && p.code !== currentBarcode);
-    if (candidates.length >= 5) break;
-  }
+  const searchRes = await fetch(
+    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url`
+  );
+  const searchData = await searchRes.json();
+  const candidates = (searchData.products || []).filter(p => p.code && p.code !== currentBarcode);
 
   const scored = candidates
     .map(p => {
