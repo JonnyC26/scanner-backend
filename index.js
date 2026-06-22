@@ -156,15 +156,28 @@ const additiveDetails = {
   'e1200': { category: 'Bulking agent', riskLevel: 'safe', description: 'Polydextrose is a synthetic soluble fiber made from glucose, sorbitol, and citric acid. It is used as a bulking agent and fat replacer in low-calorie foods. It acts as a prebiotic, feeding beneficial gut bacteria, and may help with blood sugar regulation. It is considered safe by all major regulatory agencies.', learnMoreUrl: 'https://en.wikipedia.org/wiki/Polydextrose' },
 };
 
+// OFF's top-level category tags are too broad to produce relevant comparisons —
+// matching only on one of these would compare e.g. a protein bar against bottled
+// water. If a product's only available tags are this generic, skip recommendations
+// entirely rather than show something irrelevant.
+const GENERIC_CATEGORY_TAGS = new Set([
+  'en:plant-based-foods-and-beverages', 'en:plant-based-foods', 'en:beverages',
+  'en:foods', 'en:snacks', 'en:meals', 'en:groceries', 'en:fermented-foods',
+  'en:dietary-supplements', 'en:meal-replacements', 'en:non-alcoholic-beverages',
+]);
+
 async function getCategoryAlternatives(currentBarcode, categoriesTags, currentScore) {
   if (!categoriesTags || categoriesTags.length === 0) return [];
 
-  // OFF category tags go broad -> specific. Try the most specific first,
-  // fall back to a broader one if too few results come back.
-  // Only use the most specific category tag. Falling back to a broader tag
-  // (e.g. "snacks") pulls in products that aren't actually comparable —
-  // no recommendation is better than an irrelevant one.
-  const specificTag = categoriesTags[categoriesTags.length - 1];
+  // Walk from most specific to least specific, skipping anything too generic
+  // to produce a meaningful comparison.
+  let specificTag = null;
+  for (let i = categoriesTags.length - 1; i >= 0; i--) {
+    if (!GENERIC_CATEGORY_TAGS.has(categoriesTags[i])) {
+      specificTag = categoriesTags[i];
+      break;
+    }
+  }
   if (!specificTag) return [];
 
   const searchRes = await fetch(
