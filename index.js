@@ -213,9 +213,11 @@ app.get('/scan/:barcode', async (req, res) => {
     const ingredients = product.ingredients_text || '';
     const nutriScore = product.nutriscore_grade || 'c';
     const novaGroup = product.nova_group || 3;
-    const additivesCount = product.additives_n || 0;
-
     const additiveTags = product.additives_tags || [];
+    // Use the actual length of the additives list as the count, not OFF's
+    // separate additives_n field — that field can disagree with additives_tags
+    // for a given product, causing the count badge to not match the detail list.
+    const additivesCount = additiveTags.length;
 
     const additiveNames = additiveTags.map(a => {
       const key = a.replace('en:', '').toLowerCase();
