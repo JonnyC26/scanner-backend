@@ -156,7 +156,7 @@ const additiveDetails = {
   'e1200': { category: 'Bulking agent', riskLevel: 'safe', description: 'Polydextrose is a synthetic soluble fiber made from glucose, sorbitol, and citric acid. It is used as a bulking agent and fat replacer in low-calorie foods. It acts as a prebiotic, feeding beneficial gut bacteria, and may help with blood sugar regulation. It is considered safe by all major regulatory agencies.', learnMoreUrl: 'https://en.wikipedia.org/wiki/Polydextrose' },
 };
 
-async function getCategoryAlternatives(currentBarcode, categoriesTags) {
+async function getCategoryAlternatives(currentBarcode, categoriesTags, currentScore) {
   if (!categoriesTags || categoriesTags.length === 0) return [];
 
   // OFF category tags go broad -> specific. Try the most specific first,
@@ -193,9 +193,9 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags) {
         imageUrl: p.image_front_url || '',
       };
     })
-    // Only recommend genuinely excellent options — a "best of a mediocre category"
-    // pick isn't a real recommendation. If nothing clears this bar, show nothing.
-    .filter(p => p.name !== 'Unknown Product' && p.score >= 75)
+    // Never recommend below "Good" tier, and never recommend something that
+    // doesn't actually beat what was just scanned.
+    .filter(p => p.name !== 'Unknown Product' && p.score >= 50 && p.score > currentScore)
     .sort((a, b) => b.score - a.score);
 
   return scored.slice(0, 2);
@@ -249,7 +249,7 @@ app.get('/scan/:barcode', async (req, res) => {
     // OFF search hiccup, etc.) the scan should still succeed with an empty list.
     let alternatives = [];
     try {
-      alternatives = await getCategoryAlternatives(barcode, product.categories_tags);
+      alternatives = await getCategoryAlternatives(barcode, product.categories_tags, score);
     } catch (altErr) {
       console.log(`[ALTERNATIVES ERROR] barcode=${barcode} ${altErr.message}`);
     }
