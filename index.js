@@ -189,7 +189,10 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
 
   const originalTagSet = new Set(categoriesTags.filter(t => !GENERIC_CATEGORY_TAGS.has(t)));
 
-  const scored = candidates
+  // DEBUG: see exactly why candidates pass or fail relevance/score filtering.
+  console.log(`[ALT DEBUG] barcode=${currentBarcode} specificTag=${specificTag} candidateCount=${candidates.length} originalTags=${JSON.stringify([...originalTagSet])}`);
+
+  const scoredFull = candidates
     .map(p => {
       const pNutriScore = p.nutriscore_grade || 'c';
       const pNovaGroup = p.nova_group || 3;
@@ -218,12 +221,24 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
         imageUrl: p.image_front_url || '',
         overlapRatio,
       };
-    })
+    });
+
+  // DEBUG: show the top candidates by score with their overlap ratio, so we
+  // can see exactly why something passed or failed the relevance/score gate.
+  const debugTop = scoredFull
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map(p => `${p.name}|score=${p.score}|overlap=${p.overlapRatio.toFixed(2)}`);
+  console.log(`[ALT DEBUG] currentScore=${currentScore} top8=${JSON.stringify(debugTop)}`);
+
+  const scored = scoredFull
     // Require at least half the scanned product's specific category tags to
     // match — this is the real relevance gate, not the search tag itself.
     .filter(p => p.name !== 'Unknown Product' && p.score >= 50 && p.score > currentScore && p.overlapRatio >= 0.5)
     .sort((a, b) => b.score - a.score)
     .map(({ overlapRatio, ...rest }) => rest);
+
+  console.log(`[ALT DEBUG] qualified=${scored.length} top5raw=${JSON.stringify(candidates.slice(0,5).map(p => p.product_name))}`);
 
   return scored.slice(0, 2);
 }
