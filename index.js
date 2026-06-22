@@ -170,7 +170,8 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   if (!categoriesTags || categoriesTags.length === 0) return [];
 
   // Walk from most specific to least specific, skipping anything too generic
-  // to produce a meaningful comparison.
+  // to use as a search anchor. This only determines the candidate POOL —
+  // actual relevance is decided below by comparing full tag overlap.
   let specificTag = null;
   for (let i = categoriesTags.length - 1; i >= 0; i--) {
     if (!GENERIC_CATEGORY_TAGS.has(categoriesTags[i])) {
@@ -181,10 +182,12 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   if (!specificTag) return [];
 
   const searchRes = await fetch(
-    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url`
+    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url,categories_tags`
   );
   const searchData = await searchRes.json();
   const candidates = (searchData.products || []).filter(p => p.code && p.code !== currentBarcode);
+
+  const originalTagSet = new Set(categoriesTags.filter(t => !GENERIC_CATEGORY_TAGS.has(t)));
 
   const scored = candidates
     .map(p => {
@@ -196,6 +199,16 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
       const pSugar = p.nutriments?.sugars_100g || 0;
       const pSodium = p.nutriments?.sodium_100g || 0;
       const pScore = calculateScore(pNutriScore, pNovaGroup, pAdditivesCount, pIsOrganic, pProtein, pSugar, pSodium);
+
+      // Relevance: how much of this candidate's non-generic category lineage
+      // actually overlaps with the scanned product's. Two genuinely similar
+      // products (e.g. two protein bars) share most of their tag chain; a
+      // protein bar and bottled water only share a top-level tag, which is
+      // already excluded from this comparison.
+      const candidateTags = (p.categories_tags || []).filter(t => !GENERIC_CATEGORY_TAGS.has(t));
+      const sharedTags = candidateTags.filter(t => originalTagSet.has(t)).length;
+      const overlapRatio = originalTagSet.size > 0 ? sharedTags / originalTagSet.size : 0;
+
       return {
         barcode: p.code,
         name: p.product_name || 'Unknown Product',
@@ -203,12 +216,14 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
         scoreColor: pScore >= 75 ? '#2E7D32' : pScore >= 50 ? '#8BC34A' : pScore >= 25 ? '#FF9800' : '#F44336',
         scoreLabel: pScore >= 75 ? 'Excellent' : pScore >= 50 ? 'Good' : pScore >= 25 ? 'Poor' : 'Bad',
         imageUrl: p.image_front_url || '',
+        overlapRatio,
       };
     })
-    // Never recommend below "Good" tier, and never recommend something that
-    // doesn't actually beat what was just scanned.
-    .filter(p => p.name !== 'Unknown Product' && p.score >= 50 && p.score > currentScore)
-    .sort((a, b) => b.score - a.score);
+    // Require at least half the scanned product's specific category tags to
+    // match — this is the real relevance gate, not the search tag itself.
+    .filter(p => p.name !== 'Unknown Product' && p.score >= 50 && p.score > currentScore && p.overlapRatio >= 0.5)
+    .sort((a, b) => b.score - a.score)
+    .map(({ overlapRatio, ...rest }) => rest);
 
   return scored.slice(0, 2);
 }
