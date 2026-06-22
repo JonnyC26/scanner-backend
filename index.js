@@ -167,7 +167,7 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags) {
   for (const tag of tagsToTry) {
     if (!tag) continue;
     const searchRes = await fetch(
-      `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(tag)}&page_size=20&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url`
+      `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(tag)}&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url`
     );
     const searchData = await searchRes.json();
     candidates = (searchData.products || []).filter(p => p.code && p.code !== currentBarcode);
@@ -193,7 +193,9 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags) {
         imageUrl: p.image_front_url || '',
       };
     })
-    .filter(p => p.name !== 'Unknown Product')
+    // Only recommend genuinely excellent options — a "best of a mediocre category"
+    // pick isn't a real recommendation. If nothing clears this bar, show nothing.
+    .filter(p => p.name !== 'Unknown Product' && p.score >= 75)
     .sort((a, b) => b.score - a.score);
 
   return scored.slice(0, 2);
