@@ -301,6 +301,11 @@ app.get('/scan/:barcode', async (req, res) => {
     const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
     const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
 
+    // Tier classification — ALWAYS based on official per-100g UK FSA thresholds,
+    // even though the number shown to the user is per-serving (see toServing below).
+    const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
+    const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
+
     // Category alternatives — best-effort. If this fails (no category data,
     // OFF search hiccup, etc.) the scan should still succeed with an empty list.
     // Only bother looking for alternatives if this product actually needs one —
@@ -342,7 +347,7 @@ app.get('/scan/:barcode', async (req, res) => {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 100,
-        messages: [{ role: 'user', content: `Product data: sugar ${Math.round(sugar * 10) / 10}g/100g, sodium ${Math.round(sodium * 1000)}mg/100g, protein ${Math.round(protein * 10) / 10}g/100g, ${additivesCount} additives, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. Use these UK FSA tiers: sodium is "low" under 120mg, "moderate" 120-599mg, "high" 600mg or more (per 100g). Sugar is "low" under 5g, "moderate" 5-22.4g, "high" 22.5g or more (per 100g). Match your wording to the correct tier — do not call something "high" if it's moderate. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler.` }]
+        messages: [{ role: 'user', content: `Product data: sugar ${Math.round(sugarDisplay * 10) / 10}g per serving (${sugarTier} tier), sodium ${Math.round(sodiumDisplay * 1000)}mg per serving (${sodiumTier} tier), protein ${Math.round(proteinDisplay * 10) / 10}g per serving, ${additivesCount} additives, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler.` }]
       })
     });
 
@@ -363,6 +368,8 @@ app.get('/scan/:barcode', async (req, res) => {
       protein: Math.round(proteinDisplay * 10) / 10 + 'g',
       sugar: Math.round(sugarDisplay * 10) / 10 + 'g',
       sodium: Math.round(sodiumDisplay * 1000) + 'mg',
+      sugarTier,
+      sodiumTier,
       score,
       scoreBreakdown: JSON.stringify(scoreBreakdown),
       alternatives: JSON.stringify(alternatives),
