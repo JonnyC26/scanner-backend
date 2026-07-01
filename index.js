@@ -394,11 +394,11 @@ app.get('/search', async (req, res) => {
   if (!query) return res.status(400).json({ error: 'Missing search query' });
 
   try {
-    const searchUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=20&fields=code,product_name,image_front_thumb_url,brands,quantity`;
+    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,brands,quantity&page_size=20&json=1`;
     const response = await fetch(searchUrl);
     const data = await response.json();
 
-    const products = (data.products || [])
+    const products = (data.hits || data.products || [])
       .filter(p => p.code && p.product_name)
       .map(p => ({
         barcode: p.code,
