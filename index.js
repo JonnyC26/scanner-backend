@@ -384,4 +384,30 @@ app.get('/scan/:barcode', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+app.get('/search', async (req, res) => {
+  const query = (req.query.q || '').trim();
+  if (!query) return res.status(400).json({ error: 'Missing search query' });
+
+  try {
+    const searchUrl = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=20&fields=code,product_name,image_front_thumb_url,brands,quantity`;
+    const response = await fetch(searchUrl);
+    const data = await response.json();
+
+    const products = (data.products || [])
+      .filter(p => p.code && p.product_name)
+      .map(p => ({
+        barcode: p.code,
+        productName: p.product_name,
+        brand: p.brands || '',
+        quantity: p.quantity || '',
+        imageUrl: p.image_front_thumb_url || '',
+      }));
+
+    res.json({ products });
+  } catch (err) {
+    console.error('Search error:', err);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));
