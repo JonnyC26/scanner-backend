@@ -403,7 +403,7 @@ app.get('/search', async (req, res) => {
       .map(p => ({
         barcode: p.code,
         productName: p.product_name,
-        brand: p.brands || '',
+        brand: Array.isArray(p.brands) ? p.brands[0] || '' : (p.brands || ''),
         quantity: p.quantity || '',
         imageUrl: p.image_front_thumb_url || '',
       }));
