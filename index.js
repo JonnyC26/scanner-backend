@@ -394,19 +394,56 @@ app.get('/search', async (req, res) => {
   if (!query) return res.status(400).json({ error: 'Missing search query' });
 
   try {
-    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,brands,quantity&page_size=20&json=1`;
+    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,serving_quantity&page_size=20&json=1`;
     const response = await fetch(searchUrl);
     const data = await response.json();
 
     const products = (data.hits || data.products || [])
       .filter(p => p.code && p.product_name)
-      .map(p => ({
-        barcode: p.code,
-        productName: p.product_name,
-        brand: Array.isArray(p.brands) ? p.brands[0] || '' : (p.brands || ''),
-        quantity: p.quantity || '',
-        imageUrl: p.image_front_thumb_url || '',
-      }));
+      .map(p => {
+        const nutriScore = p.nutriscore_grade;
+        const novaGroup = p.nova_group;
+        const additivesCount = (p.additives_tags || []).length;
+        const isOrganic = p.labels_tags?.includes('en:organic') || false;
+        const protein = p.nutriments?.proteins_100g || 0;
+        const sugar = p.nutriments?.sugars_100g || 0;
+        const sodium = p.nutriments?.sodium_100g || 0;
+
+        const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
+        const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
+        const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
+
+        // Tier classification always uses per-100g raw values (UK FSA thresholds)
+        const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
+        const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
+
+        // Display values converted to per-serving, same fallback chain as /scan
+        const servingQty = p.serving_quantity ? parseFloat(p.serving_quantity) : null;
+        const toServing = (val100g, servingVal) => {
+          if (servingVal != null) return servingVal;
+          if (servingQty) return val100g * servingQty / 100;
+          return val100g;
+        };
+        const proteinDisplay = toServing(protein, p.nutriments?.proteins_serving);
+        const sugarDisplay = toServing(sugar, p.nutriments?.sugars_serving);
+        const sodiumDisplay = toServing(sodium, p.nutriments?.sodium_serving);
+
+        return {
+          barcode: p.code,
+          productName: p.product_name,
+          brand: Array.isArray(p.brands) ? p.brands[0] || '' : (p.brands || ''),
+          quantity: p.quantity || '',
+          imageUrl: p.image_front_thumb_url || '',
+          score,
+          scoreColor,
+          scoreLabel,
+          protein: Math.round(proteinDisplay * 10) / 10 + 'g',
+          sugar: Math.round(sugarDisplay * 10) / 10 + 'g',
+          sodium: Math.round(sodiumDisplay * 1000) + 'mg',
+          sugarTier,
+          sodiumTier,
+        };
+      });
 
     res.json({ products });
   } catch (err) {
