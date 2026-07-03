@@ -1,4 +1,5 @@
 const express = require('express');
+const admin = require('firebase-admin');
 const app = express();
 app.use(express.json());
 app.use((req, res, next) => {
@@ -7,6 +8,17 @@ app.use((req, res, next) => {
   next();
 });
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+
+// Firebase Admin — used to read/write a server-side product cache in Firestore.
+admin.initializeApp({
+  credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)),
+});
+const db = admin.firestore();
+const CACHE_COLLECTION = 'productCache';
+// Cached entries older than this are treated as stale and get re-scanned,
+// so a product's data doesn't go permanently out of date if OFF updates it.
+const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 
 function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium) {
   const nutriPoints = { 'a': 50, 'b': 40, 'c': 30, 'd': 15, 'e': 5 };
@@ -261,6 +273,27 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
 app.get('/scan/:barcode', async (req, res) => {
   try {
     const { barcode } = req.params;
+
+    // Check the cache first — a hit means an instant response with no OFF
+    // fetch, no scoring math, and no Claude call.
+    try {
+      const cacheDoc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
+      if (cacheDoc.exists) {
+        const cached = cacheDoc.data();
+        const age = Date.now() - (cached.cachedAt || 0);
+        if (age < CACHE_TTL_MS) {
+          console.log(`[CACHE HIT] barcode=${barcode} age=${Math.round(age / 3600000)}h`);
+          const { cachedAt, ...responseData } = cached;
+          return res.json(responseData);
+        }
+        console.log(`[CACHE STALE] barcode=${barcode} age=${Math.round(age / 3600000)}h — re-scanning`);
+      }
+    } catch (cacheErr) {
+      // Cache read failing should never block a scan — fall through to a
+      // normal live scan just like a cache miss.
+      console.log(`[CACHE READ ERROR] barcode=${barcode} ${cacheErr.message}`);
+    }
+
     const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
       headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
     });
@@ -363,7 +396,7 @@ app.get('/scan/:barcode', async (req, res) => {
     const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
     const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
 
-    res.json({
+    const responseData = {
       productName,
       additiveNames,
       additiveList: JSON.stringify(additiveList),
@@ -385,7 +418,20 @@ app.get('/scan/:barcode', async (req, res) => {
       scoreColor,
       imageUrl,
       scoreLabel
-    });
+    };
+
+    // Write-through cache — best-effort. A failed cache write should never
+    // fail the scan the user is actively waiting on.
+    try {
+      await db.collection(CACHE_COLLECTION).doc(barcode).set({
+        ...responseData,
+        cachedAt: Date.now(),
+      });
+    } catch (cacheWriteErr) {
+      console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
+    }
+
+    res.json(responseData);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
