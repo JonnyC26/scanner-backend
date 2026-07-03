@@ -204,7 +204,7 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   }
 
   const searchRes = await fetch(
-    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&countries_tags_en=United States&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url,categories_tags`,
+    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&countries_tags_en=United States&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url,image_url,categories_tags`,
     { headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' } }
   );
   if (!searchRes.ok) {
@@ -245,7 +245,7 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
         score: pScore,
         scoreColor: pScore >= 75 ? '#2E7D32' : pScore >= 50 ? '#8BC34A' : pScore >= 25 ? '#FF9800' : '#F44336',
         scoreLabel: pScore >= 75 ? 'Excellent' : pScore >= 50 ? 'Good' : pScore >= 25 ? 'Poor' : 'Bad',
-        imageUrl: p.image_front_url || '',
+        imageUrl: p.image_front_url || p.image_url || '',
         overlapRatio,
       };
     });
@@ -305,7 +305,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
   }
 
   const productName = product.product_name || 'Unknown Product';
-  const imageUrl = product.image_front_url || '';
+  const imageUrl = product.image_front_url || product.image_url || '';
   const ingredients = product.ingredients_text || '';
   const nutriScore = product.nutriscore_grade || 'c';
   const novaGroup = product.nova_group || 3;
@@ -434,7 +434,7 @@ app.get('/search', async (req, res) => {
   if (!query) return res.status(400).json({ error: 'Missing search query' });
 
   try {
-    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,serving_quantity&page_size=20&json=1`;
+    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,image_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,serving_quantity&page_size=20&json=1`;
     const response = await fetch(searchUrl);
     const data = await response.json();
 
@@ -474,7 +474,7 @@ app.get('/search', async (req, res) => {
           productName: p.product_name,
           brand: Array.isArray(p.brands) ? p.brands[0] || '' : (p.brands || ''),
           quantity: p.quantity || '',
-          imageUrl: p.image_front_thumb_url || '',
+          imageUrl: p.image_front_thumb_url || p.image_url || '',
           score,
           scoreColor,
           scoreLabel,
