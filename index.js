@@ -310,6 +310,8 @@ app.get('/scan/:barcode', async (req, res) => {
     // even though the number shown to the user is per-serving (see toServing below).
     const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
     const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
+    // Protein tier — matches the scoring bonus threshold (>=10g per 100g)
+    const proteinTier = protein >= 10 ? 'high' : 'low';
 
     // Category alternatives — best-effort. If this fails (no category data,
     // OFF search hiccup, etc.) the scan should still succeed with an empty list.
@@ -375,6 +377,7 @@ app.get('/scan/:barcode', async (req, res) => {
       sodium: Math.round(sodiumDisplay * 1000) + 'mg',
       sugarTier,
       sodiumTier,
+      proteinTier,
       score,
       scoreBreakdown: JSON.stringify(scoreBreakdown),
       alternatives: JSON.stringify(alternatives),
@@ -416,6 +419,7 @@ app.get('/search', async (req, res) => {
         // Tier classification always uses per-100g raw values (UK FSA thresholds)
         const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
         const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
+        const proteinTier = protein >= 10 ? 'high' : 'low';
 
         // Display values converted to per-serving, same fallback chain as /scan
         const servingQty = p.serving_quantity ? parseFloat(p.serving_quantity) : null;
@@ -442,6 +446,7 @@ app.get('/search', async (req, res) => {
           sodium: Math.round(sodiumDisplay * 1000) + 'mg',
           sugarTier,
           sodiumTier,
+          proteinTier,
         };
       });
 
