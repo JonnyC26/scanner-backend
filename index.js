@@ -270,12 +270,12 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   return scored.slice(0, 2);
 }
 
-app.get('/scan/:barcode', async (req, res) => {
-  try {
-    const { barcode } = req.params;
-
-    // Check the cache first — a hit means an instant response with no OFF
-    // fetch, no scoring math, and no Claude call.
+// Core scan logic, extracted so both the /scan route and the pre-scoring
+// admin job can share it. Returns the response data object (already cached),
+// or throws on a hard failure (product not found, etc.) — same behavior the
+// /scan route relied on before this refactor.
+async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
+  if (!skipCacheCheck) {
     try {
       const cacheDoc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
       if (cacheDoc.exists) {
@@ -284,156 +284,147 @@ app.get('/scan/:barcode', async (req, res) => {
         if (age < CACHE_TTL_MS) {
           console.log(`[CACHE HIT] barcode=${barcode} age=${Math.round(age / 3600000)}h`);
           const { cachedAt, ...responseData } = cached;
-          return res.json(responseData);
+          return responseData;
         }
         console.log(`[CACHE STALE] barcode=${barcode} age=${Math.round(age / 3600000)}h — re-scanning`);
       }
     } catch (cacheErr) {
-      // Cache read failing should never block a scan — fall through to a
-      // normal live scan just like a cache miss.
       console.log(`[CACHE READ ERROR] barcode=${barcode} ${cacheErr.message}`);
     }
+  }
 
-    const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
-      headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
-    });
-    const offData = await offRes.json();
-    const product = offData.product;
-    if (!product) return res.status(404).json({ error: 'Product not found' });
+  const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
+    headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
+  });
+  const offData = await offRes.json();
+  const product = offData.product;
+  if (!product) {
+    const notFoundErr = new Error('Product not found');
+    notFoundErr.statusCode = 404;
+    throw notFoundErr;
+  }
 
-    const productName = product.product_name || 'Unknown Product';
-    const imageUrl = product.image_front_url || '';
-    const ingredients = product.ingredients_text || '';
-    const nutriScore = product.nutriscore_grade || 'c';
-    const novaGroup = product.nova_group || 3;
-    const additiveTags = product.additives_tags || [];
-    // Use the actual length of the additives list as the count, not OFF's
-    // separate additives_n field — that field can disagree with additives_tags
-    // for a given product, causing the count badge to not match the detail list.
-    const additivesCount = additiveTags.length;
+  const productName = product.product_name || 'Unknown Product';
+  const imageUrl = product.image_front_url || '';
+  const ingredients = product.ingredients_text || '';
+  const nutriScore = product.nutriscore_grade || 'c';
+  const novaGroup = product.nova_group || 3;
+  const additiveTags = product.additives_tags || [];
+  const additivesCount = additiveTags.length;
 
-    const additiveNames = additiveTags.map(a => {
-      const key = a.replace('en:', '').toLowerCase();
-      return additiveMap[key] || key.toUpperCase();
-    }).join(', ') || '';
+  const additiveNames = additiveTags.map(a => {
+    const key = a.replace('en:', '').toLowerCase();
+    return additiveMap[key] || key.toUpperCase();
+  }).join(', ') || '';
 
-    // Build rich additive details list for the detail screen
-    const additiveList = additiveTags.map(a => {
-      const key = a.replace('en:', '').toLowerCase();
-      const name = additiveMap[key] || key.toUpperCase();
-      const details = additiveDetails[key];
-      return {
-        code: key,
-        name: name,
-        category: details?.category || 'Food additive',
-        riskLevel: details?.riskLevel || 'safe',
-        description: details?.description || 'No additional information available for this additive.',
-        learnMoreUrl: details?.learnMoreUrl || `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(name)}`,
-      };
-    });
-
-    const isOrganic = product.labels_tags?.includes('en:organic') || false;
-    const protein = product.nutriments?.proteins_100g || 0;
-    const sugar = product.nutriments?.sugars_100g || 0;
-    const sodium = product.nutriments?.sodium_100g || 0;
-    const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
-    const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
-
-    // Tier classification — ALWAYS based on official per-100g UK FSA thresholds,
-    // even though the number shown to the user is per-serving (see toServing below).
-    const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
-    const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
-    // Protein tier — matches the scoring bonus threshold (>=10g per 100g)
-    const proteinTier = protein >= 10 ? 'high' : 'low';
-
-    // Category alternatives — best-effort. If this fails (no category data,
-    // OFF search hiccup, etc.) the scan should still succeed with an empty list.
-    // Only bother looking for alternatives if this product actually needs one —
-    // no point suggesting something "better" for an already-Good/Excellent scan.
-    let alternatives = [];
-    if (score < 50) {
-      try {
-        alternatives = await getCategoryAlternatives(barcode, product.categories_tags, score);
-      } catch (altErr) {
-        console.log(`[ALTERNATIVES ERROR] barcode=${barcode} ${altErr.message}`);
-      }
-    }
-
-    // DEBUG: log raw scoring inputs so we can see exactly what produced a given score.
-    // Remove or comment out once formula is verified against real-world products.
-    console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${isOrganic} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
-
-    // Display values: OFF stores nutrients per 100g by default, but a "bar" or "serving"
-    // is rarely 100g. Convert to per-serving for display using OFF's own _serving fields
-    // when available, falling back to computing from serving_quantity, falling back to
-    // per-100g (rare — only when OFF has no serving size data at all for this product).
-    const servingQty = product.serving_quantity ? parseFloat(product.serving_quantity) : null;
-    const toServing = (val100g, servingVal) => {
-      if (servingVal != null) return servingVal;
-      if (servingQty) return val100g * servingQty / 100;
-      return val100g;
+  const additiveList = additiveTags.map(a => {
+    const key = a.replace('en:', '').toLowerCase();
+    const name = additiveMap[key] || key.toUpperCase();
+    const details = additiveDetails[key];
+    return {
+      code: key,
+      name: name,
+      category: details?.category || 'Food additive',
+      riskLevel: details?.riskLevel || 'safe',
+      description: details?.description || 'No additional information available for this additive.',
+      learnMoreUrl: details?.learnMoreUrl || `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(name)}`,
     };
-    const proteinDisplay = toServing(protein, product.nutriments?.proteins_serving);
-    const sugarDisplay = toServing(sugar, product.nutriments?.sugars_serving);
-    const sodiumDisplay = toServing(sodium, product.nutriments?.sodium_serving);
+  });
 
-    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 100,
-        messages: [{ role: 'user', content: `Product data: sugar ${Math.round(sugarDisplay * 10) / 10}g per serving (${sugarTier} tier), sodium ${Math.round(sodiumDisplay * 1000)}mg per serving (${sodiumTier} tier), protein ${Math.round(proteinDisplay * 10) / 10}g per serving, ${additivesCount} additives, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration."` }]
-      })
-    });
+  const isOrganic = product.labels_tags?.includes('en:organic') || false;
+  const protein = product.nutriments?.proteins_100g || 0;
+  const sugar = product.nutriments?.sugars_100g || 0;
+  const sodium = product.nutriments?.sodium_100g || 0;
+  const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
+  const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
 
-    const claudeData = await claudeRes.json();
-    const explanation = claudeData.content[0].text;
-    const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
-    const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
+  const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
+  const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
+  const proteinTier = protein >= 10 ? 'high' : 'low';
 
-    const responseData = {
-      productName,
-      additiveNames,
-      additiveList: JSON.stringify(additiveList),
-      ingredients: ingredients,
-      nutriScore,
-      novaGroup,
-      additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
-      isOrganic: isOrganic ? 'Yes' : 'No',
-      protein: Math.round(proteinDisplay * 10) / 10 + 'g',
-      sugar: Math.round(sugarDisplay * 10) / 10 + 'g',
-      sodium: Math.round(sodiumDisplay * 1000) + 'mg',
-      sugarTier,
-      sodiumTier,
-      proteinTier,
-      score,
-      scoreBreakdown: JSON.stringify(scoreBreakdown),
-      alternatives: JSON.stringify(alternatives),
-      explanation,
-      scoreColor,
-      imageUrl,
-      scoreLabel
-    };
-
-    // Write-through cache — best-effort. A failed cache write should never
-    // fail the scan the user is actively waiting on.
+  let alternatives = [];
+  if (score < 50) {
     try {
-      await db.collection(CACHE_COLLECTION).doc(barcode).set({
-        ...responseData,
-        cachedAt: Date.now(),
-      });
-    } catch (cacheWriteErr) {
-      console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
+      alternatives = await getCategoryAlternatives(barcode, product.categories_tags, score);
+    } catch (altErr) {
+      console.log(`[ALTERNATIVES ERROR] barcode=${barcode} ${altErr.message}`);
     }
+  }
 
+  console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${isOrganic} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
+
+  const servingQty = product.serving_quantity ? parseFloat(product.serving_quantity) : null;
+  const toServing = (val100g, servingVal) => {
+    if (servingVal != null) return servingVal;
+    if (servingQty) return val100g * servingQty / 100;
+    return val100g;
+  };
+  const proteinDisplay = toServing(protein, product.nutriments?.proteins_serving);
+  const sugarDisplay = toServing(sugar, product.nutriments?.sugars_serving);
+  const sodiumDisplay = toServing(sodium, product.nutriments?.sodium_serving);
+
+  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: `Product data: sugar ${Math.round(sugarDisplay * 10) / 10}g per serving (${sugarTier} tier), sodium ${Math.round(sodiumDisplay * 1000)}mg per serving (${sodiumTier} tier), protein ${Math.round(proteinDisplay * 10) / 10}g per serving, ${additivesCount} additives, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration."` }]
+    })
+  });
+
+  const claudeData = await claudeRes.json();
+  const explanation = claudeData.content[0].text;
+  const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
+  const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
+
+  const responseData = {
+    productName,
+    additiveNames,
+    additiveList: JSON.stringify(additiveList),
+    ingredients: ingredients,
+    nutriScore,
+    novaGroup,
+    additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
+    isOrganic: isOrganic ? 'Yes' : 'No',
+    protein: Math.round(proteinDisplay * 10) / 10 + 'g',
+    sugar: Math.round(sugarDisplay * 10) / 10 + 'g',
+    sodium: Math.round(sodiumDisplay * 1000) + 'mg',
+    sugarTier,
+    sodiumTier,
+    proteinTier,
+    score,
+    scoreBreakdown: JSON.stringify(scoreBreakdown),
+    alternatives: JSON.stringify(alternatives),
+    explanation,
+    scoreColor,
+    imageUrl,
+    scoreLabel
+  };
+
+  try {
+    await db.collection(CACHE_COLLECTION).doc(barcode).set({
+      ...responseData,
+      cachedAt: Date.now(),
+    });
+  } catch (cacheWriteErr) {
+    console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
+  }
+
+  return responseData;
+}
+
+app.get('/scan/:barcode', async (req, res) => {
+  try {
+    const { barcode } = req.params;
+    const responseData = await scanAndCache(barcode);
     res.json(responseData);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
 
@@ -501,6 +492,83 @@ app.get('/search', async (req, res) => {
     console.error('Search error:', err);
     res.status(500).json({ error: 'Search failed' });
   }
+});
+
+// One-time admin job: pull the most-scanned US products from Open Food
+// Facts' own popularity data and warm the cache for each one, so the first
+// real user to scan a common product gets an instant cached result instead
+// of the full ~3-5s live scan. Protected by a simple secret query param —
+// this is not meant to be discoverable or hit repeatedly.
+const PRESCORE_SECRET = process.env.PRESCORE_SECRET || 'change-me';
+let prescoreRunning = false;
+
+async function fetchPopularBarcodes(limit) {
+  const barcodes = [];
+  const pageSize = 100;
+  let page = 1;
+  while (barcodes.length < limit) {
+    const url = `https://world.openfoodfacts.org/api/v2/search?countries_tags_en=United States&sort_by=unique_scans_n&page_size=${pageSize}&page=${page}&fields=code`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
+    });
+    if (!res.ok) {
+      console.log(`[PRESCORE] barcode fetch failed on page ${page}, status=${res.status}`);
+      break;
+    }
+    const data = await res.json();
+    const codes = (data.products || []).map(p => p.code).filter(Boolean);
+    if (codes.length === 0) break;
+    barcodes.push(...codes);
+    page++;
+    // Stay well under OFF's 10 req/min search rate limit.
+    await new Promise(r => setTimeout(r, 7000));
+  }
+  return barcodes.slice(0, limit);
+}
+
+async function runPrescoreJob(limit) {
+  prescoreRunning = true;
+  console.log(`[PRESCORE] starting job, target=${limit} products`);
+  try {
+    const barcodes = await fetchPopularBarcodes(limit);
+    console.log(`[PRESCORE] fetched ${barcodes.length} barcodes, beginning scan loop`);
+
+    let done = 0, cached = 0, failed = 0;
+    for (const barcode of barcodes) {
+      try {
+        await scanAndCache(barcode);
+        cached++;
+      } catch (err) {
+        failed++;
+        console.log(`[PRESCORE] failed barcode=${barcode} ${err.message}`);
+      }
+      done++;
+      if (done % 25 === 0) {
+        console.log(`[PRESCORE] progress ${done}/${barcodes.length} (cached=${cached}, failed=${failed})`);
+      }
+      // Stay well under OFF's 15 req/min product-read rate limit.
+      await new Promise(r => setTimeout(r, 4500));
+    }
+    console.log(`[PRESCORE] complete. total=${done} cached=${cached} failed=${failed}`);
+  } catch (err) {
+    console.log(`[PRESCORE] job crashed: ${err.message}`);
+  } finally {
+    prescoreRunning = false;
+  }
+}
+
+app.get('/admin/prescore', (req, res) => {
+  if (req.query.secret !== PRESCORE_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (prescoreRunning) {
+    return res.json({ status: 'already running' });
+  }
+  const limit = Math.min(parseInt(req.query.limit) || 500, 5000);
+  // Fire-and-forget — don't make the caller's browser wait for a job that
+  // could take hours; progress is visible in the Railway logs instead.
+  runPrescoreJob(limit);
+  res.json({ status: 'started', limit });
 });
 
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));
