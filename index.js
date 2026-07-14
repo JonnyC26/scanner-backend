@@ -20,40 +20,51 @@ const CACHE_COLLECTION = 'productCache';
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 
-function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium) {
-  const nutriPoints = { 'a': 50, 'b': 40, 'c': 30, 'd': 15, 'e': 5 };
-  const nutriPts = nutriPoints[nutriScore?.toLowerCase()] || 25;
-  const novaPoints = { 1: 20, 2: 15, 3: 10, 4: 5 };
-  const novaPts = novaPoints[parseInt(novaGroup)] ?? 10;
-  const additivePts = Math.max(0, 15 - ((additivesCount || 0) * 3));
+function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList) {
+  // 60% Nutri-Score
+  const nutriPoints = { 'a': 60, 'b': 50, 'c': 40, 'd': 30, 'e': 15 };
+  const nutriPts = nutriPoints[nutriScore?.toLowerCase()] ?? 40;
+
+  // 30% Additives — risk-weighted, not count-based
+  let additivePts = 30;
+  if (additiveList && additiveList.length > 0) {
+    const hasHigh = additiveList.some(a => a.riskLevel === 'high');
+    const hasLimited = additiveList.some(a => a.riskLevel === 'limited');
+    if (hasHigh) additivePts = 5;
+    else if (hasLimited) additivePts = 15;
+    else additivePts = 25; // all safe
+  }
+
+  // 10% Organic
   const organicPts = isOrganic ? 10 : 0;
-  const proteinPts = (protein && protein >= 10) ? 5 : 0;
-  // Sugar penalty: per 100g, >22.5g is "high" by UK FSA standard
-  const sugarPenalty = sugar >= 22.5 ? 10 : sugar >= 5 ? 5 : 0;
-  const rawScore = nutriPts + novaPts + additivePts + organicPts + proteinPts - sugarPenalty;
-  return Math.max(0, Math.min(100, Math.round(rawScore)));
+
+  return Math.max(0, Math.min(100, Math.round(nutriPts + additivePts + organicPts)));
 }
 
-function getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium) {
-  const nutriPoints = { 'a': 50, 'b': 40, 'c': 30, 'd': 15, 'e': 5 };
-  const nutriPts = nutriPoints[nutriScore?.toLowerCase()] || 25;
-  const novaPoints = { 1: 20, 2: 15, 3: 10, 4: 5 };
-  const novaPts = novaPoints[parseInt(novaGroup)] ?? 10;
-  const additivePts = Math.max(0, 15 - ((additivesCount || 0) * 3));
+function getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList) {
+  const nutriPoints = { 'a': 60, 'b': 50, 'c': 40, 'd': 30, 'e': 15 };
+  const nutriPts = nutriPoints[nutriScore?.toLowerCase()] ?? 40;
+
+  let additivePts = 30;
+  let additiveRisk = 'none';
+  if (additiveList && additiveList.length > 0) {
+    const hasHigh = additiveList.some(a => a.riskLevel === 'high');
+    const hasLimited = additiveList.some(a => a.riskLevel === 'limited');
+    if (hasHigh) { additivePts = 5; additiveRisk = 'high'; }
+    else if (hasLimited) { additivePts = 15; additiveRisk = 'limited'; }
+    else { additivePts = 25; additiveRisk = 'safe'; }
+  }
+
   const organicPts = isOrganic ? 10 : 0;
-  const proteinPts = (protein && protein >= 10) ? 5 : 0;
-  const sugarPenalty = sugar >= 22.5 ? 10 : sugar >= 5 ? 5 : 0;
+
   return {
     nutriScoreGrade: (nutriScore || 'unknown').toUpperCase(),
-    nutriPts, nutriMax: 50,
-    novaGroup: parseInt(novaGroup) || null,
-    novaPts, novaMax: 20,
-    additivesCount: additivesCount || 0,
-    additivePts, additiveMax: 15,
+    nutriPts, nutriMax: 60,
+    additivesCount: additiveList ? additiveList.length : 0,
+    additiveRisk,
+    additivePts, additiveMax: 30,
     isOrganic: !!isOrganic,
     organicPts, organicMax: 10,
-    proteinPts, proteinMax: 5,
-    sugarPenalty, sugarPenaltyMax: 10,
   };
 }
 
@@ -228,7 +239,12 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
       const pProtein = p.nutriments?.proteins_100g || 0;
       const pSugar = p.nutriments?.sugars_100g || 0;
       const pSodium = p.nutriments?.sodium_100g || 0;
-      const pScore = calculateScore(pNutriScore, pNovaGroup, pAdditivesCount, pIsOrganic, pProtein, pSugar, pSodium);
+      const pAdditiveList = (p.additives_tags || []).map(a => {
+        const key = a.replace('en:', '').toLowerCase();
+        const details = additiveDetails[key];
+        return { riskLevel: details?.riskLevel || 'safe' };
+      });
+      const pScore = calculateScore(pNutriScore, pNovaGroup, pAdditivesCount, pIsOrganic, pProtein, pSugar, pSodium, pAdditiveList);
 
       // Relevance: how much of this candidate's non-generic category lineage
       // actually overlaps with the scanned product's. Two genuinely similar
@@ -335,8 +351,8 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
   const protein = product.nutriments?.proteins_100g || 0;
   const sugar = product.nutriments?.sugars_100g || 0;
   const sodium = product.nutriments?.sodium_100g || 0;
-  const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
-  const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
+  const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList);
+  const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList);
 
   const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
   const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
@@ -448,8 +464,13 @@ app.get('/search', async (req, res) => {
         const protein = p.nutriments?.proteins_100g || 0;
         const sugar = p.nutriments?.sugars_100g || 0;
         const sodium = p.nutriments?.sodium_100g || 0;
+        const searchAdditiveList = (p.additives_tags || []).map(a => {
+          const key = a.replace('en:', '').toLowerCase();
+          const details = additiveDetails[key];
+          return { riskLevel: details?.riskLevel || 'safe' };
+        });
 
-        const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium);
+        const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, searchAdditiveList);
         const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
         const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
 
