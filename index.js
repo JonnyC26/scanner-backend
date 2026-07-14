@@ -348,9 +348,16 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
   });
 
   const isOrganic = product.labels_tags?.includes('en:organic') || false;
-  const protein = product.nutriments?.proteins_100g || 0;
-  const sugar = product.nutriments?.sugars_100g || 0;
-  const sodium = product.nutriments?.sodium_100g || 0;
+  // Use null to distinguish "genuinely missing data" from "verified zero".
+  // The || 0 fallback caused missing values to display as "0g"/"0mg" which
+  // is misleading — someone with dietary restrictions could act on a false zero.
+  const proteinRaw = product.nutriments?.proteins_100g ?? null;
+  const sugarRaw = product.nutriments?.sugars_100g ?? null;
+  const sodiumRaw = product.nutriments?.sodium_100g ?? null;
+  // For scoring purposes, fall back to 0 when data is missing
+  const protein = proteinRaw ?? 0;
+  const sugar = sugarRaw ?? 0;
+  const sodium = sodiumRaw ?? 0;
   const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList);
   const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList);
 
@@ -371,13 +378,19 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
 
   const servingQty = product.serving_quantity ? parseFloat(product.serving_quantity) : null;
   const toServing = (val100g, servingVal) => {
+    if (val100g === null) return null;
     if (servingVal != null) return servingVal;
     if (servingQty) return val100g * servingQty / 100;
     return val100g;
   };
-  const proteinDisplay = toServing(protein, product.nutriments?.proteins_serving);
-  const sugarDisplay = toServing(sugar, product.nutriments?.sugars_serving);
-  const sodiumDisplay = toServing(sodium, product.nutriments?.sodium_serving);
+  const proteinDisplay = toServing(proteinRaw, product.nutriments?.proteins_serving);
+  const sugarDisplay = toServing(sugarRaw, product.nutriments?.sugars_serving);
+  const sodiumDisplay = toServing(sodiumRaw, product.nutriments?.sodium_serving);
+
+  // Format display values — show "N/A" when data is genuinely missing
+  const fmtProtein = proteinDisplay === null ? 'N/A' : Math.round(proteinDisplay * 10) / 10 + 'g';
+  const fmtSugar = sugarDisplay === null ? 'N/A' : Math.round(sugarDisplay * 10) / 10 + 'g';
+  const fmtSodium = sodiumDisplay === null ? 'N/A' : Math.round(sodiumDisplay * 1000) + 'mg';
 
   const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -407,9 +420,9 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
     novaGroup,
     additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
     isOrganic: isOrganic ? 'Yes' : 'No',
-    protein: Math.round(proteinDisplay * 10) / 10 + 'g',
-    sugar: Math.round(sugarDisplay * 10) / 10 + 'g',
-    sodium: Math.round(sodiumDisplay * 1000) + 'mg',
+    protein: fmtProtein,
+    sugar: fmtSugar,
+    sodium: fmtSodium,
     sugarTier,
     sodiumTier,
     proteinTier,
@@ -461,9 +474,12 @@ app.get('/search', async (req, res) => {
         const novaGroup = p.nova_group;
         const additivesCount = (p.additives_tags || []).length;
         const isOrganic = p.labels_tags?.includes('en:organic') || false;
-        const protein = p.nutriments?.proteins_100g || 0;
-        const sugar = p.nutriments?.sugars_100g || 0;
-        const sodium = p.nutriments?.sodium_100g || 0;
+        const proteinRaw = p.nutriments?.proteins_100g ?? null;
+        const sugarRaw = p.nutriments?.sugars_100g ?? null;
+        const sodiumRaw = p.nutriments?.sodium_100g ?? null;
+        const protein = proteinRaw ?? 0;
+        const sugar = sugarRaw ?? 0;
+        const sodium = sodiumRaw ?? 0;
         const searchAdditiveList = (p.additives_tags || []).map(a => {
           const key = a.replace('en:', '').toLowerCase();
           const details = additiveDetails[key];
@@ -474,21 +490,20 @@ app.get('/search', async (req, res) => {
         const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
         const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
 
-        // Tier classification always uses per-100g raw values (UK FSA thresholds)
         const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
         const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
         const proteinTier = protein >= 10 ? 'high' : 'low';
 
-        // Display values converted to per-serving, same fallback chain as /scan
         const servingQty = p.serving_quantity ? parseFloat(p.serving_quantity) : null;
         const toServing = (val100g, servingVal) => {
+          if (val100g === null) return null;
           if (servingVal != null) return servingVal;
           if (servingQty) return val100g * servingQty / 100;
           return val100g;
         };
-        const proteinDisplay = toServing(protein, p.nutriments?.proteins_serving);
-        const sugarDisplay = toServing(sugar, p.nutriments?.sugars_serving);
-        const sodiumDisplay = toServing(sodium, p.nutriments?.sodium_serving);
+        const proteinDisplay = toServing(proteinRaw, p.nutriments?.proteins_serving);
+        const sugarDisplay = toServing(sugarRaw, p.nutriments?.sugars_serving);
+        const sodiumDisplay = toServing(sodiumRaw, p.nutriments?.sodium_serving);
 
         return {
           barcode: p.code,
@@ -499,9 +514,9 @@ app.get('/search', async (req, res) => {
           score,
           scoreColor,
           scoreLabel,
-          protein: Math.round(proteinDisplay * 10) / 10 + 'g',
-          sugar: Math.round(sugarDisplay * 10) / 10 + 'g',
-          sodium: Math.round(sodiumDisplay * 1000) + 'mg',
+          protein: proteinDisplay === null ? 'N/A' : Math.round(proteinDisplay * 10) / 10 + 'g',
+          sugar: sugarDisplay === null ? 'N/A' : Math.round(sugarDisplay * 10) / 10 + 'g',
+          sodium: sodiumDisplay === null ? 'N/A' : Math.round(sodiumDisplay * 1000) + 'mg',
           sugarTier,
           sodiumTier,
           proteinTier,
