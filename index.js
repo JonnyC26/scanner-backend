@@ -286,6 +286,96 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   return scored.slice(0, 2);
 }
 
+// Diet warning detection — checks a product against the user's dietary
+// preferences and returns a human-readable warning string, or empty string
+// if no conflicts. Uses OFF's labels_tags, ingredients_text, and additives_tags.
+function detectDietWarnings(product, healthProfile) {
+  if (!healthProfile || healthProfile.trim() === '') return '';
+  const prefs = new Set(healthProfile.split(',').map(s => s.trim()).filter(Boolean));
+  if (prefs.size === 0) return '';
+
+  const labels = product.labels_tags || [];
+  const ingredients = (product.ingredients_text || '').toLowerCase();
+  const additives = (product.additives_tags || []).map(a => a.replace('en:', '').toLowerCase());
+  const allergens = (product.allergens_tags || []).map(a => a.replace('en:', '').toLowerCase());
+  const traces = (product.traces_tags || []).map(t => t.replace('en:', '').toLowerCase());
+
+  const warnings = [];
+
+  if (prefs.has('vegan')) {
+    const isVegan = labels.includes('en:vegan');
+    const isNotVegan = labels.includes('en:non-vegan');
+    if (isNotVegan) {
+      warnings.push('Not compatible with vegan diet');
+    } else if (!isVegan) {
+      // Check ingredients for common animal products
+      const animalTerms = ['milk', 'dairy', 'cheese', 'butter', 'cream', 'egg', 'eggs', 'honey',
+        'meat', 'beef', 'pork', 'chicken', 'fish', 'gelatin', 'gelatine', 'lard', 'whey',
+        'casein', 'lactose', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn'];
+      const found = animalTerms.find(t => ingredients.includes(t) || allergens.includes(t));
+      if (found) warnings.push(`Contains ${found} — not compatible with vegan diet`);
+    }
+  }
+
+  if (prefs.has('vegetarian')) {
+    const isVeg = labels.includes('en:vegetarian') || labels.includes('en:vegan');
+    const isNotVeg = labels.includes('en:non-vegetarian');
+    if (isNotVeg) {
+      warnings.push('Not compatible with vegetarian diet');
+    } else if (!isVeg) {
+      const meatTerms = ['meat', 'beef', 'pork', 'chicken', 'turkey', 'lamb', 'veal',
+        'fish', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn', 'gelatin', 'gelatine', 'lard'];
+      const found = meatTerms.find(t => ingredients.includes(t) || allergens.includes(t));
+      if (found) warnings.push(`Contains ${found} — not compatible with vegetarian diet`);
+    }
+  }
+
+  if (prefs.has('gluten-free')) {
+    const isGF = labels.includes('en:gluten-free');
+    if (!isGF) {
+      const glutenTerms = ['wheat', 'gluten', 'barley', 'rye', 'spelt', 'oats', 'oat', 'malt'];
+      const found = glutenTerms.find(t => ingredients.includes(t) || allergens.includes(t) || traces.includes(t));
+      if (found) warnings.push(`Contains ${found} — may not be suitable for gluten-free diet`);
+    }
+  }
+
+  if (prefs.has('lactose-free')) {
+    const isLF = labels.includes('en:lactose-free') || labels.includes('en:dairy-free');
+    if (!isLF) {
+      const lactoseTerms = ['milk', 'dairy', 'lactose', 'whey', 'casein', 'cheese', 'butter', 'cream', 'yogurt'];
+      const found = lactoseTerms.find(t => ingredients.includes(t) || allergens.includes(t));
+      if (found) warnings.push(`Contains ${found} — not compatible with lactose-free diet`);
+    }
+  }
+
+  if (prefs.has('soy-free')) {
+    const hasSoy = allergens.includes('soybeans') || allergens.includes('soy') ||
+      ingredients.includes('soy') || ingredients.includes('soya') || ingredients.includes('tofu');
+    if (hasSoy) warnings.push('Contains soy — not compatible with soy-free diet');
+  }
+
+  if (prefs.has('pork-free')) {
+    const porkTerms = ['pork', 'lard', 'bacon', 'ham', 'gelatin', 'gelatine'];
+    const found = porkTerms.find(t => ingredients.includes(t) || allergens.includes(t));
+    if (found) warnings.push(`Contains ${found} — not compatible with pork-free diet`);
+  }
+
+  if (prefs.has('palm-oil-free')) {
+    const hasPalm = ingredients.includes('palm oil') || ingredients.includes('palm kernel') ||
+      labels.includes('en:palm-oil-free') === false && ingredients.includes('palm');
+    if (hasPalm) warnings.push('Contains palm oil');
+  }
+
+  if (prefs.has('sulfite-free')) {
+    const sulfiteAdditives = ['e220', 'e221', 'e222', 'e223', 'e224', 'e225', 'e226', 'e227', 'e228'];
+    const hasSulfite = additives.some(a => sulfiteAdditives.includes(a)) ||
+      ingredients.includes('sulfite') || ingredients.includes('sulphite') || ingredients.includes('sulfit');
+    if (hasSulfite) warnings.push('Contains sulfites — not compatible with sulfite-free diet');
+  }
+
+  return warnings.join(' • ');
+}
+
 // Core scan logic, extracted so both the /scan route and the pre-scoring
 // admin job can share it. Returns the response data object (already cached),
 // or throws on a hard failure (product not found, etc.) — same behavior the
@@ -450,8 +540,44 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
 app.get('/scan/:barcode', async (req, res) => {
   try {
     const { barcode } = req.params;
+
+    // Try to get the user's health profile from their Firestore document.
+    // Best-effort — a missing/invalid token just means no diet warnings, never a blocked scan.
+    let healthProfile = '';
+    try {
+      const authHeader = req.headers['authorization'] || '';
+      const token = authHeader.replace('Bearer ', '').trim();
+      if (token) {
+        const decoded = await admin.auth().verifyIdToken(token);
+        const userDoc = await db.collection('users').where('uid', '==', decoded.uid).limit(1).get();
+        if (!userDoc.empty) {
+          healthProfile = userDoc.docs[0].data().healthProfile || '';
+        }
+      }
+    } catch (authErr) {
+      console.log(`[DIET] auth/profile lookup failed: ${authErr.message}`);
+    }
+
     const responseData = await scanAndCache(barcode);
-    res.json(responseData);
+
+    // Diet warning detection — needs raw OFF product data (labels, allergens etc.)
+    // which isn't stored in the cache. Only fetch raw data if user has a health profile.
+    let dietWarnings = '';
+    if (healthProfile) {
+      try {
+        const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
+          headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
+        });
+        const offData = await offRes.json();
+        if (offData.product) {
+          dietWarnings = detectDietWarnings(offData.product, healthProfile);
+        }
+      } catch (dietErr) {
+        console.log(`[DIET] product fetch failed: ${dietErr.message}`);
+      }
+    }
+
+    res.json({ ...responseData, dietWarnings });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
