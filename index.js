@@ -583,7 +583,6 @@ app.get('/scan/:barcode', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
 app.get('/search', async (req, res) => {
   const query = (req.query.q || '').trim();
   if (!query) return res.status(400).json({ error: 'Missing search query' });
@@ -733,4 +732,5 @@ app.get('/admin/prescore', (req, res) => {
   res.json({ status: 'started', limit });
 });
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));
