@@ -549,9 +549,13 @@ app.get('/scan/:barcode', async (req, res) => {
       const token = authHeader.replace('Bearer ', '').trim();
       if (token) {
         const decoded = await admin.auth().verifyIdToken(token);
-        const userDoc = await db.collection('users').where('uid', '==', decoded.uid).limit(1).get();
-        if (!userDoc.empty) {
-          healthProfile = userDoc.docs[0].data().healthProfile || '';
+        // FIX (session 7): look up the user doc directly by its ID (the
+        // Firestore doc ID IS the uid in this schema) instead of querying
+        // for a `uid` field that isn't actually stored in the document —
+        // that query always matched zero docs, silently.
+        const userDoc = await db.collection('users').doc(decoded.uid).get();
+        if (userDoc.exists) {
+          healthProfile = userDoc.data().healthProfile || '';
         }
       }
     } catch (authErr) {
