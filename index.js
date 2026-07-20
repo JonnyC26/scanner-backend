@@ -593,8 +593,12 @@ app.get('/search', async (req, res) => {
 
   try {
     const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,image_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,serving_quantity&page_size=20&json=1`;
-    const response = await fetch(searchUrl);
-    const data = await response.json();
+const response = await fetch(searchUrl);
+if (!response.ok) {
+  console.error(`Search-a-licious returned ${response.status}`);
+  return res.status(503).json({ error: 'Search is temporarily unavailable, please try again shortly.' });
+}
+const data = await response.json();
 
     const products = (data.hits || data.products || [])
       .filter(p => p.code && p.product_name)
