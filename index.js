@@ -591,6 +591,8 @@ app.get('/search', async (req, res) => {
   const query = (req.query.q || '').trim();
   if (!query) return res.status(400).json({ error: 'Missing search query' });
 
+  // Same best-effort health profile lookup as /scan — a missing/invalid
+  // token just means no diet warnings, never a blocked search.
   let healthProfile = '';
   try {
     const authHeader = req.headers['authorization'] || '';
@@ -598,7 +600,9 @@ app.get('/search', async (req, res) => {
     if (token) {
       const decoded = await admin.auth().verifyIdToken(token);
       const userDoc = await db.collection('users').doc(decoded.uid).get();
-      if (userDoc.exists) healthProfile = userDoc.data().healthProfile || '';
+      if (userDoc.exists) {
+        healthProfile = userDoc.data().healthProfile || '';
+      }
     }
   } catch (authErr) {
     console.log(`[DIET] search auth/profile lookup failed: ${authErr.message}`);
@@ -669,50 +673,6 @@ app.get('/search', async (req, res) => {
           sodiumTier,
           proteinTier,
           dietWarnings,
-        };
-      });
-
-    res.json({ products });
-  } catch (err) {
-    console.error('Search error:', err);
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
-
-        const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, searchAdditiveList);
-        const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
-        const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
-
-        const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
-        const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
-        const proteinTier = protein >= 10 ? 'high' : 'low';
-
-        const servingQty = p.serving_quantity ? parseFloat(p.serving_quantity) : null;
-        const toServing = (val100g, servingVal) => {
-          if (val100g === null) return null;
-          if (servingVal != null) return servingVal;
-          if (servingQty) return val100g * servingQty / 100;
-          return val100g;
-        };
-        const proteinDisplay = toServing(proteinRaw, p.nutriments?.proteins_serving);
-        const sugarDisplay = toServing(sugarRaw, p.nutriments?.sugars_serving);
-        const sodiumDisplay = toServing(sodiumRaw, p.nutriments?.sodium_serving);
-
-        return {
-          barcode: p.code,
-          productName: p.product_name,
-          brand: Array.isArray(p.brands) ? p.brands[0] || '' : (p.brands || ''),
-          quantity: p.quantity || '',
-          imageUrl: p.image_front_thumb_url || p.image_url || '',
-          score,
-          scoreColor,
-          scoreLabel,
-          protein: proteinDisplay === null ? 'N/A' : Math.round(proteinDisplay * 10) / 10 + 'g',
-          sugar: sugarDisplay === null ? 'N/A' : Math.round(sugarDisplay * 10) / 10 + 'g',
-          sodium: sodiumDisplay === null ? 'N/A' : Math.round(sodiumDisplay * 1000) + 'mg',
-          sugarTier,
-          sodiumTier,
-          proteinTier,
         };
       });
 
