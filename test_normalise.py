@@ -174,12 +174,144 @@ console.log('noIngredientData + gurunanda score ok', gurunanda.coverageMatched +
     print(proc.stdout.strip())
 
 
+# Leading positional / stereo prefixes that must never be stripped or merged.
+_PREFIX_RE = (
+    r"^(o|m|p|alpha|beta|gamma|iso|n|tert|sec)"
+    r"(?:-|\s+)"
+)
+
+
+def _strip_positional_or_stereo_prefix(name: str) -> tuple[str | None, str]:
+    """Return (prefix, remainder) if name has a leading positional/stereo prefix."""
+    import re
+
+    m = re.match(_PREFIX_RE + r"(.+)$", name.strip(), re.IGNORECASE)
+    if not m:
+        return None, name.strip().lower()
+    return m.group(1).lower(), m.group(2).strip().lower()
+
+
+def test_synonym_file_has_no_prefix_only_collisions():
+    """No synonym key/target pair may differ from another only by a leading prefix."""
+    synonyms = load_json(SYNONYMS_PATH)["synonyms"]
+    strings = list(synonyms.keys()) + list(synonyms.values())
+    # Compare every pair of strings in the synonym file.
+    collisions: list[tuple[str, str]] = []
+    for i, a in enumerate(strings):
+        for b in strings[i + 1 :]:
+            if a.lower() == b.lower():
+                continue
+            pa, ba = _strip_positional_or_stereo_prefix(a)
+            pb, bb = _strip_positional_or_stereo_prefix(b)
+            # Differ only by prefix: same base, different/absent prefix.
+            if ba == bb and (pa or pb) and pa != pb:
+                collisions.append((a, b))
+            # One name is the unprefixed base of the other.
+            if pa and ba == b.lower():
+                collisions.append((a, b))
+            if pb and bb == a.lower():
+                collisions.append((a, b))
+    assert not collisions, f"synonym prefix-only collisions: {collisions}"
+
+
+def test_positional_and_stereo_prefixes_never_conflated():
+    """Highest-consequence matcher rule: o-/m-/p- and alpha- must not merge."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('function stripCosmeticAnnotations');
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = '/workspace';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+module.exports = { lookupCosmeticIngredient, normalizeInci };
+`;
+fs.writeFileSync('/tmp/inci_prefix_helpers.js', block);
+const { lookupCosmeticIngredient, normalizeInci } = require('/tmp/inci_prefix_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// normalizeInci must PRESERVE leading positional / stereo prefixes.
+for (const raw of [
+  'o-Phenylenediamine',
+  'm-Phenylenediamine',
+  'p-Phenylenediamine',
+  'Alpha-Arbutin',
+  'Arbutin',
+  'Isomethyl Ionone',
+  'Methyl Ionone',
+  'Alpha-Isomethyl Ionone',
+]) {
+  const n = normalizeInci(raw);
+  assert(n.includes('phenylenediamine') || n.includes('arbutin') || n.includes('ionone'), raw);
+  // Prefix characters must survive (o-/m-/p-/alpha-), not be stripped to a shared base.
+  if (/^[omp]-/i.test(raw)) {
+    assert(n.startsWith(raw[0].toLowerCase() + '-'), `prefix stripped from ${raw} -> ${n}`);
+  }
+  if (/^alpha-/i.test(raw)) {
+    assert(n.startsWith('alpha-'), `alpha- stripped from ${raw} -> ${n}`);
+  }
+}
+
+// Present in current hazard table:
+//   p-Phenylenediamine, Alpha-Arbutin, Arbutin, Alpha-Isomethyl Ionone
+// Absent (must return null, never a near-miss):
+//   o-Phenylenediamine, m-Phenylenediamine, Isomethyl Ionone, Methyl Ionone
+
+const pPhen = lookupCosmeticIngredient('p-Phenylenediamine');
+assert(pPhen && pPhen.inci === 'p-Phenylenediamine', 'p-Phenylenediamine must resolve to itself');
+
+const oPhen = lookupCosmeticIngredient('o-Phenylenediamine');
+assert(oPhen === null, 'o-Phenylenediamine must NOT match p-Phenylenediamine');
+const mPhen = lookupCosmeticIngredient('m-Phenylenediamine');
+assert(mPhen === null, 'm-Phenylenediamine must NOT match p-Phenylenediamine');
+
+const alphaArbutin = lookupCosmeticIngredient('Alpha-Arbutin');
+assert(alphaArbutin && alphaArbutin.inci === 'Alpha-Arbutin', 'Alpha-Arbutin must resolve to itself');
+const arbutin = lookupCosmeticIngredient('Arbutin');
+assert(arbutin && arbutin.inci === 'Arbutin', 'Arbutin must resolve to itself');
+assert(alphaArbutin.inci !== arbutin.inci, 'Alpha-Arbutin must not conflate with Arbutin');
+
+const alphaIso = lookupCosmeticIngredient('Alpha-Isomethyl Ionone');
+assert(alphaIso && alphaIso.inci === 'Alpha-Isomethyl Ionone', 'Alpha-Isomethyl Ionone must resolve');
+const iso = lookupCosmeticIngredient('Isomethyl Ionone');
+assert(iso === null, 'Isomethyl Ionone must NOT near-miss to Alpha-Isomethyl Ionone');
+const methyl = lookupCosmeticIngredient('Methyl Ionone');
+assert(methyl === null, 'Methyl Ionone must NOT near-miss to Alpha-Isomethyl Ionone');
+
+// Cross-check: looking up each present name must never return a different isomer.
+assert(lookupCosmeticIngredient('p-Phenylenediamine').inci !== 'o-Phenylenediamine');
+assert(lookupCosmeticIngredient('Alpha-Arbutin').inci !== 'Arbutin');
+assert(lookupCosmeticIngredient('Arbutin').inci !== 'Alpha-Arbutin');
+
+console.log('prefix/stereo assertions ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(f"prefix/stereo assertions failed (exit {proc.returncode})")
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
         test_seeded_and_extended_pairs_present,
         test_synonym_lookup_behaviour,
         test_no_ingredient_data_flag_via_node,
+        test_synonym_file_has_no_prefix_only_collisions,
+        test_positional_and_stereo_prefixes_never_conflated,
     ]
     failed = 0
     for test in tests:
