@@ -1,5 +1,7 @@
 const express = require('express');
 const admin = require('firebase-admin');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 app.use(express.json());
 app.use((req, res, next) => {
@@ -19,6 +21,328 @@ const CACHE_COLLECTION = 'productCache';
 // so a product's data doesn't go permanently out of date if OFF updates it.
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// ── Cosmetic ingredient table (Open Beauty Facts path) ──────────────────────
+const cosmeticTable = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'purla_cosmetic_ingredients.json'), 'utf8')
+);
+const COSMETIC_TABLE_VERSION = cosmeticTable._meta.version;
+const cosmeticIngredients = cosmeticTable.ingredients;
+
+function normalizeInci(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-') // unicode dashes → hyphen
+    .replace(/[\u2044\u2215\uFF0F]/g, '/') // unicode slashes → /
+    .replace(/\s*-\s*/g, '-')
+    .replace(/\s*\/\s*/g, '/')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Indexes for matching. Order at lookup time: declare_as → inci → covers_inci.
+// For declare_as collisions, prefer the parent (no member_of) so grouped labels
+// resolve to the scorable entry rather than an alias.
+const cosmeticByInci = new Map();
+const cosmeticByDeclareAs = new Map();
+const cosmeticByCovers = new Map();
+
+for (const entry of cosmeticIngredients) {
+  if (entry.inci) cosmeticByInci.set(normalizeInci(entry.inci), entry);
+}
+for (const entry of cosmeticIngredients) {
+  if (!entry.declare_as) continue;
+  const key = normalizeInci(entry.declare_as);
+  const existing = cosmeticByDeclareAs.get(key);
+  if (!existing || (existing.member_of && !entry.member_of)) {
+    cosmeticByDeclareAs.set(key, entry);
+  }
+}
+for (const entry of cosmeticIngredients) {
+  if (!Array.isArray(entry.covers_inci)) continue;
+  for (const covered of entry.covers_inci) {
+    const key = normalizeInci(covered);
+    if (!cosmeticByCovers.has(key)) cosmeticByCovers.set(key, entry);
+  }
+}
+
+function resolveCosmeticEntry(entry) {
+  if (!entry) return null;
+  if (entry.member_of) {
+    const parent = cosmeticByInci.get(normalizeInci(entry.member_of));
+    if (parent) return parent;
+  }
+  return entry;
+}
+
+function lookupCosmeticIngredient(rawName) {
+  const key = normalizeInci(rawName);
+  if (!key) return null;
+  const hit =
+    cosmeticByDeclareAs.get(key) ||
+    cosmeticByInci.get(key) ||
+    cosmeticByCovers.get(key) ||
+    null;
+  return resolveCosmeticEntry(hit);
+}
+
+function stripCosmeticAnnotations(fragment) {
+  // Remove parenthetical notes except (nano), which is regulatory and must survive.
+  return fragment
+    .replace(/\((?!nano\b)[^)]*\)/gi, '')
+    .replace(/^[*]+|[*]+$/g, '')
+    .trim();
+}
+
+function parseCosmeticIngredientList(product) {
+  const parsed = [];
+
+  if (Array.isArray(product.ingredients) && product.ingredients.length > 0) {
+    for (const item of product.ingredients) {
+      const raw = (item.text || item.id || item.ingredient_id || '').toString();
+      // OFF/OBF ids look like "en:aqua" — turn into displayable text when needed.
+      const text = raw.startsWith('en:') ? raw.slice(3).replace(/-/g, ' ') : raw;
+      const cleaned = stripCosmeticAnnotations(text);
+      if (cleaned.length >= 3) parsed.push(cleaned);
+    }
+  } else {
+    const text = product.ingredients_text || '';
+    const parts = text.split(/[,•·●‣⁃∙⋅]/);
+    for (const part of parts) {
+      const cleaned = stripCosmeticAnnotations(part);
+      if (cleaned.length >= 3) parsed.push(cleaned);
+    }
+  }
+
+  return parsed;
+}
+
+function isFragranceAllergen(entry) {
+  return !!(entry && entry.declaration_threshold && typeof entry.declaration_threshold === 'object');
+}
+
+function isPureAnnexII(entry) {
+  const annex = entry && entry.eu_annex;
+  return Array.isArray(annex) && annex.length === 1 && annex[0] === 'II';
+}
+
+function cosmeticPenaltyForRisk(risk) {
+  if (risk === 'high') return 25;
+  if (risk === 'moderate') return 10;
+  if (risk === 'low') return 3;
+  return 0;
+}
+
+function scoreCosmeticProduct(product) {
+  const parsedNames = parseCosmeticIngredientList(product);
+  const coverageTotal = parsedNames.length;
+
+  const findings = [];
+  const scoredEntries = []; // unique parents that contribute to the score
+  const seenInci = new Set();
+
+  parsedNames.forEach((displayName, index) => {
+    const entry = lookupCosmeticIngredient(displayName);
+    if (!entry) return;
+
+    const finding = {
+      inci: entry.inci,
+      risk: entry.risk,
+      riskType: entry.risk_type || 'health',
+      reason: entry.reason || '',
+      basis: entry.basis || [],
+      doseDependent: !!entry.dose_dependent,
+      disputed: !!entry.disputed,
+      disputeNote: entry.dispute_note || null,
+      position: index + 1,
+    };
+    findings.push(finding);
+
+    // Environmental entries count as matched for coverage but never penalize.
+    if (entry.risk_type === 'environmental') return;
+
+    const key = normalizeInci(entry.inci);
+    if (seenInci.has(key)) return;
+    seenInci.add(key);
+    scoredEntries.push({ entry, finding });
+  });
+
+  const coverageMatched = findings.length;
+  const coverage = coverageTotal > 0 ? coverageMatched / coverageTotal : 0;
+
+  if (coverageTotal === 0 || coverage < 0.40) {
+    return {
+      score: null,
+      scoreLabel: 'Not enough data',
+      scoreColor: '#9E9E9E',
+      coverageMatched,
+      coverageTotal,
+      coverage,
+      ingredientFindings: findings,
+      scoreBreakdown: {
+        start: 100,
+        penalties: [],
+        categoryCaps: { high: 0, moderate: 0, low: 0 },
+        allergenPenalty: 0,
+        allergenCapApplied: false,
+        annexIICapApplied: false,
+        rawScore: null,
+        finalScore: null,
+        coverageMatched,
+        coverageTotal,
+        coverage,
+      },
+    };
+  }
+
+  const RISK_CAPS = { high: 50, moderate: 30, low: 15 };
+  const categoryTotals = { high: 0, moderate: 0, low: 0 };
+  const penalties = [];
+  let allergenPenalty = 0;
+  const ALLERGEN_CAP = 15;
+  let hasPureAnnexII = false;
+
+  for (const { entry } of scoredEntries) {
+    if (isPureAnnexII(entry)) hasPureAnnexII = true;
+
+    let penalty = cosmeticPenaltyForRisk(entry.risk);
+    if (penalty === 0) continue;
+
+    const allergen = isFragranceAllergen(entry);
+    // Halve dose-dependent penalties except for declared fragrance allergens —
+    // their presence on the label already confirms they exceed the threshold.
+    if (entry.dose_dependent && !allergen) {
+      penalty = penalty / 2;
+    }
+
+    if (allergen) {
+      allergenPenalty += penalty;
+      penalties.push({
+        inci: entry.inci,
+        risk: entry.risk,
+        penalty,
+        allergen: true,
+        doseDependent: !!entry.dose_dependent,
+        halved: false,
+      });
+      continue;
+    }
+
+    const risk = entry.risk;
+    if (risk === 'high' || risk === 'moderate' || risk === 'low') {
+      const remaining = RISK_CAPS[risk] - categoryTotals[risk];
+      const applied = Math.min(penalty, Math.max(0, remaining));
+      categoryTotals[risk] += applied;
+      penalties.push({
+        inci: entry.inci,
+        risk,
+        penalty: applied,
+        allergen: false,
+        doseDependent: !!entry.dose_dependent,
+        halved: !!(entry.dose_dependent && applied < cosmeticPenaltyForRisk(risk)),
+        categoryCapped: applied < penalty,
+      });
+    }
+  }
+
+  const allergenCapApplied = allergenPenalty > ALLERGEN_CAP;
+  const allergenApplied = Math.min(allergenPenalty, ALLERGEN_CAP);
+  const categoryPenalty =
+    categoryTotals.high + categoryTotals.moderate + categoryTotals.low;
+  let rawScore = 100 - categoryPenalty - allergenApplied;
+  let annexIICapApplied = false;
+  if (hasPureAnnexII && rawScore > 20) {
+    rawScore = 20;
+    annexIICapApplied = true;
+  }
+  const finalScore = Math.max(0, Math.min(100, Math.round(rawScore)));
+
+  const scoreLabel =
+    finalScore >= 75 ? 'Excellent' :
+    finalScore >= 50 ? 'Good' :
+    finalScore >= 25 ? 'Poor' : 'Bad';
+  const scoreColor =
+    finalScore >= 75 ? '#2E7D32' :
+    finalScore >= 50 ? '#8BC34A' :
+    finalScore >= 25 ? '#FF9800' : '#F44336';
+
+  return {
+    score: finalScore,
+    scoreLabel,
+    scoreColor,
+    coverageMatched,
+    coverageTotal,
+    coverage,
+    ingredientFindings: findings,
+    scoreBreakdown: {
+      start: 100,
+      penalties,
+      categoryCaps: { ...categoryTotals },
+      allergenPenalty: allergenApplied,
+      allergenPenaltyRaw: allergenPenalty,
+      allergenCapApplied,
+      annexIICapApplied,
+      rawScore,
+      finalScore,
+      coverageMatched,
+      coverageTotal,
+      coverage,
+    },
+  };
+}
+
+async function fetchProductFromFacts(baseUrl, barcode) {
+  const res = await fetch(`${baseUrl}/api/v2/product/${barcode}.json`, {
+    headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (data.status === 0 || !data.product) return null;
+  return data.product;
+}
+
+function productHasIngredients(product) {
+  if (!product) return false;
+  if (Array.isArray(product.ingredients) && product.ingredients.length > 0) return true;
+  return !!(product.ingredients_text && product.ingredients_text.trim());
+}
+
+async function resolveProductType(barcode) {
+  // Prefer OFF, fall back to OBF. If both hit (rare), prefer the one with
+  // ingredients; if still tied, prefer food.
+  let foodProduct = null;
+  let cosmeticProduct = null;
+
+  try {
+    foodProduct = await fetchProductFromFacts('https://world.openfoodfacts.org', barcode);
+  } catch (err) {
+    console.log(`[OFF FETCH ERROR] barcode=${barcode} ${err.message}`);
+  }
+
+  if (!foodProduct) {
+    try {
+      cosmeticProduct = await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode);
+    } catch (err) {
+      console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
+    }
+    if (cosmeticProduct) return { productType: 'cosmetic', product: cosmeticProduct };
+    return { productType: null, product: null };
+  }
+
+  // Food hit — still check OBF only when food has no ingredients, in case this
+  // barcode is a cosmetic misfiled or dual-listed with better OBF data.
+  if (!productHasIngredients(foodProduct)) {
+    try {
+      cosmeticProduct = await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode);
+    } catch (err) {
+      console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
+    }
+    if (cosmeticProduct && productHasIngredients(cosmeticProduct)) {
+      return { productType: 'cosmetic', product: cosmeticProduct };
+    }
+  }
+
+  return { productType: 'food', product: foodProduct };
+}
 
 function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList) {
   // 60% Nutri-Score
@@ -380,36 +704,106 @@ function detectDietWarnings(product, healthProfile) {
 // admin job can share it. Returns the response data object (already cached),
 // or throws on a hard failure (product not found, etc.) — same behavior the
 // /scan route relied on before this refactor.
-async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
-  if (!skipCacheCheck) {
-    try {
-      const cacheDoc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
-      if (cacheDoc.exists) {
-        const cached = cacheDoc.data();
-        const age = Date.now() - (cached.cachedAt || 0);
-        if (age < CACHE_TTL_MS) {
-          console.log(`[CACHE HIT] barcode=${barcode} age=${Math.round(age / 3600000)}h`);
-          const { cachedAt, ...responseData } = cached;
-          return responseData;
-        }
-        console.log(`[CACHE STALE] barcode=${barcode} age=${Math.round(age / 3600000)}h — re-scanning`);
-      }
-    } catch (cacheErr) {
-      console.log(`[CACHE READ ERROR] barcode=${barcode} ${cacheErr.message}`);
-    }
-  }
+async function generateCosmeticExplanation(scored, ingredientsText) {
+  const drivers = (scored.scoreBreakdown.penalties || [])
+    .slice()
+    .sort((a, b) => b.penalty - a.penalty)
+    .slice(0, 3)
+    .map(p => {
+      const finding = scored.ingredientFindings.find(f => f.inci === p.inci);
+      return {
+        inci: p.inci,
+        risk: p.risk,
+        reason: finding?.reason || '',
+        disputed: !!finding?.disputed,
+        disputeNote: finding?.disputeNote || null,
+        allergen: !!p.allergen,
+      };
+    });
 
-  const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
-    headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
-  });
-  const offData = await offRes.json();
-  const product = offData.product;
-  if (!product) {
-    const notFoundErr = new Error('Product not found');
-    notFoundErr.statusCode = 404;
-    throw notFoundErr;
-  }
+  const coverageNote = scored.coverage < 0.60
+    ? `Coverage is ${scored.coverageMatched} of ${scored.coverageTotal} ingredients assessed — mention this briefly.`
+    : `Coverage is ${scored.coverageMatched} of ${scored.coverageTotal} ingredients (do not dwell on coverage).`;
 
+  const scoreNote = scored.score === null
+    ? 'There is not enough ingredient coverage to give a numeric score.'
+    : `The product score is ${scored.score} (${scored.scoreLabel}).`;
+
+  const prompt = `You are explaining a cosmetic ingredient safety scan for a consumer app.
+${scoreNote}
+${coverageNote}
+Top drivers (use these reason texts; do not invent rationale): ${JSON.stringify(drivers)}
+Ingredient list (context only): ${ingredientsText || '(none)'}
+
+Write one plain-English explanation under 40 words.
+Name the two or three ingredients that drove the score and say why in plain terms (sensitiser, restricted, prohibited, declarable allergen).
+Never state or imply a concentration or percentage.
+If an ingredient is disputed, you may note that sources disagree, but do not present the dissenting view as equal to the regulatory finding.
+Do not mention environmental persistence concerns as personal health risks.
+Avoid jargon like "Annex II" — say "prohibited in the EU" if relevant.`;
+
+  try {
+    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 120,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const claudeData = await claudeRes.json();
+    return claudeData.content?.[0]?.text || 'Cosmetic ingredient assessment complete.';
+  } catch (err) {
+    console.log(`[COSMETIC EXPLAIN ERROR] ${err.message}`);
+    return 'Cosmetic ingredient assessment complete.';
+  }
+}
+
+async function scanAndCacheCosmetic(barcode, product) {
+  const productName = product.product_name || 'Unknown Product';
+  const imageUrl = product.image_front_url || product.image_url || '';
+  const ingredients = product.ingredients_text || '';
+  const scored = scoreCosmeticProduct(product);
+  const explanation = await generateCosmeticExplanation(scored, ingredients);
+
+  console.log(`[COSMETIC SCORE] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal} score=${scored.score} table=${COSMETIC_TABLE_VERSION}`);
+
+  return {
+    productType: 'cosmetic',
+    productName,
+    additiveNames: null,
+    additiveList: JSON.stringify([]),
+    ingredients,
+    nutriScore: null,
+    novaGroup: null,
+    additivesCount: null,
+    isOrganic: null,
+    protein: null,
+    sugar: null,
+    sodium: null,
+    sugarTier: null,
+    sodiumTier: null,
+    proteinTier: null,
+    score: scored.score,
+    scoreBreakdown: JSON.stringify(scored.scoreBreakdown),
+    alternatives: JSON.stringify([]),
+    explanation,
+    scoreColor: scored.scoreColor,
+    imageUrl,
+    scoreLabel: scored.scoreLabel,
+    coverageMatched: scored.coverageMatched,
+    coverageTotal: scored.coverageTotal,
+    ingredientFindings: JSON.stringify(scored.ingredientFindings),
+    tableVersion: COSMETIC_TABLE_VERSION,
+  };
+}
+
+async function scanAndCacheFood(barcode, product) {
   const productName = product.product_name || 'Unknown Product';
   const imageUrl = product.image_front_url || product.image_url || '';
   const ingredients = product.ingredients_text || '';
@@ -501,7 +895,8 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
   const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
   const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
 
-  const responseData = {
+  return {
+    productType: 'food',
     productName,
     additiveNames,
     additiveList: JSON.stringify(additiveList),
@@ -522,8 +917,51 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
     explanation,
     scoreColor,
     imageUrl,
-    scoreLabel
+    scoreLabel,
+    coverageMatched: null,
+    coverageTotal: null,
+    ingredientFindings: null,
   };
+}
+
+async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
+  if (!skipCacheCheck) {
+    try {
+      const cacheDoc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
+      if (cacheDoc.exists) {
+        const cached = cacheDoc.data();
+        const age = Date.now() - (cached.cachedAt || 0);
+        const cachedType = cached.productType || 'food';
+        // Cosmetic scores must be recomputed when the hazard table changes.
+        const tableStale = cachedType === 'cosmetic' &&
+          cached.tableVersion !== COSMETIC_TABLE_VERSION;
+        if (age < CACHE_TTL_MS && !tableStale) {
+          console.log(`[CACHE HIT] barcode=${barcode} type=${cachedType} age=${Math.round(age / 3600000)}h`);
+          const { cachedAt, ...responseData } = cached;
+          if (!responseData.productType) responseData.productType = 'food';
+          return responseData;
+        }
+        if (tableStale) {
+          console.log(`[CACHE STALE TABLE] barcode=${barcode} cached=${cached.tableVersion} current=${COSMETIC_TABLE_VERSION} — re-scanning`);
+        } else {
+          console.log(`[CACHE STALE] barcode=${barcode} age=${Math.round(age / 3600000)}h — re-scanning`);
+        }
+      }
+    } catch (cacheErr) {
+      console.log(`[CACHE READ ERROR] barcode=${barcode} ${cacheErr.message}`);
+    }
+  }
+
+  const { productType, product } = await resolveProductType(barcode);
+  if (!product) {
+    const notFoundErr = new Error('Product not found');
+    notFoundErr.statusCode = 404;
+    throw notFoundErr;
+  }
+
+  const responseData = productType === 'cosmetic'
+    ? await scanAndCacheCosmetic(barcode, product)
+    : await scanAndCacheFood(barcode, product);
 
   try {
     await db.collection(CACHE_COLLECTION).doc(barcode).set({
@@ -564,12 +1002,13 @@ app.get('/scan/:barcode', async (req, res) => {
 
     const responseData = await scanAndCache(barcode);
 
-    // Diet warning detection — needs raw OFF product data (labels, allergens etc.)
-    // which isn't stored in the cache. Only fetch raw data if user has a health profile.
+    // Diet warning detection — food only. Needs raw OFF product data (labels,
+    // allergens etc.) which isn't stored in the cache. Cosmetics skip this.
     let dietWarnings = '';
-    if (healthProfile) {
+    const responseType = responseData.productType || 'food';
+    if (healthProfile && responseType === 'food') {
       try {
-        const offRes = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
+        const offRes = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`, {
           headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
         });
         const offData = await offRes.json();
