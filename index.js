@@ -148,6 +148,7 @@ function scoreCosmeticProduct(product) {
   const coverageTotal = parsedNames.length;
 
   const findings = [];
+  const ingredientList = [];
   const scoredEntries = []; // unique parents that contribute to the score
   const seenInci = new Set();
   // INCI names that did not hit the hazard table — used for table-gap logging only.
@@ -155,6 +156,7 @@ function scoreCosmeticProduct(product) {
   const seenUnmatched = new Set();
 
   parsedNames.forEach((displayName, index) => {
+    const position = index + 1;
     const entry = lookupCosmeticIngredient(displayName);
     if (!entry) {
       const missKey = normalizeInci(displayName);
@@ -162,6 +164,17 @@ function scoreCosmeticProduct(product) {
         seenUnmatched.add(missKey);
         unmatchedNames.push(displayName);
       }
+      ingredientList.push({
+        name: displayName,
+        position,
+        matched: false,
+        inci: null,
+        risk: null,
+        riskType: null,
+        reason: null,
+        disputed: false,
+        countsTowardScore: false,
+      });
       return;
     }
 
@@ -174,17 +187,33 @@ function scoreCosmeticProduct(product) {
       doseDependent: !!entry.dose_dependent,
       disputed: !!entry.disputed,
       disputeNote: entry.dispute_note || null,
-      position: index + 1,
+      position,
     };
     findings.push(finding);
 
     // Environmental entries count as matched for coverage but never penalize.
-    if (entry.risk_type === 'environmental') return;
+    // Duplicates of an already-scored INCI also do not contribute again.
+    let countsTowardScore = false;
+    if (entry.risk_type !== 'environmental') {
+      const key = normalizeInci(entry.inci);
+      if (!seenInci.has(key)) {
+        seenInci.add(key);
+        scoredEntries.push({ entry, finding });
+        countsTowardScore = true;
+      }
+    }
 
-    const key = normalizeInci(entry.inci);
-    if (seenInci.has(key)) return;
-    seenInci.add(key);
-    scoredEntries.push({ entry, finding });
+    ingredientList.push({
+      name: displayName,
+      position,
+      matched: true,
+      inci: entry.inci,
+      risk: entry.risk ?? null,
+      riskType: entry.risk_type || 'health',
+      reason: entry.reason || null,
+      disputed: !!entry.disputed,
+      countsTowardScore,
+    });
   });
 
   const coverageMatched = findings.length;
@@ -199,6 +228,7 @@ function scoreCosmeticProduct(product) {
       coverageTotal,
       coverage,
       ingredientFindings: findings,
+      ingredientList,
       unmatchedNames,
       scoreBreakdown: {
         start: 100,
@@ -295,6 +325,7 @@ function scoreCosmeticProduct(product) {
     coverageTotal,
     coverage,
     ingredientFindings: findings,
+    ingredientList,
     unmatchedNames,
     scoreBreakdown: {
       start: 100,
@@ -311,6 +342,20 @@ function scoreCosmeticProduct(product) {
       coverage,
     },
   };
+}
+
+// Firestore docs are size-capped; keep full ingredientList in the HTTP
+// response but store [] in productCache when the payload is too large.
+const INGREDIENT_LIST_CACHE_MAX_BYTES = 200 * 1024;
+
+function stringifyIngredientListForCache(ingredientList, barcode) {
+  const full = JSON.stringify(ingredientList || []);
+  const bytes = Buffer.byteLength(full, 'utf8');
+  if (bytes > INGREDIENT_LIST_CACHE_MAX_BYTES) {
+    console.log(`[INGREDIENT LIST CACHE SKIPPED] barcode=${barcode || 'none'} bytes=${bytes}`);
+    return '[]';
+  }
+  return full;
 }
 
 // Firestore doc IDs cannot contain "/" and have a 1500-byte max; keep a
@@ -1162,6 +1207,7 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
     coverageMatched: scored.coverageMatched,
     coverageTotal: scored.coverageTotal,
     ingredientFindings: JSON.stringify(scored.ingredientFindings),
+    ingredientList: JSON.stringify(scored.ingredientList || []),
     tableVersion: COSMETIC_TABLE_VERSION,
   };
   if (skipExplanation) {
@@ -1368,10 +1414,18 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
     : await scanAndCacheFood(barcode, product, { skipExplanation });
 
   try {
-    await db.collection(CACHE_COLLECTION).doc(barcode).set({
+    const cachePayload = {
       ...responseData,
       cachedAt: Date.now(),
-    });
+    };
+    // Keep the full ingredientList in the HTTP response; shrink only the cache write.
+    if (responseData.productType === 'cosmetic' && responseData.ingredientList) {
+      cachePayload.ingredientList = stringifyIngredientListForCache(
+        (() => { try { return JSON.parse(responseData.ingredientList); } catch (_) { return []; } })(),
+        barcode
+      );
+    }
+    await db.collection(CACHE_COLLECTION).doc(barcode).set(cachePayload);
   } catch (cacheWriteErr) {
     console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
   }
@@ -1618,6 +1672,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       coverageMatched: scored.coverageMatched,
       coverageTotal: scored.coverageTotal,
       ingredientFindings: JSON.stringify(scored.ingredientFindings),
+      ingredientList: JSON.stringify(scored.ingredientList || []),
       tableVersion: COSMETIC_TABLE_VERSION,
       source: 'photo',
       dietWarnings: '',
@@ -1629,6 +1684,10 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     if (canCache) {
       try {
         const { dietWarnings: _dietWarnings, ...cachePayload } = responseData;
+        cachePayload.ingredientList = stringifyIngredientListForCache(
+          scored.ingredientList,
+          barcode
+        );
         await db.collection(CACHE_COLLECTION).doc(String(barcode)).set({
           ...cachePayload,
           cachedAt: Date.now(),
