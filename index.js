@@ -330,16 +330,18 @@ function recordUnmatchedInci(barcode, unmatchedNames) {
       for (const name of unmatchedNames) {
         const docId = unmatchedInciDocId(name);
         if (!docId) continue;
-        await col.doc(docId).set({
+        const payload = {
           name,
           count: admin.firestore.FieldValue.increment(1),
           lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-          sampleBarcode: barcode,
           tableVersion: COSMETIC_TABLE_VERSION,
-        }, { merge: true });
+        };
+        // Only record a real barcode — never a sentinel like "photo".
+        if (barcode) payload.sampleBarcode = barcode;
+        await col.doc(docId).set(payload, { merge: true });
       }
     } catch (err) {
-      console.log(`[UNMATCHED INCI WRITE ERROR] barcode=${barcode} ${err.message}`);
+      console.log(`[UNMATCHED INCI WRITE ERROR] barcode=${barcode || 'none'} ${err.message}`);
     }
   })();
 }
@@ -1360,6 +1362,9 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
 
   try {
     const { imageBase64, mediaType, barcode } = req.body || {};
+    // Defer only works when we will write a cache doc the app can poll via /explain.
+    const deferExplanation = req.query.deferExplanation === '1' && !!barcode;
+
     if (!imageBase64 || typeof imageBase64 !== 'string') {
       return res.status(400).json({ error: 'Missing imageBase64' });
     }
@@ -1380,15 +1385,24 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     const ingredientsText = ingredientNames.join(', ');
     const product = { ingredients_text: ingredientsText };
     const scored = scoreCosmeticProduct(product);
-    const explanation = await generateCosmeticExplanation(scored, ingredientsText);
+
+    // Partial photo reads must not poison the shared 30-day cache.
+    const canCache = !!barcode && scored.score !== null;
+    // Ignore defer when we are not caching — there is no doc for /explain to fill.
+    const skipExplanation = deferExplanation && canCache;
+
+    let explanation = null;
+    if (!skipExplanation) {
+      explanation = await generateCosmeticExplanation(scored, ingredientsText);
+    }
 
     const unmatchedNames = scored.unmatchedNames || [];
     const namesJoined = unmatchedNames.join('|');
     const namesTruncated = namesJoined.length > 200
       ? namesJoined.slice(0, 200) + '...'
       : namesJoined;
-    console.log(`[COSMETIC UNMATCHED] barcode=${barcode || 'photo'} count=${unmatchedNames.length} names=${namesTruncated}`);
-    recordUnmatchedInci(barcode || 'photo', unmatchedNames);
+    console.log(`[COSMETIC UNMATCHED] barcode=${barcode || 'none'} count=${unmatchedNames.length} names=${namesTruncated}`);
+    recordUnmatchedInci(barcode || null, unmatchedNames);
 
     const productName = (vision.productName && String(vision.productName).trim())
       || 'Unknown Product';
@@ -1423,8 +1437,11 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       source: 'photo',
       dietWarnings: '',
     };
+    if (skipExplanation) {
+      responseData.explanationPending = true;
+    }
 
-    if (barcode) {
+    if (canCache) {
       try {
         const { dietWarnings: _dietWarnings, ...cachePayload } = responseData;
         await db.collection(CACHE_COLLECTION).doc(String(barcode)).set({
@@ -1434,10 +1451,18 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       } catch (cacheWriteErr) {
         console.log(`[PHOTO SCAN CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
       }
+    } else if (barcode && scored.score === null) {
+      console.log(`[PHOTO SCAN NOT CACHED] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
     }
 
     console.log(`[PHOTO SCAN] barcode=${barcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${scored.coverageMatched} ms=${Date.now() - started}`);
     res.json(responseData);
+
+    if (skipExplanation && responseData.explanationPending) {
+      ensureExplanation(String(barcode), responseData).catch(err => {
+        console.log(`[EXPLAIN DEFER ERROR] barcode=${barcode} ${err.message}`);
+      });
+    }
   } catch (err) {
     console.log(`[PHOTO SCAN ERROR] ${err.message}`);
     res.status(err.statusCode || 500).json({ error: err.message });
