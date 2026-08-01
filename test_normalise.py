@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Assertions for INCI normalisation and common-name synonym matching."""
+"""Assertions for INCI normalisation, synonym matching, and cosmetic parsing.
+
+Combines:
+- PR #8 synonym / normalizeInci / noIngredientData / prefix-stereo rules
+- parse/classify fixes: digit-safe commas, Ingredients: prefix, may-contain,
+  tidy-up, (nano), category fragments
+"""
 
 from __future__ import annotations
 
@@ -16,6 +22,11 @@ SYNONYMS_PATH = ROOT / "purla_inci_synonyms.json"
 def load_json(path: Path):
     with path.open(encoding="utf-8") as f:
         return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Synonym layer (from PR #8)
+# ---------------------------------------------------------------------------
 
 
 def test_synonym_targets_exist_in_hazard_table():
@@ -304,6 +315,250 @@ console.log('prefix/stereo assertions ok');
     print(proc.stdout.strip())
 
 
+# ---------------------------------------------------------------------------
+# Parse / classify (from this PR)
+# ---------------------------------------------------------------------------
+
+
+def test_hazard_table_has_digit_comma_chemicals():
+    """The three names that digit-blind comma splitting used to destroy."""
+    ingredients = load_json(INGREDIENTS_PATH)["ingredients"]
+    names = {entry["inci"] for entry in ingredients}
+    for required in ("1,2-Hexanediol", "1,4-Dioxane", "Toluene-2,5-Diamine"):
+        assert required in names, f"missing hazard-table entry: {required}"
+
+
+def _run_node_parse_assertions() -> None:
+    """Drive live parse/score/category helpers extracted from index.js."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join('/workspace', 'index.js'), 'utf8');
+
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
+
+const fragStart = src.indexOf('const COSMETIC_CATEGORY_FRAGMENTS');
+const fragEnd = src.indexOf('async function resolveProductType');
+if (fragStart < 0 || fragEnd < 0) throw new Error('could not locate category block');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = '/workspace';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(fragStart, fragEnd)}
+module.exports = {
+  parseCosmeticIngredientList,
+  scoreCosmeticProduct,
+  stripLeadingIngredientLabelPrefix,
+  splitMayContainSections,
+  tidyParsedIngredientName,
+  tagIndicatesCosmetic,
+  hasCosmeticCategory,
+  lookupCosmeticIngredient,
+  normalizeInci,
+};
+`;
+fs.writeFileSync('/tmp/cosmetic_parse_helpers.js', block);
+const {
+  parseCosmeticIngredientList,
+  scoreCosmeticProduct,
+  stripLeadingIngredientLabelPrefix,
+  splitMayContainSections,
+  tidyParsedIngredientName,
+  tagIndicatesCosmetic,
+  hasCosmeticCategory,
+  lookupCosmeticIngredient,
+} = require('/tmp/cosmetic_parse_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// --- Digit-safe comma splitting (1,2-Hexanediol / 1,4-Dioxane / Toluene-2,5-Diamine) ---
+for (const name of ['1,2-Hexanediol', '1,4-Dioxane', 'Toluene-2,5-Diamine']) {
+  const parsed = parseCosmeticIngredientList({ ingredients_text: name });
+  assert(parsed.length === 1, `${name} must stay one token, got ${JSON.stringify(parsed)}`);
+  assert(parsed[0].name === name, `${name} name mismatch: ${parsed[0].name}`);
+  const hit = lookupCosmeticIngredient(parsed[0].name);
+  assert(hit && hit.inci === name, `${name} must resolve in hazard table, got ${JSON.stringify(hit)}`);
+}
+
+// Full label string containing 1,2-Hexanediol among ordinary ingredients.
+{
+  const label = 'Aqua, Glycerin, 1,2-Hexanediol, Phenoxyethanol';
+  const parsed = parseCosmeticIngredientList({ ingredients_text: label });
+  const names = parsed.map(p => p.name);
+  assert(names.includes('1,2-Hexanediol'), 'full label must keep 1,2-Hexanediol intact: ' + JSON.stringify(names));
+  assert(!names.includes('1'), 'must not emit lone "1" from 1,2-Hexanediol: ' + JSON.stringify(names));
+  assert(!names.some(n => n === '2-Hexanediol'), 'must not emit "2-Hexanediol": ' + JSON.stringify(names));
+  assert(names.includes('Aqua') && names.includes('Glycerin') && names.includes('Phenoxyethanol'),
+    'ordinary ingredients must still split: ' + JSON.stringify(names));
+  const scored = scoreCosmeticProduct({ ingredients_text: label });
+  const hex = scored.ingredientList.find(r => r.name === '1,2-Hexanediol');
+  assert(hex && hex.matched && hex.inci === '1,2-Hexanediol', '1,2-Hexanediol must match in score path');
+}
+
+// --- Leading Ingredients: / Ingrédients / INCI prefix ---
+{
+  const cases = [
+    'Ingredients: Water, Glycerin',
+    'INGREDIENTS - Water, Glycerin',
+    'Ingrédients: Water, Glycerin',
+    'INCI: Water, Glycerin',
+    'inci Water, Glycerin',
+  ];
+  for (const text of cases) {
+    const parsed = parseCosmeticIngredientList({ ingredients_text: text });
+    assert(parsed[0] && parsed[0].name === 'Water',
+      `prefix strip failed for ${JSON.stringify(text)} -> ${JSON.stringify(parsed)}`);
+    assert(!/^ingredients/i.test(parsed[0].name), 'must not leave Ingredients: glued to Water');
+  }
+  // Do not strip the word mid-list.
+  const mid = parseCosmeticIngredientList({
+    ingredients_text: 'Water, Ingredients Extract, Glycerin',
+  });
+  assert(mid.some(p => /ingredients extract/i.test(p.name)),
+    'must not strip Ingredients mid-list: ' + JSON.stringify(mid));
+}
+
+// --- May contain / +/- / ± — display only, excluded from coverage & scoring ---
+{
+  const text = 'Water, Glycerin. May Contain (+/-): CI 77491, CI 77492';
+  const parsed = parseCosmeticIngredientList({ ingredients_text: text });
+  assert(parsed.length === 4, 'expected 4 rows (2 main + 2 conditional), got ' + parsed.length);
+  assert(parsed.filter(p => !p.mayContain).map(p => p.name).join('|') === 'Water|Glycerin',
+    'main ingredients wrong: ' + JSON.stringify(parsed));
+  assert(parsed.filter(p => p.mayContain).every(p => p.mayContain === true),
+    'conditional rows must set mayContain');
+  assert(parsed.filter(p => p.mayContain).map(p => p.name).join('|') === 'CI 77491|CI 77492',
+    'conditional names wrong: ' + JSON.stringify(parsed));
+
+  const scored = scoreCosmeticProduct({ ingredients_text: text });
+  assert(scored.coverageTotal === 2,
+    'coverageTotal must exclude may-contain (expected 2, got ' + scored.coverageTotal + ')');
+  assert(scored.ingredientList.filter(r => r.mayContain).length === 2,
+    'ingredientList must still list may-contain rows');
+  assert(scored.ingredientList.filter(r => r.mayContain).every(r => r.countsTowardScore === false),
+    'may-contain rows must not count toward score');
+  assert(!scored.ingredientFindings.some(f => /77491|77492/.test(f.inci || '')),
+    'may-contain must not appear in ingredientFindings');
+}
+
+{
+  const text = 'Aqua, Glycerin +/- CI 77491';
+  const { main, conditional } = splitMayContainSections(text);
+  assert(main.includes('Aqua'), 'main before +/-');
+  assert(/CI 77491/.test(conditional), 'conditional after +/-');
+  const scored = scoreCosmeticProduct({ ingredients_text: text });
+  assert(scored.coverageTotal === 2, '+/- coverageTotal expected 2, got ' + scored.coverageTotal);
+}
+
+{
+  const text = 'Aqua ± CI 77491';
+  const scored = scoreCosmeticProduct({ ingredients_text: text });
+  assert(scored.coverageTotal === 1, '± coverageTotal expected 1, got ' + scored.coverageTotal);
+  assert(scored.ingredientList.some(r => r.mayContain && r.name === 'CI 77491'));
+}
+
+// --- Tidy-up: trailing . / ; and whitespace; keep (nano); >= 3 char min ---
+{
+  assert(tidyParsedIngredientName('Glycerin.') === 'Glycerin');
+  assert(tidyParsedIngredientName('Glycerin;') === 'Glycerin');
+  assert(tidyParsedIngredientName('  Aqua   Glycerin  ') === 'Aqua Glycerin');
+
+  const parsed = parseCosmeticIngredientList({
+    ingredients_text: 'Water, Titanium Dioxide (nano), Ab, Glycerin.',
+  });
+  const names = parsed.map(p => p.name);
+  assert(names.includes('Titanium Dioxide (nano)'),
+    '(nano) must survive: ' + JSON.stringify(names));
+  assert(!names.includes('Ab'), 'names shorter than 3 chars must be dropped: ' + JSON.stringify(names));
+  assert(names.includes('Glycerin'), 'trailing period must be stripped: ' + JSON.stringify(names));
+}
+
+// --- Category classification: explicit fragments, not fuzzy substrings ---
+{
+  assert(tagIndicatesCosmetic('en:toothpastes') === true);
+  assert(tagIndicatesCosmetic('en:lip-balm') === true);
+  assert(tagIndicatesCosmetic('en:skin-care') === true);
+  assert(tagIndicatesCosmetic('en:hair-care') === true);
+  assert(tagIndicatesCosmetic('en:soaps') === true);
+  assert(tagIndicatesCosmetic('en:deodorant') === true);
+  assert(tagIndicatesCosmetic('en:cosmetics') === true);
+  assert(tagIndicatesCosmetic('en:hygiene') === true);
+  // Conservative: soap must not match soapberry.
+  assert(tagIndicatesCosmetic('en:soapberry') === false,
+    'soap must not fuzzy-match soapberry');
+  assert(tagIndicatesCosmetic('en:beverages') === false);
+  assert(tagIndicatesCosmetic('en:snacks') === false);
+
+  assert(hasCosmeticCategory({ categories_tags: ['en:toothpastes', 'en:oral-care'] }) === true);
+  assert(hasCosmeticCategory({ categories_tags: ['en:plant-based-foods'] }) === false);
+  assert(hasCosmeticCategory({ categories_tags: [] }) === false);
+}
+
+// Synonym layer still works through the new parser (GuruNanda-style label).
+{
+  const scored = scoreCosmeticProduct({
+    ingredients_text: 'Ingredients: Fractionated Coconut Oil, Peppermint Oil, 1,2-Hexanediol',
+  });
+  assert(scored.coverageMatched >= 3, 'synonym+digit-comma via new parser, matched=' + scored.coverageMatched);
+  const cloveOil = scoreCosmeticProduct({
+    ingredients_text: 'Clove Oil, Water',
+  });
+  const clove = cloveOil.ingredientList.find(r => /clove/i.test(r.name));
+  assert(clove && clove.inci === 'Eugenia Caryophyllus Leaf Oil', 'synonym resolve after parse');
+}
+
+console.log('cosmetic parse/classify assertions ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(f"node parse assertions failed (exit {proc.returncode})")
+    print(proc.stdout.strip())
+
+
+def test_cosmetic_parse_and_classify():
+    _run_node_parse_assertions()
+
+
+def test_strip_leading_prefix_helper_via_node():
+    """Isolated assertion that only the leading label prefix is removed."""
+    script = r"""
+const fs = require('fs');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const start = src.indexOf('function stripLeadingIngredientLabelPrefix');
+const end = src.indexOf('function splitMayContainSections');
+eval(src.slice(start, end));
+function assert(c, m) { if (!c) throw new Error(m); }
+assert(stripLeadingIngredientLabelPrefix('Ingredients: Water') === 'Water');
+assert(stripLeadingIngredientLabelPrefix('INCI - Aqua') === 'Aqua');
+assert(stripLeadingIngredientLabelPrefix('Water, Ingredients Extract') === 'Water, Ingredients Extract');
+console.log('prefix helper ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError("prefix helper assertions failed")
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -312,6 +567,9 @@ def main() -> int:
         test_no_ingredient_data_flag_via_node,
         test_synonym_file_has_no_prefix_only_collisions,
         test_positional_and_stereo_prefixes_never_conflated,
+        test_hazard_table_has_digit_comma_chemicals,
+        test_cosmetic_parse_and_classify,
+        test_strip_leading_prefix_helper_via_node,
     ]
     failed = 0
     for test in tests:

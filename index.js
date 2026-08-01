@@ -119,6 +119,64 @@ function stripCosmeticAnnotations(fragment) {
     .trim();
 }
 
+function tidyParsedIngredientName(name) {
+  return String(name || '')
+    .replace(/[.;]+\s*$/, '') // trailing period / semicolon
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripLeadingIngredientLabelPrefix(text) {
+  // Only at the very start: "Ingredients:", "Ingrédients -", "INCI:", etc.
+  return String(text || '').replace(
+    /^\s*(?:ingredients|ingr[eé]dients|inci)\s*[:\-–—]?\s*/i,
+    ''
+  );
+}
+
+function splitMayContainSections(text) {
+  // "May Contain (+/-): …" / "+/-" / "±" introduce conditional colorants.
+  // Consume an optional (+/-) that immediately follows "may contain".
+  const re = /\bmay\s+contain\b(?:\s*\(\s*\+\/\-\s*\))?|\(\s*\+\/\-\s*\)|\+\/\-|\±/i;
+  const m = String(text || '').match(re);
+  if (!m || m.index == null) {
+    return { main: String(text || '').trim(), conditional: '' };
+  }
+  const main = text.slice(0, m.index).trim();
+  const conditional = text
+    .slice(m.index + m[0].length)
+    .replace(/^[\s:\-–—]+/, '')
+    .trim();
+  return { main, conditional };
+}
+
+function splitCosmeticIngredientText(text) {
+  // Split on bullets, and on commas that are NOT between two digits
+  // (so "1,2-Hexanediol" stays intact while "Water, Glycerin" splits).
+  const parts = [];
+  const re = /[•·●‣⁃∙⋅]+|(?<!\d),|,(?!\d)/g;
+  let last = 0;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    parts.push(text.slice(last, match.index));
+    last = match.index + match[0].length;
+  }
+  parts.push(text.slice(last));
+  return parts;
+}
+
+function cleanParsedIngredientFragment(fragment) {
+  const cleaned = tidyParsedIngredientName(stripCosmeticAnnotations(fragment));
+  return cleaned.length >= 3 ? cleaned : '';
+}
+
+// Returns [{ name, mayContain }]. mayContain rows are parsed for display but
+// excluded from coverage and scoring.
+//
+// Intentional: may-contain / +/- / ± splitting applies only to ingredients_text.
+// The structured product.ingredients array path returns early with mayContain:false
+// on every row — OFF/OBF parsed arrays are already tokenised and do not carry the
+// free-text "May Contain (+/-):" marker, so marker-based splitting does not apply.
 function parseCosmeticIngredientList(product) {
   const parsed = [];
 
@@ -127,15 +185,23 @@ function parseCosmeticIngredientList(product) {
       const raw = (item.text || item.id || item.ingredient_id || '').toString();
       // OFF/OBF ids look like "en:aqua" — turn into displayable text when needed.
       const text = raw.startsWith('en:') ? raw.slice(3).replace(/-/g, ' ') : raw;
-      const cleaned = stripCosmeticAnnotations(text);
-      if (cleaned.length >= 3) parsed.push(cleaned);
+      const cleaned = cleanParsedIngredientFragment(text);
+      if (cleaned) parsed.push({ name: cleaned, mayContain: false });
     }
-  } else {
-    const text = product.ingredients_text || '';
-    const parts = text.split(/[,•·●‣⁃∙⋅]/);
-    for (const part of parts) {
-      const cleaned = stripCosmeticAnnotations(part);
-      if (cleaned.length >= 3) parsed.push(cleaned);
+    return parsed;
+  }
+
+  let text = stripLeadingIngredientLabelPrefix(product.ingredients_text || '');
+  const { main, conditional } = splitMayContainSections(text);
+
+  for (const part of splitCosmeticIngredientText(main)) {
+    const cleaned = cleanParsedIngredientFragment(part);
+    if (cleaned) parsed.push({ name: cleaned, mayContain: false });
+  }
+  if (conditional) {
+    for (const part of splitCosmeticIngredientText(conditional)) {
+      const cleaned = cleanParsedIngredientFragment(part);
+      if (cleaned) parsed.push({ name: cleaned, mayContain: true });
     }
   }
 
@@ -159,8 +225,11 @@ function cosmeticPenaltyForRisk(risk) {
 }
 
 function scoreCosmeticProduct(product) {
-  const parsedNames = parseCosmeticIngredientList(product);
-  const coverageTotal = parsedNames.length;
+  const parsedItems = parseCosmeticIngredientList(product);
+  // may-contain / +/- rows are listed for display but do not inflate coverage
+  // or participate in scoring — they may not actually be in the product.
+  const coverageItems = parsedItems.filter(item => !item.mayContain);
+  const coverageTotal = coverageItems.length;
 
   const findings = [];
   const ingredientList = [];
@@ -170,9 +239,28 @@ function scoreCosmeticProduct(product) {
   const unmatchedNames = [];
   const seenUnmatched = new Set();
 
-  parsedNames.forEach((displayName, index) => {
+  parsedItems.forEach((item, index) => {
+    const displayName = item.name;
+    const mayContain = !!item.mayContain;
     const position = index + 1;
     const entry = lookupCosmeticIngredient(displayName);
+
+    if (mayContain) {
+      ingredientList.push({
+        name: displayName,
+        position,
+        matched: !!entry,
+        inci: entry ? entry.inci : null,
+        risk: entry ? (entry.risk ?? null) : null,
+        riskType: entry ? (entry.risk_type || 'health') : null,
+        reason: entry ? (entry.reason || null) : null,
+        disputed: entry ? !!entry.disputed : false,
+        countsTowardScore: false,
+        mayContain: true,
+      });
+      return;
+    }
+
     if (!entry) {
       const missKey = normalizeInci(displayName);
       if (missKey && !seenUnmatched.has(missKey)) {
@@ -189,6 +277,7 @@ function scoreCosmeticProduct(product) {
         reason: null,
         disputed: false,
         countsTowardScore: false,
+        mayContain: false,
       });
       return;
     }
@@ -228,6 +317,7 @@ function scoreCosmeticProduct(product) {
       reason: entry.reason || null,
       disputed: !!entry.disputed,
       countsTowardScore,
+      mayContain: false,
     });
   });
 
@@ -490,9 +580,60 @@ function productHasIngredients(product) {
   return !!(product.ingredients_text && product.ingredients_text.trim());
 }
 
+function productHasNutriments(product) {
+  const n = product && product.nutriments;
+  return !!(n && typeof n === 'object' && Object.keys(n).length > 0);
+}
+
+// Explicit beauty/hygiene category fragments. Matched as whole hyphen-delimited
+// segments of categories_tags — not fuzzy substrings (so "soap" ≠ "soapberry").
+const COSMETIC_CATEGORY_FRAGMENTS = [
+  'cosmetics', 'cosmetic', 'beauty', 'hygiene',
+  'toothpaste', 'toothpastes',
+  'soap', 'soaps',
+  'shampoo', 'shampoos',
+  'deodorant', 'deodorants',
+  'skin-care', 'skincare',
+  'hair-care', 'haircare',
+  'lip-balm', 'lip-balms', 'lipbalm',
+  'sunscreen', 'sunscreens',
+  'make-up', 'makeup',
+  'mouthwash', 'mouthwashes',
+  'dental-care', 'oral-care',
+  'body-care', 'facial-care', 'face-care',
+  'personal-care',
+  'conditioner', 'conditioners',
+  'shower-gel', 'shower-gels',
+  'bath-and-shower',
+  'aftershaves', 'aftershave',
+  'perfume', 'perfumes', 'fragrance', 'fragrances',
+  'nail-polish', 'nail-care',
+  'shaving', 'shaving-cream', 'shaving-foam',
+  'hand-cream', 'body-lotion', 'face-cream',
+  'exfoliant', 'exfoliants', 'toner', 'toners', 'serum', 'serums',
+];
+
+function tagIndicatesCosmetic(tag) {
+  const t = String(tag || '').replace(/^[a-z]{2}:/, '').toLowerCase();
+  if (!t) return false;
+  return COSMETIC_CATEGORY_FRAGMENTS.some(frag => {
+    if (t === frag) return true;
+    if (t.startsWith(frag + '-')) return true;
+    if (t.endsWith('-' + frag)) return true;
+    if (t.includes('-' + frag + '-')) return true;
+    return false;
+  });
+}
+
+function hasCosmeticCategory(product) {
+  const tags = (product && product.categories_tags) || [];
+  return tags.some(tagIndicatesCosmetic);
+}
+
 async function resolveProductType(barcode) {
-  // Prefer OFF, fall back to OBF. If both hit (rare), prefer the one with
-  // ingredients; if still tied, prefer food.
+  // Classify by category (and OBF), not merely by which database answered first.
+  // Toothpaste/soap/etc. often exist in OFF with ingredients and would otherwise
+  // be scored as food.
   let foodProduct = null;
   let cosmeticProduct = null;
 
@@ -508,23 +649,60 @@ async function resolveProductType(barcode) {
     } catch (err) {
       console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
     }
-    if (cosmeticProduct) return { productType: 'cosmetic', product: cosmeticProduct };
+    if (cosmeticProduct) {
+      console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=obf_only`);
+      return { productType: 'cosmetic', product: cosmeticProduct };
+    }
+    console.log(`[PRODUCT TYPE] barcode=${barcode} type=null reason=not_found`);
     return { productType: null, product: null };
   }
 
-  // Food hit — still check OBF only when food has no ingredients, in case this
-  // barcode is a cosmetic misfiled or dual-listed with better OBF data.
-  if (!productHasIngredients(foodProduct)) {
+  const offCosmeticCategory = hasCosmeticCategory(foodProduct);
+  const offHasIngredients = productHasIngredients(foodProduct);
+  const offHasNutriments = productHasNutriments(foodProduct);
+
+  // Category says beauty/hygiene (optionally reinforced by missing nutriments).
+  if (offCosmeticCategory) {
     try {
       cosmeticProduct = await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode);
     } catch (err) {
       console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
     }
     if (cosmeticProduct && productHasIngredients(cosmeticProduct)) {
+      const reason = !offHasNutriments
+        ? 'category_no_nutriments_obf_ingredients'
+        : 'category_obf_ingredients';
+      console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=${reason}`);
+      return { productType: 'cosmetic', product: cosmeticProduct };
+    }
+    // Prefer OBF when present even without ingredients; else score OFF via cosmetic path.
+    if (cosmeticProduct) {
+      console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=category_obf_record`);
+      return { productType: 'cosmetic', product: cosmeticProduct };
+    }
+    console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=category_off_as_cosmetic`);
+    return { productType: 'cosmetic', product: foodProduct };
+  }
+
+  // OFF has no ingredients — try OBF (genuine beauty product missing from OFF text).
+  if (!offHasIngredients) {
+    try {
+      cosmeticProduct = await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode);
+    } catch (err) {
+      console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
+    }
+    if (cosmeticProduct && productHasIngredients(cosmeticProduct)) {
+      console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=off_empty_obf_ingredients`);
+      return { productType: 'cosmetic', product: cosmeticProduct };
+    }
+    if (cosmeticProduct) {
+      console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=off_empty_obf_hit`);
       return { productType: 'cosmetic', product: cosmeticProduct };
     }
   }
 
+  // Genuinely ambiguous — prefer food and make the choice visible.
+  console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=default_off_ambiguous`);
   return { productType: 'food', product: foodProduct };
 }
 
