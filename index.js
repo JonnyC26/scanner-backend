@@ -811,12 +811,128 @@ Avoid jargon like "Annex II" — say "prohibited in the EU" if relevant.`;
   }
 }
 
-async function scanAndCacheCosmetic(barcode, product) {
+async function generateFoodExplanation({
+  sugarDisplay,
+  sodiumDisplay,
+  proteinDisplay,
+  sugarTier,
+  sodiumTier,
+  additivesCount,
+  isOrganic,
+  novaGroup,
+  ingredients,
+}) {
+  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: `Product data: sugar ${Math.round(sugarDisplay * 10) / 10}g per serving (${sugarTier} tier), sodium ${Math.round(sodiumDisplay * 1000)}mg per serving (${sodiumTier} tier), protein ${Math.round(proteinDisplay * 10) / 10}g per serving, ${additivesCount} additives, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration."` }]
+    })
+  });
+
+  const claudeData = await claudeRes.json();
+  return claudeData.content[0].text;
+}
+
+// Rebuild a Haiku explanation from a productCache document (food or cosmetic).
+async function generateExplanationFromCached(cached) {
+  const productType = cached.productType || 'food';
+  if (productType === 'cosmetic') {
+    const findings = typeof cached.ingredientFindings === 'string'
+      ? JSON.parse(cached.ingredientFindings || '[]')
+      : (cached.ingredientFindings || []);
+    const breakdown = typeof cached.scoreBreakdown === 'string'
+      ? JSON.parse(cached.scoreBreakdown || '{}')
+      : (cached.scoreBreakdown || {});
+    const coverageMatched = cached.coverageMatched ?? 0;
+    const coverageTotal = cached.coverageTotal ?? 0;
+    return generateCosmeticExplanation({
+      score: cached.score,
+      scoreLabel: cached.scoreLabel,
+      coverageMatched,
+      coverageTotal,
+      coverage: coverageTotal > 0 ? coverageMatched / coverageTotal : 0,
+      ingredientFindings: findings,
+      scoreBreakdown: breakdown,
+    }, cached.ingredients || '');
+  }
+
+  // Food — use the cached display strings (already formatted for the app).
+  const additivesPhrase = cached.additivesCount === 'None'
+    ? '0 additives'
+    : (cached.additivesCount || '0 additives');
+  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: `Product data: sugar ${cached.sugar} per serving (${cached.sugarTier} tier), sodium ${cached.sodium} per serving (${cached.sodiumTier} tier), protein ${cached.protein} per serving, ${additivesPhrase}, organic: ${cached.isOrganic === 'Yes'}, NOVA group ${cached.novaGroup}. Ingredients: ${cached.ingredients || ''}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration."` }]
+    })
+  });
+  const claudeData = await claudeRes.json();
+  return claudeData.content[0].text;
+}
+
+function hasUsableExplanation(data) {
+  return !!(data && data.explanation && String(data.explanation).trim());
+}
+
+// Dedupe concurrent Haiku work for the same barcode (deferred fill + /explain).
+const explanationInFlight = new Map();
+
+function ensureExplanation(barcode, cached) {
+  if (explanationInFlight.has(barcode)) {
+    return explanationInFlight.get(barcode);
+  }
+  const promise = (async () => {
+    try {
+      // Re-read in case another path already filled the cache.
+      try {
+        const fresh = await db.collection(CACHE_COLLECTION).doc(barcode).get();
+        if (fresh.exists && hasUsableExplanation(fresh.data())) {
+          return fresh.data().explanation;
+        }
+      } catch (_) { /* fall through to generate */ }
+
+      const explanation = await generateExplanationFromCached(cached);
+      try {
+        await db.collection(CACHE_COLLECTION).doc(barcode).set({
+          explanation,
+          explanationPending: false,
+        }, { merge: true });
+      } catch (writeErr) {
+        console.log(`[EXPLAIN CACHE WRITE ERROR] barcode=${barcode} ${writeErr.message}`);
+      }
+      return explanation;
+    } finally {
+      explanationInFlight.delete(barcode);
+    }
+  })();
+  explanationInFlight.set(barcode, promise);
+  return promise;
+}
+
+async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false } = {}) {
   const productName = product.product_name || 'Unknown Product';
   const imageUrl = product.image_front_url || product.image_url || '';
   const ingredients = product.ingredients_text || '';
   const scored = scoreCosmeticProduct(product);
-  const explanation = await generateCosmeticExplanation(scored, ingredients);
+
+  let explanation = null;
+  if (!skipExplanation) {
+    explanation = await generateCosmeticExplanation(scored, ingredients);
+  }
 
   console.log(`[COSMETIC SCORE] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal} score=${scored.score} table=${COSMETIC_TABLE_VERSION}`);
 
@@ -829,7 +945,7 @@ async function scanAndCacheCosmetic(barcode, product) {
   // Do not await — logging must not delay the /scan response.
   recordUnmatchedInci(barcode, unmatchedNames);
 
-  return {
+  const responseData = {
     productType: 'cosmetic',
     productName,
     additiveNames: null,
@@ -857,9 +973,13 @@ async function scanAndCacheCosmetic(barcode, product) {
     ingredientFindings: JSON.stringify(scored.ingredientFindings),
     tableVersion: COSMETIC_TABLE_VERSION,
   };
+  if (skipExplanation) {
+    responseData.explanationPending = true;
+  }
+  return responseData;
 }
 
-async function scanAndCacheFood(barcode, product) {
+async function scanAndCacheFood(barcode, product, { skipExplanation = false } = {}) {
   const productName = product.product_name || 'Unknown Product';
   const imageUrl = product.image_front_url || product.image_url || '';
   const ingredients = product.ingredients_text || '';
@@ -932,26 +1052,25 @@ async function scanAndCacheFood(barcode, product) {
   const fmtSugar = sugarDisplay === null ? 'N/A' : Math.round(sugarDisplay * 10) / 10 + 'g';
   const fmtSodium = sodiumDisplay === null ? 'N/A' : Math.round(sodiumDisplay * 1000) + 'mg';
 
-  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 100,
-      messages: [{ role: 'user', content: `Product data: sugar ${Math.round(sugarDisplay * 10) / 10}g per serving (${sugarTier} tier), sodium ${Math.round(sodiumDisplay * 1000)}mg per serving (${sodiumTier} tier), protein ${Math.round(proteinDisplay * 10) / 10}g per serving, ${additivesCount} additives, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration."` }]
-    })
-  });
+  let explanation = null;
+  if (!skipExplanation) {
+    explanation = await generateFoodExplanation({
+      sugarDisplay,
+      sodiumDisplay,
+      proteinDisplay,
+      sugarTier,
+      sodiumTier,
+      additivesCount,
+      isOrganic,
+      novaGroup,
+      ingredients,
+    });
+  }
 
-  const claudeData = await claudeRes.json();
-  const explanation = claudeData.content[0].text;
   const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
   const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
 
-  return {
+  const responseData = {
     productType: 'food',
     productName,
     additiveNames,
@@ -978,9 +1097,13 @@ async function scanAndCacheFood(barcode, product) {
     coverageTotal: null,
     ingredientFindings: null,
   };
+  if (skipExplanation) {
+    responseData.explanationPending = true;
+  }
+  return responseData;
 }
 
-async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
+async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation = false } = {}) {
   if (!skipCacheCheck) {
     try {
       const cacheDoc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
@@ -995,6 +1118,18 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
           console.log(`[CACHE HIT] barcode=${barcode} type=${cachedType} age=${Math.round(age / 3600000)}h`);
           const { cachedAt, ...responseData } = cached;
           if (!responseData.productType) responseData.productType = 'food';
+
+          // Old TestFlight clients always need an explanation. If a deferred
+          // scan cached a pending entry, fill it inline before returning.
+          if (!skipExplanation && !hasUsableExplanation(responseData)) {
+            try {
+              const explanation = await ensureExplanation(barcode, responseData);
+              responseData.explanation = explanation;
+              responseData.explanationPending = false;
+            } catch (fillErr) {
+              console.log(`[EXPLAIN FILL ERROR] barcode=${barcode} ${fillErr.message}`);
+            }
+          }
           return responseData;
         }
         if (tableStale) {
@@ -1016,8 +1151,8 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
   }
 
   const responseData = productType === 'cosmetic'
-    ? await scanAndCacheCosmetic(barcode, product)
-    : await scanAndCacheFood(barcode, product);
+    ? await scanAndCacheCosmetic(barcode, product, { skipExplanation })
+    : await scanAndCacheFood(barcode, product, { skipExplanation });
 
   try {
     await db.collection(CACHE_COLLECTION).doc(barcode).set({
@@ -1034,6 +1169,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false } = {}) {
 app.get('/scan/:barcode', async (req, res) => {
   try {
     const { barcode } = req.params;
+    const deferExplanation = req.query.deferExplanation === '1';
 
     // Try to get the user's health profile from their Firestore document.
     // Best-effort — a missing/invalid token just means no diet warnings, never a blocked scan.
@@ -1056,7 +1192,7 @@ app.get('/scan/:barcode', async (req, res) => {
       console.log(`[DIET] auth/profile lookup failed: ${authErr.message}`);
     }
 
-    const responseData = await scanAndCache(barcode);
+    const responseData = await scanAndCache(barcode, { skipExplanation: deferExplanation });
 
     // Diet warning detection — food only. Needs raw OFF product data (labels,
     // allergens etc.) which isn't stored in the cache. Cosmetics skip this.
@@ -1077,7 +1213,51 @@ app.get('/scan/:barcode', async (req, res) => {
     }
 
     res.json({ ...responseData, dietWarnings });
+
+    // After the score is already on the wire, fill the Haiku explanation in
+    // the background and merge it into the cache. Failures must not matter.
+    if (deferExplanation && responseData.explanationPending) {
+      ensureExplanation(barcode, responseData).catch(err => {
+        console.log(`[EXPLAIN DEFER ERROR] barcode=${barcode} ${err.message}`);
+      });
+    }
   } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.get('/explain/:barcode', async (req, res) => {
+  const started = Date.now();
+  const { barcode } = req.params;
+
+  // Same best-effort auth as /scan — never blocks the explain path.
+  try {
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.replace('Bearer ', '').trim();
+    if (token) {
+      await admin.auth().verifyIdToken(token);
+    }
+  } catch (authErr) {
+    console.log(`[EXPLAIN] auth lookup failed: ${authErr.message}`);
+  }
+
+  try {
+    const cacheDoc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
+    if (!cacheDoc.exists) {
+      return res.status(404).json({ error: 'Not cached' });
+    }
+
+    const cached = cacheDoc.data();
+    if (hasUsableExplanation(cached)) {
+      console.log(`[EXPLAIN] barcode=${barcode} source=cache ms=${Date.now() - started}`);
+      return res.json({ explanation: cached.explanation, ready: true });
+    }
+
+    const explanation = await ensureExplanation(barcode, cached);
+    console.log(`[EXPLAIN] barcode=${barcode} source=generated ms=${Date.now() - started}`);
+    return res.json({ explanation, ready: true });
+  } catch (err) {
+    console.log(`[EXPLAIN ERROR] barcode=${barcode} ${err.message}`);
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
