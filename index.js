@@ -456,6 +456,22 @@ function resolveOrganicStatus(labelsTags) {
   return 'no';
 }
 
+// Display-cased values for the Organic row — shipped app builds render this
+// string directly. Keep internal status lowercase; only responses use this.
+function formatOrganicDisplay(status) {
+  if (status === 'yes') return 'Yes';
+  if (status === 'no') return 'No';
+  return 'Unknown';
+}
+
+function normalizeOrganicStatus(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'yes') return 'yes';
+  if (v === 'no') return 'no';
+  if (v === 'unknown') return 'unknown';
+  return 'unknown';
+}
+
 function parseServingQuantity(raw) {
   if (raw == null || raw === '') return null;
   const n = parseFloat(raw);
@@ -963,11 +979,8 @@ async function generateExplanationFromCached(cached) {
   const additivesPhrase = cached.additivesCount === 'None'
     ? '0 additives'
     : (cached.additivesCount || '0 additives');
-  // Accept legacy Yes/No cache values and the new yes/no/unknown strings.
-  let organicStatus = 'unknown';
-  if (cached.isOrganic === 'Yes' || cached.isOrganic === 'yes') organicStatus = 'yes';
-  else if (cached.isOrganic === 'No' || cached.isOrganic === 'no') organicStatus = 'no';
-  else if (cached.isOrganic === 'unknown') organicStatus = 'unknown';
+  // Accept legacy Yes/No cache values and yes/no/unknown/Unknown strings.
+  const organicStatus = normalizeOrganicStatus(cached.isOrganic);
   const breakdown = typeof cached.scoreBreakdown === 'string'
     ? (() => { try { return JSON.parse(cached.scoreBreakdown || '{}'); } catch (_) { return {}; } })()
     : (cached.scoreBreakdown || {});
@@ -1189,7 +1202,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     nutriScore,
     novaGroup,
     additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
-    isOrganic: organicStatus,
+    isOrganic: formatOrganicDisplay(organicStatus),
     protein: fmtProtein,
     sugar: fmtSugar,
     sodium: fmtSodium,
@@ -1665,7 +1678,7 @@ app.get('/search', async (req, res) => {
           score,
           scoreColor,
           scoreLabel,
-          isOrganic: organicStatus,
+          isOrganic: formatOrganicDisplay(organicStatus),
           protein: formatGrams(proteinDisplay),
           sugar: formatGrams(sugarDisplay),
           sodium: formatSodiumMg(sodiumDisplay),
