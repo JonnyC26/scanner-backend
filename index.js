@@ -139,10 +139,20 @@ function scoreCosmeticProduct(product) {
   const findings = [];
   const scoredEntries = []; // unique parents that contribute to the score
   const seenInci = new Set();
+  // INCI names that did not hit the hazard table — used for table-gap logging only.
+  const unmatchedNames = [];
+  const seenUnmatched = new Set();
 
   parsedNames.forEach((displayName, index) => {
     const entry = lookupCosmeticIngredient(displayName);
-    if (!entry) return;
+    if (!entry) {
+      const missKey = normalizeInci(displayName);
+      if (missKey && !seenUnmatched.has(missKey)) {
+        seenUnmatched.add(missKey);
+        unmatchedNames.push(displayName);
+      }
+      return;
+    }
 
     const finding = {
       inci: entry.inci,
@@ -178,6 +188,7 @@ function scoreCosmeticProduct(product) {
       coverageTotal,
       coverage,
       ingredientFindings: findings,
+      unmatchedNames,
       scoreBreakdown: {
         start: 100,
         penalties: [],
@@ -273,6 +284,7 @@ function scoreCosmeticProduct(product) {
     coverageTotal,
     coverage,
     ingredientFindings: findings,
+    unmatchedNames,
     scoreBreakdown: {
       start: 100,
       penalties,
@@ -288,6 +300,41 @@ function scoreCosmeticProduct(product) {
       coverage,
     },
   };
+}
+
+// Firestore doc IDs cannot contain "/" and have a 1500-byte max; keep a
+// comfortable headroom for multi-byte characters.
+const UNMATCHED_INCI_DOC_ID_MAX = 700;
+
+function unmatchedInciDocId(name) {
+  return normalizeInci(name).replace(/\//g, '').slice(0, UNMATCHED_INCI_DOC_ID_MAX);
+}
+
+// Fire-and-forget tally of unmatched INCI names for table expansion.
+// Never awaited on the request path; failures are swallowed.
+function recordUnmatchedInci(barcode, unmatchedNames) {
+  if (!unmatchedNames || unmatchedNames.length === 0) return;
+  // Junk parses (e.g. mangled OCR) produce huge miss lists — skip those.
+  if (unmatchedNames.length > 60) return;
+
+  (async () => {
+    try {
+      const col = db.collection('unmatchedInci');
+      for (const name of unmatchedNames) {
+        const docId = unmatchedInciDocId(name);
+        if (!docId) continue;
+        await col.doc(docId).set({
+          name,
+          count: admin.firestore.FieldValue.increment(1),
+          lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+          sampleBarcode: barcode,
+          tableVersion: COSMETIC_TABLE_VERSION,
+        }, { merge: true });
+      }
+    } catch (err) {
+      console.log(`[UNMATCHED INCI WRITE ERROR] barcode=${barcode} ${err.message}`);
+    }
+  })();
 }
 
 async function fetchProductFromFacts(baseUrl, barcode) {
@@ -772,6 +819,15 @@ async function scanAndCacheCosmetic(barcode, product) {
   const explanation = await generateCosmeticExplanation(scored, ingredients);
 
   console.log(`[COSMETIC SCORE] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal} score=${scored.score} table=${COSMETIC_TABLE_VERSION}`);
+
+  const unmatchedNames = scored.unmatchedNames || [];
+  const namesJoined = unmatchedNames.join('|');
+  const namesTruncated = namesJoined.length > 200
+    ? namesJoined.slice(0, 200) + '...'
+    : namesJoined;
+  console.log(`[COSMETIC UNMATCHED] barcode=${barcode} count=${unmatchedNames.length} names=${namesTruncated}`);
+  // Do not await — logging must not delay the /scan response.
+  recordUnmatchedInci(barcode, unmatchedNames);
 
   return {
     productType: 'cosmetic',
