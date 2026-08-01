@@ -2,6 +2,7 @@ const express = require('express');
 const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const app = express();
 // Keep the default 100kb JSON limit globally. /scan/photo attaches its own
 // 8mb parser — skip the global one there so large photos are not rejected early.
@@ -24,6 +25,9 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 const CACHE_COLLECTION = 'productCache';
+const RAW_COLLECTION = 'rawObservations';
+// Firestore docs cap at 1MB; leave headroom and skip oversize rather than truncate.
+const RAW_PAYLOAD_MAX_BYTES = 800 * 1024;
 // Cached entries older than this are treated as stale and get re-scanned,
 // so a product's data doesn't go permanently out of date if OFF updates it.
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -342,6 +346,68 @@ function recordUnmatchedInci(barcode, unmatchedNames) {
       }
     } catch (err) {
       console.log(`[UNMATCHED INCI WRITE ERROR] barcode=${barcode || 'none'} ${err.message}`);
+    }
+  })();
+}
+
+// Append-only raw source log. Fire-and-forget; never blocks a scan.
+// One document per observation (auto-ID). Never updated, never expired.
+function recordRawObservation({ barcode, productType, source, payload, tableVersion }) {
+  (async () => {
+    try {
+      let payloadStr;
+      try {
+        payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      } catch (serErr) {
+        console.log(`[RAW WRITE ERROR] barcode=${barcode || 'none'} serialize: ${serErr.message}`);
+        return;
+      }
+
+      const bytes = Buffer.byteLength(payloadStr, 'utf8');
+      if (bytes > RAW_PAYLOAD_MAX_BYTES) {
+        console.log(`[RAW SKIPPED oversize] barcode=${barcode || 'none'} bytes=${bytes}`);
+        return;
+      }
+
+      const payloadHash = crypto.createHash('sha256').update(payloadStr).digest('hex');
+      let isNew = true;
+
+      // Dedupe only when we have a barcode to key on. Compare against the
+      // most recent observation for that barcode — formulations change, so
+      // same-hash-after-a-change still gets a new doc.
+      if (barcode) {
+        try {
+          const recent = await db.collection(RAW_COLLECTION)
+            .where('barcode', '==', String(barcode))
+            .orderBy('observedAt', 'desc')
+            .limit(1)
+            .get();
+          if (!recent.empty && recent.docs[0].data().payloadHash === payloadHash) {
+            isNew = false;
+          }
+        } catch (dedupeErr) {
+          // Fail open: missing composite index or query error must not drop data.
+          console.log(`[RAW DEDUPE ERROR] barcode=${barcode} ${dedupeErr.message}`);
+        }
+      }
+
+      if (!isNew) {
+        console.log(`[RAW] barcode=${barcode || 'none'} source=${source} bytes=${bytes} new=false`);
+        return;
+      }
+
+      await db.collection(RAW_COLLECTION).add({
+        barcode: barcode ? String(barcode) : null,
+        productType,
+        source,
+        observedAt: admin.firestore.FieldValue.serverTimestamp(),
+        payload: payloadStr,
+        payloadHash,
+        tableVersion: tableVersion == null ? null : tableVersion,
+      });
+      console.log(`[RAW] barcode=${barcode || 'none'} source=${source} bytes=${bytes} new=true`);
+    } catch (err) {
+      console.log(`[RAW WRITE ERROR] barcode=${barcode || 'none'} ${err.message}`);
     }
   })();
 }
@@ -1040,6 +1106,15 @@ function ensureExplanation(barcode, cached) {
 }
 
 async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false } = {}) {
+  // Preserve the unmodified OBF product for future rescoring / analysis.
+  recordRawObservation({
+    barcode,
+    productType: 'cosmetic',
+    source: 'obf',
+    payload: product,
+    tableVersion: COSMETIC_TABLE_VERSION,
+  });
+
   const productName = product.product_name || 'Unknown Product';
   const imageUrl = product.image_front_url || product.image_url || '';
   const ingredients = product.ingredients_text || '';
@@ -1096,6 +1171,15 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
 }
 
 async function scanAndCacheFood(barcode, product, { skipExplanation = false } = {}) {
+  // Preserve the unmodified OFF product for future rescoring / analysis.
+  recordRawObservation({
+    barcode,
+    productType: 'food',
+    source: 'off',
+    payload: product,
+    tableVersion: null,
+  });
+
   const productName = product.product_name || 'Unknown Product';
   const imageUrl = product.image_front_url || product.image_url || '';
   const ingredients = product.ingredients_text || '';
@@ -1465,6 +1549,15 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     }
 
     const vision = await readCosmeticLabelFromPhoto(imageBase64, mediaType);
+    // Photo scans have no upstream DB payload — keep the vision transcription.
+    recordRawObservation({
+      barcode: barcode || null,
+      productType: 'cosmetic',
+      source: 'photo',
+      payload: vision,
+      tableVersion: COSMETIC_TABLE_VERSION,
+    });
+
     const ingredientNames = Array.isArray(vision.ingredients)
       ? vision.ingredients.map(n => String(n || '').trim()).filter(Boolean)
       : [];
