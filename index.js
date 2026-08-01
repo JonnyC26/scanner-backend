@@ -50,12 +50,14 @@ function normalizeInci(name) {
     .trim();
 }
 
-// Indexes for matching. Order at lookup time: declare_as → inci → covers_inci.
+// Indexes for matching. Order at lookup time: declare_as → inci → covers_inci
+// → synonym map (last resort for common English label names).
 // For declare_as collisions, prefer the parent (no member_of) so grouped labels
 // resolve to the scorable entry rather than an alias.
 const cosmeticByInci = new Map();
 const cosmeticByDeclareAs = new Map();
 const cosmeticByCovers = new Map();
+const cosmeticBySynonym = new Map();
 
 for (const entry of cosmeticIngredients) {
   if (entry.inci) cosmeticByInci.set(normalizeInci(entry.inci), entry);
@@ -76,6 +78,18 @@ for (const entry of cosmeticIngredients) {
   }
 }
 
+const synonymTable = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'purla_inci_synonyms.json'), 'utf8')
+);
+for (const [commonName, inciTarget] of Object.entries(synonymTable.synonyms || {})) {
+  const target = cosmeticByInci.get(normalizeInci(inciTarget));
+  if (!target) {
+    console.log(`[SYNONYM SKIP] target missing for "${commonName}" -> "${inciTarget}"`);
+    continue;
+  }
+  cosmeticBySynonym.set(normalizeInci(commonName), target);
+}
+
 function resolveCosmeticEntry(entry) {
   if (!entry) return null;
   if (entry.member_of) {
@@ -92,6 +106,7 @@ function lookupCosmeticIngredient(rawName) {
     cosmeticByDeclareAs.get(key) ||
     cosmeticByInci.get(key) ||
     cosmeticByCovers.get(key) ||
+    cosmeticBySynonym.get(key) ||
     null;
   return resolveCosmeticEntry(hit);
 }
@@ -227,6 +242,7 @@ function scoreCosmeticProduct(product) {
       coverageMatched,
       coverageTotal,
       coverage,
+      noIngredientData: coverageTotal === 0,
       ingredientFindings: findings,
       ingredientList,
       unmatchedNames,
@@ -324,6 +340,7 @@ function scoreCosmeticProduct(product) {
     coverageMatched,
     coverageTotal,
     coverage,
+    noIngredientData: false,
     ingredientFindings: findings,
     ingredientList,
     unmatchedNames,
@@ -935,17 +952,23 @@ async function generateCosmeticExplanation(scored, ingredientsText) {
       };
     });
 
-  const coverageNote = scored.coverage < 0.60
-    ? `Coverage is ${scored.coverageMatched} of ${scored.coverageTotal} ingredients assessed — mention this briefly.`
-    : `Coverage is ${scored.coverageMatched} of ${scored.coverageTotal} ingredients (do not dwell on coverage).`;
+  const noIngredientData = !!scored.noIngredientData || scored.coverageTotal === 0;
 
-  const coverageContext = scored.score === null
-    ? 'There is not enough ingredient coverage to give a numeric score — say so briefly without inventing findings.'
-    : '';
+  const coverageNote = noIngredientData
+    ? ''
+    : scored.coverage < 0.60
+      ? `Coverage is ${scored.coverageMatched} of ${scored.coverageTotal} ingredients assessed — mention this briefly.`
+      : `Coverage is ${scored.coverageMatched} of ${scored.coverageTotal} ingredients (do not dwell on coverage).`;
+
+  const coverageContext = noIngredientData
+    ? 'We found this product in the database but it has no ingredient list. Say plainly that we could not assess it because the ingredient list is missing. Do NOT say "0 of 0", "0 of 0 assessed", or similar.'
+    : scored.score === null
+      ? 'There is not enough ingredient coverage to give a numeric score — say so briefly without inventing findings.'
+      : '';
 
   const hasModerateOrHigh = drivers.some(d => d.risk === 'moderate' || d.risk === 'high');
   const onlyLowFindings = drivers.length > 0 && !hasModerateOrHigh;
-  const proportionNote = scored.score === null
+  const proportionNote = noIngredientData || scored.score === null
     ? ''
     : drivers.length === 0
       ? 'No ingredient penalties drove the score. Keep the tone calm — do not invent concerns.'
@@ -1166,11 +1189,14 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
   const scored = scoreCosmeticProduct(product);
 
   let explanation = null;
-  if (!skipExplanation) {
+  if (scored.noIngredientData) {
+    // Fixed copy — do not defer or invent a Haiku line about "0 of 0".
+    explanation = 'We found this product but its ingredient list is missing, so we could not assess it.';
+  } else if (!skipExplanation) {
     explanation = await generateCosmeticExplanation(scored, ingredients);
   }
 
-  console.log(`[COSMETIC SCORE] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal} score=${scored.score} table=${COSMETIC_TABLE_VERSION}`);
+  console.log(`[COSMETIC SCORE] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal} score=${scored.score} noIngredientData=${!!scored.noIngredientData} table=${COSMETIC_TABLE_VERSION}`);
 
   const unmatchedNames = scored.unmatchedNames || [];
   const namesJoined = unmatchedNames.join('|');
@@ -1206,11 +1232,12 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
     scoreLabel: scored.scoreLabel,
     coverageMatched: scored.coverageMatched,
     coverageTotal: scored.coverageTotal,
+    noIngredientData: !!scored.noIngredientData,
     ingredientFindings: JSON.stringify(scored.ingredientFindings),
     ingredientList: JSON.stringify(scored.ingredientList || []),
     tableVersion: COSMETIC_TABLE_VERSION,
   };
-  if (skipExplanation) {
+  if (skipExplanation && !scored.noIngredientData) {
     responseData.explanationPending = true;
   }
   return responseData;
@@ -1412,6 +1439,13 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
   const responseData = productType === 'cosmetic'
     ? await scanAndCacheCosmetic(barcode, product, { skipExplanation })
     : await scanAndCacheFood(barcode, product, { skipExplanation });
+
+  // Products found without an ingredient list are not worth caching — OBF may
+  // gain ingredients later, and "0 of 0" is not a durable result.
+  if (responseData.noIngredientData) {
+    console.log(`[CACHE SKIP] barcode=${barcode} noIngredientData=true`);
+    return responseData;
+  }
 
   try {
     const cachePayload = {
