@@ -3,7 +3,14 @@ const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
 const app = express();
-app.use(express.json());
+// Keep the default 100kb JSON limit globally. /scan/photo attaches its own
+// 8mb parser — skip the global one there so large photos are not rejected early.
+app.use((req, res, next) => {
+  if (req.method === 'POST' && (req.path === '/scan/photo' || req.url.startsWith('/scan/photo'))) {
+    return next();
+  }
+  return express.json()(req, res, next);
+});
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
@@ -323,16 +330,18 @@ function recordUnmatchedInci(barcode, unmatchedNames) {
       for (const name of unmatchedNames) {
         const docId = unmatchedInciDocId(name);
         if (!docId) continue;
-        await col.doc(docId).set({
+        const payload = {
           name,
           count: admin.firestore.FieldValue.increment(1),
           lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-          sampleBarcode: barcode,
           tableVersion: COSMETIC_TABLE_VERSION,
-        }, { merge: true });
+        };
+        // Only record a real barcode — never a sentinel like "photo".
+        if (barcode) payload.sampleBarcode = barcode;
+        await col.doc(docId).set(payload, { merge: true });
       }
     } catch (err) {
-      console.log(`[UNMATCHED INCI WRITE ERROR] barcode=${barcode} ${err.message}`);
+      console.log(`[UNMATCHED INCI WRITE ERROR] barcode=${barcode || 'none'} ${err.message}`);
     }
   })();
 }
@@ -772,17 +781,19 @@ async function generateCosmeticExplanation(scored, ingredientsText) {
     ? `Coverage is ${scored.coverageMatched} of ${scored.coverageTotal} ingredients assessed — mention this briefly.`
     : `Coverage is ${scored.coverageMatched} of ${scored.coverageTotal} ingredients (do not dwell on coverage).`;
 
-  const scoreNote = scored.score === null
-    ? 'There is not enough ingredient coverage to give a numeric score.'
-    : `The product score is ${scored.score} (${scored.scoreLabel}).`;
+  const coverageContext = scored.score === null
+    ? 'There is not enough ingredient coverage to give a numeric score — say so briefly without inventing findings.'
+    : '';
 
   const prompt = `You are explaining a cosmetic ingredient safety scan for a consumer app.
-${scoreNote}
+${coverageContext}
 ${coverageNote}
 Top drivers (use these reason texts; do not invent rationale): ${JSON.stringify(drivers)}
 Ingredient list (context only): ${ingredientsText || '(none)'}
 
-Write one plain-English explanation under 40 words.
+Write one plain-text explanation under 40 words, findings only, in sentences.
+PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters.
+Do NOT restate the numeric score or the tier label (Excellent/Good/Poor/Bad) — the app already shows those beside the text.
 Name the two or three ingredients that drove the score and say why in plain terms (sensitiser, restricted, prohibited, declarable allergen).
 Never state or imply a concentration or percentage.
 If an ingredient is disputed, you may note that sources disagree, but do not present the dissenting view as equal to the regulatory finding.
@@ -822,7 +833,7 @@ function buildFoodExplanationPrompt({
   novaGroup,
   ingredients,
 }) {
-  return `Product data: sugar ${sugar} per serving (${sugarTier} tier), sodium ${sodium} per serving (${sodiumTier} tier), protein ${protein} per serving, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration."`;
+  return `Product data: sugar ${sugar} per serving (${sugarTier} tier), sodium ${sodium} per serving (${sodiumTier} tier), protein ${protein} per serving, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration." PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters. Do not restate an overall product score or Excellent/Good/Poor/Bad tier.`;
 }
 
 async function requestFoodExplanation(prompt) {
@@ -1248,6 +1259,212 @@ app.get('/scan/:barcode', async (req, res) => {
       });
     }
   } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+const PHOTO_LABEL_PROMPT = `You are reading a cosmetic product ingredient label from a photo.
+
+Transcribe ONLY the cosmetic ingredients / INCI list visible on the label.
+
+Return strict JSON only — no prose, no markdown fences:
+{"readable":true|false,"productName":string|null,"ingredients":[...]}
+
+Rules:
+- Preserve each ingredient name EXACTLY as printed, including leading positional and stereo prefixes (o-, m-, p-, alpha-). These are not decoration: p-Phenylenediamine is permitted at 2% while o- and m- are prohibited.
+- NEVER guess, correct spelling, expand abbreviations, or infer an ingredient that is not legible. Omit anything unreadable.
+- Set readable to false if the ingredient list as a whole cannot be read. An empty or unusable list must use readable:false.
+- productName is the product's name if clearly visible, otherwise null.
+- ingredients is an array of exact name strings in label order when readable is true.`;
+
+function stripJsonFences(text) {
+  const trimmed = String(text || '').trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+function photoJsonParser(req, res, next) {
+  express.json({ limit: '8mb' })(req, res, (err) => {
+    if (err && (err.status === 413 || err.type === 'entity.too.large')) {
+      return res.status(413).json({ error: 'Image too large. Maximum body size is 8MB.' });
+    }
+    if (err) {
+      return res.status(400).json({ error: err.message || 'Invalid JSON body' });
+    }
+    next();
+  });
+}
+
+async function readCosmeticLabelFromPhoto(imageBase64, mediaType) {
+  // Allow accidental data-URL prefixes from clients.
+  const rawBase64 = String(imageBase64 || '').replace(/^data:[^;]+;base64,/, '');
+
+  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1500,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mediaType,
+              data: rawBase64,
+            },
+          },
+          { type: 'text', text: PHOTO_LABEL_PROMPT },
+        ],
+      }],
+    }),
+  });
+
+  const claudeData = await claudeRes.json();
+  if (!claudeRes.ok) {
+    const msg = claudeData?.error?.message || `Vision request failed (${claudeRes.status})`;
+    const err = new Error(msg);
+    err.statusCode = 502;
+    throw err;
+  }
+
+  const text = claudeData.content?.[0]?.text;
+  let parsed;
+  try {
+    parsed = JSON.parse(stripJsonFences(text));
+  } catch (_) {
+    const err = new Error('Could not parse ingredient transcription from vision model');
+    err.statusCode = 502;
+    throw err;
+  }
+  return parsed;
+}
+
+app.post('/scan/photo', photoJsonParser, async (req, res) => {
+  const started = Date.now();
+
+  // Same best-effort auth as /scan — never blocking.
+  try {
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.replace('Bearer ', '').trim();
+    if (token) {
+      await admin.auth().verifyIdToken(token);
+    }
+  } catch (authErr) {
+    console.log(`[PHOTO SCAN] auth lookup failed: ${authErr.message}`);
+  }
+
+  try {
+    const { imageBase64, mediaType, barcode } = req.body || {};
+    // Defer only works when we will write a cache doc the app can poll via /explain.
+    const deferExplanation = req.query.deferExplanation === '1' && !!barcode;
+
+    if (!imageBase64 || typeof imageBase64 !== 'string') {
+      return res.status(400).json({ error: 'Missing imageBase64' });
+    }
+    if (mediaType !== 'image/jpeg' && mediaType !== 'image/png') {
+      return res.status(400).json({ error: 'mediaType must be image/jpeg or image/png' });
+    }
+
+    const vision = await readCosmeticLabelFromPhoto(imageBase64, mediaType);
+    const ingredientNames = Array.isArray(vision.ingredients)
+      ? vision.ingredients.map(n => String(n || '').trim()).filter(Boolean)
+      : [];
+
+    if (!vision.readable || ingredientNames.length === 0) {
+      console.log(`[PHOTO SCAN] barcode=${barcode || 'none'} readable=${!!vision.readable} parsed=${ingredientNames.length} matched=0 ms=${Date.now() - started}`);
+      return res.status(422).json({ error: 'Could not read the ingredients' });
+    }
+
+    const ingredientsText = ingredientNames.join(', ');
+    const product = { ingredients_text: ingredientsText };
+    const scored = scoreCosmeticProduct(product);
+
+    // Partial photo reads must not poison the shared 30-day cache.
+    const canCache = !!barcode && scored.score !== null;
+    // Ignore defer when we are not caching — there is no doc for /explain to fill.
+    const skipExplanation = deferExplanation && canCache;
+
+    let explanation = null;
+    if (!skipExplanation) {
+      explanation = await generateCosmeticExplanation(scored, ingredientsText);
+    }
+
+    const unmatchedNames = scored.unmatchedNames || [];
+    const namesJoined = unmatchedNames.join('|');
+    const namesTruncated = namesJoined.length > 200
+      ? namesJoined.slice(0, 200) + '...'
+      : namesJoined;
+    console.log(`[COSMETIC UNMATCHED] barcode=${barcode || 'none'} count=${unmatchedNames.length} names=${namesTruncated}`);
+    recordUnmatchedInci(barcode || null, unmatchedNames);
+
+    const productName = (vision.productName && String(vision.productName).trim())
+      || 'Unknown Product';
+
+    const responseData = {
+      productType: 'cosmetic',
+      productName,
+      additiveNames: null,
+      additiveList: JSON.stringify([]),
+      ingredients: ingredientsText,
+      nutriScore: null,
+      novaGroup: null,
+      additivesCount: null,
+      isOrganic: null,
+      protein: null,
+      sugar: null,
+      sodium: null,
+      sugarTier: null,
+      sodiumTier: null,
+      proteinTier: null,
+      score: scored.score,
+      scoreBreakdown: JSON.stringify(scored.scoreBreakdown),
+      alternatives: JSON.stringify([]),
+      explanation,
+      scoreColor: scored.scoreColor,
+      imageUrl: '',
+      scoreLabel: scored.scoreLabel,
+      coverageMatched: scored.coverageMatched,
+      coverageTotal: scored.coverageTotal,
+      ingredientFindings: JSON.stringify(scored.ingredientFindings),
+      tableVersion: COSMETIC_TABLE_VERSION,
+      source: 'photo',
+      dietWarnings: '',
+    };
+    if (skipExplanation) {
+      responseData.explanationPending = true;
+    }
+
+    if (canCache) {
+      try {
+        const { dietWarnings: _dietWarnings, ...cachePayload } = responseData;
+        await db.collection(CACHE_COLLECTION).doc(String(barcode)).set({
+          ...cachePayload,
+          cachedAt: Date.now(),
+        });
+      } catch (cacheWriteErr) {
+        console.log(`[PHOTO SCAN CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
+      }
+    } else if (barcode && scored.score === null) {
+      console.log(`[PHOTO SCAN NOT CACHED] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
+    }
+
+    console.log(`[PHOTO SCAN] barcode=${barcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${scored.coverageMatched} ms=${Date.now() - started}`);
+    res.json(responseData);
+
+    if (skipExplanation && responseData.explanationPending) {
+      ensureExplanation(String(barcode), responseData).catch(err => {
+        console.log(`[EXPLAIN DEFER ERROR] barcode=${barcode} ${err.message}`);
+      });
+    }
+  } catch (err) {
+    console.log(`[PHOTO SCAN ERROR] ${err.message}`);
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
