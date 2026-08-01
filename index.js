@@ -415,7 +415,7 @@ function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protei
     else additivePts = 25; // all safe
   }
 
-  // 10% Organic
+  // 10% Organic — only a confirmed organic label earns points
   const organicPts = isOrganic ? 10 : 0;
 
   return Math.max(0, Math.min(100, Math.round(nutriPts + additivePts + organicPts)));
@@ -446,6 +446,53 @@ function getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, pro
     isOrganic: !!isOrganic,
     organicPts, organicMax: 10,
   };
+}
+
+// OFF labels_tags is crowd-entered and often absent. Empty/missing is
+// "unknown", not "not organic". Never infer from the product name.
+function resolveOrganicStatus(labelsTags) {
+  if (!Array.isArray(labelsTags) || labelsTags.length === 0) return 'unknown';
+  if (labelsTags.includes('en:organic')) return 'yes';
+  return 'no';
+}
+
+// Display-cased values for the Organic row — shipped app builds render this
+// string directly. Keep internal status lowercase; only responses use this.
+function formatOrganicDisplay(status) {
+  if (status === 'yes') return 'Yes';
+  if (status === 'no') return 'No';
+  return 'Unknown';
+}
+
+function normalizeOrganicStatus(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'yes') return 'yes';
+  if (v === 'no') return 'no';
+  if (v === 'unknown') return 'unknown';
+  return 'unknown';
+}
+
+function parseServingQuantity(raw) {
+  if (raw == null || raw === '') return null;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function hasServingNutrientData(nutriments) {
+  if (!nutriments) return false;
+  return nutriments.proteins_serving != null
+    || nutriments.sugars_serving != null
+    || nutriments.sodium_serving != null;
+}
+
+function formatGrams(val) {
+  if (val === null || val === undefined) return 'N/A';
+  return Math.round(val * 10) / 10 + 'g';
+}
+
+function formatSodiumMg(val) {
+  if (val === null || val === undefined) return 'N/A';
+  return Math.round(val * 1000) + 'mg';
 }
 
 const additiveMap = {'e100':'Curcumin','e101':'Riboflavin','e102':'Tartrazine','e104':'Quinoline Yellow','e110':'Sunset Yellow','e120':'Carmine','e122':'Carmoisine','e123':'Amaranth','e124':'Ponceau 4R','e127':'Erythrosine','e129':'Allura Red','e131':'Patent Blue','e132':'Indigo Carmine','e133':'Brilliant Blue','e140':'Chlorophyll','e150a':'Caramel Color','e150b':'Caustic Sulfite Caramel','e150c':'Ammonia Caramel','e150d':'Sulfite Ammonia Caramel','e153':'Vegetable Carbon','e160a':'Beta-Carotene','e160b':'Annatto','e161b':'Lutein','e162':'Beetroot Red','e163':'Anthocyanins','e170':'Calcium Carbonate','e171':'Titanium Dioxide','e172':'Iron Oxides','e200':'Sorbic Acid','e202':'Potassium Sorbate','e210':'Benzoic Acid','e211':'Sodium Benzoate','e212':'Potassium Benzoate','e213':'Calcium Benzoate','e220':'Sulfur Dioxide','e221':'Sodium Sulfite','e222':'Sodium Bisulfite','e223':'Sodium Metabisulfite','e224':'Potassium Metabisulfite','e249':'Potassium Nitrite','e250':'Sodium Nitrite','e251':'Sodium Nitrate','e252':'Potassium Nitrate','e260':'Acetic Acid','e261':'Potassium Acetate','e262':'Sodium Acetate','e270':'Lactic Acid','e280':'Propionic Acid','e281':'Sodium Propionate','e282':'Calcium Propionate','e283':'Potassium Propionate','e290':'Carbon Dioxide','e296':'Malic Acid','e297':'Fumaric Acid','e300':'Vitamin C','e301':'Sodium Ascorbate','e302':'Calcium Ascorbate','e306':'Vitamin E','e307':'Alpha-Tocopherol','e310':'Propyl Gallate','e311':'Octyl Gallate','e312':'Dodecyl Gallate','e319':'TBHQ','e320':'BHA','e321':'BHT','e322':'Lecithin','e330':'Citric Acid','e331':'Sodium Citrate','e332':'Potassium Citrate','e333':'Calcium Citrate','e334':'Tartaric Acid','e335':'Sodium Tartrate','e336':'Potassium Tartrate','e337':'Sodium Potassium Tartrate','e338':'Phosphoric Acid','e339':'Sodium Phosphate','e340':'Potassium Phosphate','e341':'Calcium Phosphate','e343':'Magnesium Phosphate','e350':'Sodium Malate','e351':'Potassium Malate','e352':'Calcium Malate','e353':'Metatartaric Acid','e380':'Triammonium Citrate','e400':'Alginic Acid','e401':'Sodium Alginate','e402':'Potassium Alginate','e403':'Ammonium Alginate','e404':'Calcium Alginate','e405':'Propylene Glycol Alginate','e406':'Agar','e407':'Carrageenan','e410':'Locust Bean Gum','e412':'Guar Gum','e413':'Tragacanth','e414':'Acacia Gum','e415':'Xanthan Gum','e416':'Karaya Gum','e417':'Tara Gum','e418':'Gellan Gum','e420':'Sorbitol','e421':'Mannitol','e422':'Glycerol','e432':'Polysorbate 20','e433':'Polysorbate 80','e440':'Pectin','e442':'Ammonium Phosphatides','e450':'Diphosphates','e451':'Triphosphates','e452':'Polyphosphates','e460':'Cellulose','e461':'Methyl Cellulose','e462':'Ethyl Cellulose','e463':'Hydroxypropyl Cellulose','e464':'Hydroxypropyl Methyl Cellulose','e465':'Methyl Ethyl Cellulose','e466':'Carboxymethyl Cellulose','e470':'Fatty Acid Salts','e471':'Mono and Diglycerides','e472a':'Acetic Acid Esters','e472b':'Lactic Acid Esters','e472c':'Citric Acid Esters','e472e':'Diacetyl Tartaric Esters','e473':'Sucrose Esters','e474':'Sucroglycerides','e475':'Polyglycerol Esters','e476':'Polyglycerol Polyricinoleate','e477':'Propylene Glycol Esters','e481':'Sodium Stearoyl Lactylate','e482':'Calcium Stearoyl Lactylate','e491':'Sorbitan Monostearate','e500':'Sodium Carbonates','e501':'Potassium Carbonates','e503':'Ammonium Carbonates','e504':'Magnesium Carbonates','e507':'Hydrochloric Acid','e508':'Potassium Chloride','e509':'Calcium Chloride','e511':'Magnesium Chloride','e512':'Stannous Chloride','e514':'Sodium Sulfates','e515':'Potassium Sulfates','e516':'Calcium Sulfate','e524':'Sodium Hydroxide','e525':'Potassium Hydroxide','e526':'Calcium Hydroxide','e527':'Ammonium Hydroxide','e528':'Magnesium Hydroxide','e529':'Calcium Oxide','e530':'Magnesium Oxide','e535':'Sodium Ferrocyanide','e536':'Potassium Ferrocyanide','e538':'Calcium Ferrocyanide','e541':'Sodium Aluminum Phosphate','e551':'Silicon Dioxide','e552':'Calcium Silicate','e553a':'Magnesium Silicate','e553b':'Talc','e554':'Sodium Aluminosilicate','e555':'Potassium Aluminum Silicate','e556':'Calcium Aluminosilicate','e558':'Bentonite','e559':'Aluminum Silicate','e570':'Fatty Acids','e574':'Gluconic Acid','e575':'Glucono Delta Lactone','e576':'Sodium Gluconate','e577':'Potassium Gluconate','e578':'Calcium Gluconate','e579':'Ferrous Gluconate','e585':'Ferrous Lactate','e620':'Glutamic Acid','e621':'MSG','e622':'Potassium Glutamate','e623':'Calcium Glutamate','e624':'Monoammonium Glutamate','e625':'Magnesium Glutamate','e626':'Guanylic Acid','e627':'Disodium Guanylate','e628':'Dipotassium Guanylate','e629':'Calcium Guanylate','e630':'Inosinic Acid','e631':'Disodium Inosinate','e632':'Dipotassium Inosinate','e633':'Calcium Inosinate','e635':'Disodium Ribonucleotides','e640':'Glycine','e650':'Zinc Acetate','e900':'Dimethyl Polysiloxane','e901':'Beeswax','e902':'Candelilla Wax','e903':'Carnauba Wax','e904':'Shellac','e905':'Microcrystalline Wax','e912':'Montan Acid Esters','e914':'Oxidized Polyethylene Wax','e920':'L-Cysteine','e927b':'Carbamide','e938':'Argon','e939':'Helium','e941':'Nitrogen','e942':'Nitrous Oxide','e943a':'Butane','e943b':'Isobutane','e944':'Propane','e948':'Oxygen','e949':'Hydrogen','e950':'Acesulfame K','e951':'Aspartame','e952':'Cyclamates','e953':'Isomalt','e954':'Saccharin','e955':'Sucralose','e957':'Thaumatin','e959':'Neohesperidin','e960':'Steviol Glycosides','e961':'Neotame','e962':'Aspartame-Acesulfame Salt','e965':'Maltitol','e966':'Lactitol','e967':'Xylitol','e968':'Erythritol','e999':'Quillaia Extract','e1103':'Invertase','e1200':'Polydextrose','e1201':'Polyvinylpyrrolidone','e1202':'Polyvinylpolypyrrolidone','e1404':'Oxidized Starch','e1410':'Monostarch Phosphate','e1412':'Distarch Phosphate','e1413':'Phosphated Distarch Phosphate','e1414':'Acetylated Distarch Phosphate','e1420':'Acetylated Starch','e1422':'Acetylated Distarch Adipate','e1440':'Hydroxypropyl Starch','e1442':'Hydroxypropyl Distarch Phosphate','e1450':'Starch Sodium Octenyl Succinate','e1451':'Acetylated Oxidized Starch'};
@@ -785,15 +832,27 @@ async function generateCosmeticExplanation(scored, ingredientsText) {
     ? 'There is not enough ingredient coverage to give a numeric score — say so briefly without inventing findings.'
     : '';
 
+  const hasModerateOrHigh = drivers.some(d => d.risk === 'moderate' || d.risk === 'high');
+  const onlyLowFindings = drivers.length > 0 && !hasModerateOrHigh;
+  const proportionNote = scored.score === null
+    ? ''
+    : drivers.length === 0
+      ? 'No ingredient penalties drove the score. Keep the tone calm — do not invent concerns.'
+      : onlyLowFindings
+        ? 'The only findings are low-risk. Mention them as minor caveats only — do not lead with them as a concern or make the product sound problematic. Tone must stay proportionate to a high/clean score.'
+        : 'Lead with the highest-risk findings; keep tone proportionate to their severity.';
+
   const prompt = `You are explaining a cosmetic ingredient safety scan for a consumer app.
 ${coverageContext}
 ${coverageNote}
+${proportionNote}
 Top drivers (use these reason texts; do not invent rationale): ${JSON.stringify(drivers)}
 Ingredient list (context only): ${ingredientsText || '(none)'}
 
 Write one plain-text explanation under 40 words, findings only, in sentences.
 PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters.
 Do NOT restate the numeric score or the tier label (Excellent/Good/Poor/Bad) — the app already shows those beside the text.
+The explanation must not contradict the score shown beside it — do not sound alarming next to a clean score, or dismissive next to a poor one.
 Name the two or three ingredients that drove the score and say why in plain terms (sensitiser, restricted, prohibited, declarable allergen).
 Never state or imply a concentration or percentage.
 If an ingredient is disputed, you may note that sources disagree, but do not present the dissenting view as equal to the regulatory finding.
@@ -832,8 +891,19 @@ function buildFoodExplanationPrompt({
   isOrganic,
   novaGroup,
   ingredients,
+  nutriScoreGrade,
 }) {
-  return `Product data: sugar ${sugar} per serving (${sugarTier} tier), sodium ${sodium} per serving (${sodiumTier} tier), protein ${protein} per serving, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration." PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters. Do not restate an overall product score or Excellent/Good/Poor/Bad tier.`;
+  const grade = String(nutriScoreGrade || 'c').toLowerCase();
+  const nutriGuidance =
+    grade === 'd' || grade === 'e'
+      ? 'The nutritional grade behind most of this score is poor. Your explanation MUST reflect that poor nutritional profile — do not write an entirely positive sentence listing only upsides. Say "poor nutritional profile" in plain English; never say "Nutri-Score" or the letter grade.'
+      : grade === 'c'
+        ? 'The nutritional grade behind most of this score is middling. Do not claim the product is highly healthy overall; balance any positives with that context. Never say "Nutri-Score" or the letter grade.'
+        : 'The nutritional grade behind most of this score is relatively strong. You may mention a genuine benefit when supported by the data. Never say "Nutri-Score" or the letter grade.';
+
+  return `Product data: sugar ${sugar} per serving (${sugarTier} tier), sodium ${sodium} per serving (${sodiumTier} tier), protein ${protein} per serving, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}.
+Score context: ${nutriGuidance}
+In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The explanation must not contradict the score shown beside it. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration." PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters. Do not restate an overall product score or Excellent/Good/Poor/Bad tier.`;
 }
 
 async function requestFoodExplanation(prompt) {
@@ -865,6 +935,7 @@ async function generateFoodExplanation({
   isOrganic,
   novaGroup,
   ingredients,
+  nutriScoreGrade,
 }) {
   const prompt = buildFoodExplanationPrompt({
     sugar: `${Math.round(sugarDisplay * 10) / 10}g`,
@@ -876,6 +947,7 @@ async function generateFoodExplanation({
     isOrganic,
     novaGroup,
     ingredients,
+    nutriScoreGrade,
   });
   return requestFoodExplanation(prompt);
 }
@@ -907,6 +979,12 @@ async function generateExplanationFromCached(cached) {
   const additivesPhrase = cached.additivesCount === 'None'
     ? '0 additives'
     : (cached.additivesCount || '0 additives');
+  // Accept legacy Yes/No cache values and yes/no/unknown/Unknown strings.
+  const organicStatus = normalizeOrganicStatus(cached.isOrganic);
+  const breakdown = typeof cached.scoreBreakdown === 'string'
+    ? (() => { try { return JSON.parse(cached.scoreBreakdown || '{}'); } catch (_) { return {}; } })()
+    : (cached.scoreBreakdown || {});
+  const nutriScoreGrade = cached.nutriScore || breakdown.nutriScoreGrade || 'c';
   const prompt = buildFoodExplanationPrompt({
     sugar: cached.sugar,
     sodium: cached.sodium,
@@ -914,9 +992,10 @@ async function generateExplanationFromCached(cached) {
     sugarTier: cached.sugarTier,
     sodiumTier: cached.sodiumTier,
     additivesPhrase,
-    isOrganic: cached.isOrganic === 'Yes',
+    isOrganic: organicStatus,
     novaGroup: cached.novaGroup,
     ingredients: cached.ingredients || '',
+    nutriScoreGrade,
   });
   return requestFoodExplanation(prompt);
 }
@@ -1044,7 +1123,8 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     };
   });
 
-  const isOrganic = product.labels_tags?.includes('en:organic') || false;
+  const organicStatus = resolveOrganicStatus(product.labels_tags);
+  const isOrganicForScore = organicStatus === 'yes';
   // Use null to distinguish "genuinely missing data" from "verified zero".
   // The || 0 fallback caused missing values to display as "0g"/"0mg" which
   // is misleading — someone with dietary restrictions could act on a false zero.
@@ -1055,8 +1135,8 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   const protein = proteinRaw ?? 0;
   const sugar = sugarRaw ?? 0;
   const sodium = sodiumRaw ?? 0;
-  const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList);
-  const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList);
+  const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList);
+  const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList);
 
   const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
   const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
@@ -1071,13 +1151,15 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     }
   }
 
-  console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${isOrganic} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
+  console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${organicStatus} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
 
-  const servingQty = product.serving_quantity ? parseFloat(product.serving_quantity) : null;
+  const servingQuantity = parseServingQuantity(product.serving_quantity);
+  const servingKnown = hasServingNutrientData(product.nutriments) || servingQuantity != null;
   const toServing = (val100g, servingVal) => {
     if (val100g === null) return null;
     if (servingVal != null) return servingVal;
-    if (servingQty) return val100g * servingQty / 100;
+    if (servingQuantity) return val100g * servingQuantity / 100;
+    // Fallback keeps prior behaviour (may be per-100g disguised as serving).
     return val100g;
   };
   const proteinDisplay = toServing(proteinRaw, product.nutriments?.proteins_serving);
@@ -1085,9 +1167,12 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   const sodiumDisplay = toServing(sodiumRaw, product.nutriments?.sodium_serving);
 
   // Format display values — show "N/A" when data is genuinely missing
-  const fmtProtein = proteinDisplay === null ? 'N/A' : Math.round(proteinDisplay * 10) / 10 + 'g';
-  const fmtSugar = sugarDisplay === null ? 'N/A' : Math.round(sugarDisplay * 10) / 10 + 'g';
-  const fmtSodium = sodiumDisplay === null ? 'N/A' : Math.round(sodiumDisplay * 1000) + 'mg';
+  const fmtProtein = formatGrams(proteinDisplay);
+  const fmtSugar = formatGrams(sugarDisplay);
+  const fmtSodium = formatSodiumMg(sodiumDisplay);
+  const fmtProtein100g = formatGrams(proteinRaw);
+  const fmtSugar100g = formatGrams(sugarRaw);
+  const fmtSodium100g = formatSodiumMg(sodiumRaw);
 
   let explanation = null;
   if (!skipExplanation) {
@@ -1098,9 +1183,10 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
       sugarTier,
       sodiumTier,
       additivesCount,
-      isOrganic,
+      isOrganic: organicStatus,
       novaGroup,
       ingredients,
+      nutriScoreGrade: nutriScore,
     });
   }
 
@@ -1116,10 +1202,16 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     nutriScore,
     novaGroup,
     additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
-    isOrganic: isOrganic ? 'Yes' : 'No',
+    isOrganic: formatOrganicDisplay(organicStatus),
     protein: fmtProtein,
     sugar: fmtSugar,
     sodium: fmtSodium,
+    protein100g: fmtProtein100g,
+    sugar100g: fmtSugar100g,
+    sodium100g: fmtSodium100g,
+    servingQuantity,
+    servingKnown,
+    scoreBasis: 'per100g',
     sugarTier,
     sodiumTier,
     proteinTier,
@@ -1405,7 +1497,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     recordUnmatchedInci(barcode || null, unmatchedNames);
 
     const productName = (vision.productName && String(vision.productName).trim())
-      || 'Unknown Product';
+      || 'Scanned label';
 
     const responseData = {
       productType: 'cosmetic',
@@ -1541,7 +1633,8 @@ app.get('/search', async (req, res) => {
         const nutriScore = p.nutriscore_grade;
         const novaGroup = p.nova_group;
         const additivesCount = (p.additives_tags || []).length;
-        const isOrganic = p.labels_tags?.includes('en:organic') || false;
+        const organicStatus = resolveOrganicStatus(p.labels_tags);
+        const isOrganicForScore = organicStatus === 'yes';
         const proteinRaw = p.nutriments?.proteins_100g ?? null;
         const sugarRaw = p.nutriments?.sugars_100g ?? null;
         const sodiumRaw = p.nutriments?.sodium_100g ?? null;
@@ -1554,7 +1647,7 @@ app.get('/search', async (req, res) => {
           return { riskLevel: details?.riskLevel || 'safe' };
         });
 
-        const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, searchAdditiveList);
+        const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, searchAdditiveList);
         const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
         const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
 
@@ -1562,11 +1655,12 @@ app.get('/search', async (req, res) => {
         const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
         const proteinTier = protein >= 10 ? 'high' : 'low';
 
-        const servingQty = p.serving_quantity ? parseFloat(p.serving_quantity) : null;
+        const servingQuantity = parseServingQuantity(p.serving_quantity);
+        const servingKnown = hasServingNutrientData(p.nutriments) || servingQuantity != null;
         const toServing = (val100g, servingVal) => {
           if (val100g === null) return null;
           if (servingVal != null) return servingVal;
-          if (servingQty) return val100g * servingQty / 100;
+          if (servingQuantity) return val100g * servingQuantity / 100;
           return val100g;
         };
         const proteinDisplay = toServing(proteinRaw, p.nutriments?.proteins_serving);
@@ -1584,9 +1678,16 @@ app.get('/search', async (req, res) => {
           score,
           scoreColor,
           scoreLabel,
-          protein: proteinDisplay === null ? 'N/A' : Math.round(proteinDisplay * 10) / 10 + 'g',
-          sugar: sugarDisplay === null ? 'N/A' : Math.round(sugarDisplay * 10) / 10 + 'g',
-          sodium: sodiumDisplay === null ? 'N/A' : Math.round(sodiumDisplay * 1000) + 'mg',
+          isOrganic: formatOrganicDisplay(organicStatus),
+          protein: formatGrams(proteinDisplay),
+          sugar: formatGrams(sugarDisplay),
+          sodium: formatSodiumMg(sodiumDisplay),
+          protein100g: formatGrams(proteinRaw),
+          sugar100g: formatGrams(sugarRaw),
+          sodium100g: formatSodiumMg(sodiumRaw),
+          servingQuantity,
+          servingKnown,
+          scoreBasis: 'per100g',
           sugarTier,
           sodiumTier,
           proteinTier,
