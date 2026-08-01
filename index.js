@@ -811,6 +811,39 @@ Avoid jargon like "Annex II" — say "prohibited in the EU" if relevant.`;
   }
 }
 
+function buildFoodExplanationPrompt({
+  sugar,
+  sodium,
+  protein,
+  sugarTier,
+  sodiumTier,
+  additivesPhrase,
+  isOrganic,
+  novaGroup,
+  ingredients,
+}) {
+  return `Product data: sugar ${sugar} per serving (${sugarTier} tier), sodium ${sodium} per serving (${sodiumTier} tier), protein ${protein} per serving, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration."`;
+}
+
+async function requestFoodExplanation(prompt) {
+  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+
+  const claudeData = await claudeRes.json();
+  return claudeData.content[0].text;
+}
+
 async function generateFoodExplanation({
   sugarDisplay,
   sodiumDisplay,
@@ -822,22 +855,18 @@ async function generateFoodExplanation({
   novaGroup,
   ingredients,
 }) {
-  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 100,
-      messages: [{ role: 'user', content: `Product data: sugar ${Math.round(sugarDisplay * 10) / 10}g per serving (${sugarTier} tier), sodium ${Math.round(sodiumDisplay * 1000)}mg per serving (${sodiumTier} tier), protein ${Math.round(proteinDisplay * 10) / 10}g per serving, ${additivesCount} additives, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration."` }]
-    })
+  const prompt = buildFoodExplanationPrompt({
+    sugar: `${Math.round(sugarDisplay * 10) / 10}g`,
+    sodium: `${Math.round(sodiumDisplay * 1000)}mg`,
+    protein: `${Math.round(proteinDisplay * 10) / 10}g`,
+    sugarTier,
+    sodiumTier,
+    additivesPhrase: `${additivesCount} additives`,
+    isOrganic,
+    novaGroup,
+    ingredients,
   });
-
-  const claudeData = await claudeRes.json();
-  return claudeData.content[0].text;
+  return requestFoodExplanation(prompt);
 }
 
 // Rebuild a Haiku explanation from a productCache document (food or cosmetic).
@@ -867,21 +896,18 @@ async function generateExplanationFromCached(cached) {
   const additivesPhrase = cached.additivesCount === 'None'
     ? '0 additives'
     : (cached.additivesCount || '0 additives');
-  const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 100,
-      messages: [{ role: 'user', content: `Product data: sugar ${cached.sugar} per serving (${cached.sugarTier} tier), sodium ${cached.sodium} per serving (${cached.sodiumTier} tier), protein ${cached.protein} per serving, ${additivesPhrase}, organic: ${cached.isOrganic === 'Yes'}, NOVA group ${cached.novaGroup}. Ingredients: ${cached.ingredients || ''}. In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration."` }]
-    })
+  const prompt = buildFoodExplanationPrompt({
+    sugar: cached.sugar,
+    sodium: cached.sodium,
+    protein: cached.protein,
+    sugarTier: cached.sugarTier,
+    sodiumTier: cached.sodiumTier,
+    additivesPhrase,
+    isOrganic: cached.isOrganic === 'Yes',
+    novaGroup: cached.novaGroup,
+    ingredients: cached.ingredients || '',
   });
-  const claudeData = await claudeRes.json();
-  return claudeData.content[0].text;
+  return requestFoodExplanation(prompt);
 }
 
 function hasUsableExplanation(data) {
