@@ -1515,6 +1515,111 @@ console.log('request guards ok');
     print(proc.stdout.strip())
 
 
+def test_front_pack_name_and_image_helpers():
+    """Front-of-pack name compose, barcode validation, image overwrite rules."""
+    script = r"""
+const fs = require('fs');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const start = src.indexOf('// ── Request guards (rate limits + vision bill backstop)');
+const end = src.indexOf('// ── Cosmetic ingredient table');
+if (start < 0 || end < 0 || end <= start) throw new Error('could not locate helpers');
+
+const block = `
+const PRODUCT_IMAGE_MAX_BYTES = 200 * 1024;
+${src.slice(start, end)}
+module.exports = {
+  normalizeBarcode,
+  isValidBarcode,
+  composeFrontProductName,
+  shouldWriteProductImage,
+  stripDataUrlBase64,
+  resolvePublicBaseUrl,
+  PRODUCT_IMAGE_MAX_BYTES,
+  tryConsumeVisionSlot,
+  VISION_DAILY_CAP,
+  setVisionState: (day, count) => { visionDayKey = day; visionDayCount = count; },
+  getVisionState: () => ({ visionDayKey, visionDayCount }),
+};
+`;
+fs.writeFileSync('/tmp/front_pack_helpers.js', block);
+const g = require('/tmp/front_pack_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+assert(g.PRODUCT_IMAGE_MAX_BYTES === 200 * 1024);
+
+// Barcode validation — digits only, OFF/OBF-ish lengths.
+assert(g.normalizeBarcode(' 3017620422003 ') === '3017620422003');
+assert(g.normalizeBarcode('1234') === '1234');
+assert(g.normalizeBarcode('123') === null, 'too short');
+assert(g.normalizeBarcode('abc') === null);
+assert(g.normalizeBarcode('../etc') === null);
+assert(g.normalizeBarcode('') === null);
+assert(g.normalizeBarcode(null) === null);
+assert(g.isValidBarcode('3017620422003') === true);
+assert(g.isValidBarcode('nope') === false);
+
+assert(g.stripDataUrlBase64('data:image/jpeg;base64,abc') === 'abc');
+assert(g.stripDataUrlBase64('abc') === 'abc');
+
+// Name compose: brand + productName; either alone; null when unreadable.
+assert(g.composeFrontProductName(null) === null);
+assert(g.composeFrontProductName({ readable: false, brand: 'X', productName: 'Y' }) === null);
+assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: 'Serum' }) === 'Acme Serum');
+assert(g.composeFrontProductName({ readable: true, brand: null, productName: 'Serum' }) === 'Serum');
+assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: null }) === 'Acme');
+assert(g.composeFrontProductName({ readable: true, brand: '  ', productName: '  ' }) === null);
+assert(g.composeFrontProductName({ readable: true, brand: null, productName: null }) === null);
+
+// Never overwrite a non-empty productImages doc.
+assert(g.shouldWriteProductImage(null) === true);
+assert(g.shouldWriteProductImage(undefined) === true);
+assert(g.shouldWriteProductImage({ bytes: 0, data: '' }) === true);
+assert(g.shouldWriteProductImage({ bytes: 0, data: 'x' }) === true);
+assert(g.shouldWriteProductImage({ bytes: 10, data: null }) === true);
+assert(g.shouldWriteProductImage({ bytes: 10, data: 'abc' }) === false, 'keep existing');
+
+// PUBLIC_BASE_URL env wins; else host from request.
+{
+  const prev = process.env.PUBLIC_BASE_URL;
+  process.env.PUBLIC_BASE_URL = 'https://api.example.com/';
+  assert(g.resolvePublicBaseUrl({ get: () => 'ignored' }) === 'https://api.example.com');
+  delete process.env.PUBLIC_BASE_URL;
+  const req = {
+    protocol: 'https',
+    get: (h) => (h === 'host' ? 'scanner.up.railway.app' : undefined),
+  };
+  assert(g.resolvePublicBaseUrl(req) === 'https://scanner.up.railway.app');
+  if (prev !== undefined) process.env.PUBLIC_BASE_URL = prev;
+}
+
+// Mid-scan cap: ingredients took the last slot → front read must be dropped.
+{
+  const day = Date.parse('2026-08-03T12:00:00.000Z');
+  g.setVisionState('2026-08-03', g.VISION_DAILY_CAP - 1);
+  assert(g.tryConsumeVisionSlot(day) === true, 'ingredients gets last slot');
+  assert(g.tryConsumeVisionSlot(day) === false, 'front read dropped when capped');
+}
+
+console.log('front pack helpers ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"front pack helper assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -1532,6 +1637,7 @@ def main() -> int:
         test_paren_commas_and_drug_facts_truncation,
         test_photo_cache_below_gate_and_quality,
         test_request_guards_rate_limit_and_vision_cap,
+        test_front_pack_name_and_image_helpers,
     ]
     failed = 0
     for test in tests:

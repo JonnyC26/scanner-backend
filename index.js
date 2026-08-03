@@ -26,8 +26,11 @@ admin.initializeApp({
 const db = admin.firestore();
 const CACHE_COLLECTION = 'productCache';
 const RAW_COLLECTION = 'rawObservations';
+const PRODUCT_IMAGES_COLLECTION = 'productImages';
 // Firestore docs cap at 1MB; leave headroom and skip oversize rather than truncate.
 const RAW_PAYLOAD_MAX_BYTES = 800 * 1024;
+// Front-of-pack images stored in productImages — app must send something small.
+const PRODUCT_IMAGE_MAX_BYTES = 200 * 1024;
 // Cached entries older than this are treated as stale and get re-scanned,
 // so a product's data doesn't go permanently out of date if OFF updates it.
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -127,6 +130,50 @@ function startRateLimitSweeper(intervalMs = 10 * 60 * 1000) {
   const id = setInterval(() => sweepRateLimitBuckets(), intervalMs);
   if (id && typeof id.unref === 'function') id.unref();
   return id;
+}
+
+// Barcodes used as Firestore doc ids / URL params — digits only, OFF/OBF lengths.
+function normalizeBarcode(raw) {
+  const barcode = String(raw == null ? '' : raw).trim();
+  if (!/^\d{4,18}$/.test(barcode)) return null;
+  return barcode;
+}
+
+function isValidBarcode(raw) {
+  return normalizeBarcode(raw) != null;
+}
+
+function stripDataUrlBase64(imageBase64) {
+  return String(imageBase64 || '').replace(/^data:[^;]+;base64,/, '');
+}
+
+function resolvePublicBaseUrl(req) {
+  const fromEnv = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
+  if (fromEnv) return fromEnv;
+  const host = (req.get && (req.get('x-forwarded-host') || req.get('host'))) || '';
+  if (!host) return '';
+  const proto = (req.get && req.get('x-forwarded-proto')) || req.protocol || 'https';
+  return `${proto}://${host}`;
+}
+
+// Prefer brand + product name; either alone is fine; null when nothing usable.
+function composeFrontProductName(front) {
+  if (!front || front.readable === false) return null;
+  const brand = front.brand != null ? String(front.brand).trim() : '';
+  const name = front.productName != null ? String(front.productName).trim() : '';
+  if (brand && name) return `${brand} ${name}`;
+  if (name) return name;
+  if (brand) return brand;
+  return null;
+}
+
+// Keep an existing non-empty productImages doc; only write when missing or empty.
+function shouldWriteProductImage(existing) {
+  if (!existing) return true;
+  const bytes = typeof existing.bytes === 'number' ? existing.bytes : 0;
+  const data = existing.data;
+  if (!data || bytes <= 0) return true;
+  return false;
 }
 
 // ── Cosmetic ingredient table (Open Beauty Facts path) ──────────────────────
@@ -2273,6 +2320,19 @@ Rules:
 - productName is the product's name if clearly visible, otherwise null.
 - ingredients is an array of exact name strings in label order when readable is true.`;
 
+const PHOTO_FRONT_PROMPT = `You are reading the FRONT of a cosmetic product pack from a photo.
+
+Read ONLY the brand and product name printed on the pack.
+
+Return strict JSON only — no prose, no markdown fences:
+{"readable":true|false,"brand":string|null,"productName":string|null}
+
+Rules:
+- Read ONLY what is printed on the pack. Never guess, never infer a brand from packaging style, never complete a partially visible name.
+- productName excludes the brand; brand is a separate field. Either may be null.
+- Set readable to false when nothing usable is legible.
+- NEVER invent text that is not clearly printed.`;
+
 function stripJsonFences(text) {
   const trimmed = String(text || '').trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -2291,9 +2351,8 @@ function photoJsonParser(req, res, next) {
   });
 }
 
-async function readCosmeticLabelFromPhoto(imageBase64, mediaType) {
-  // Allow accidental data-URL prefixes from clients.
-  const rawBase64 = String(imageBase64 || '').replace(/^data:[^;]+;base64,/, '');
+async function callVisionJson(imageBase64, mediaType, prompt, { maxTokens = 1500 } = {}) {
+  const rawBase64 = stripDataUrlBase64(imageBase64);
 
   const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -2304,7 +2363,7 @@ async function readCosmeticLabelFromPhoto(imageBase64, mediaType) {
     },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1500,
+      max_tokens: maxTokens,
       messages: [{
         role: 'user',
         content: [
@@ -2316,7 +2375,7 @@ async function readCosmeticLabelFromPhoto(imageBase64, mediaType) {
               data: rawBase64,
             },
           },
-          { type: 'text', text: PHOTO_LABEL_PROMPT },
+          { type: 'text', text: prompt },
         ],
       }],
     }),
@@ -2335,11 +2394,56 @@ async function readCosmeticLabelFromPhoto(imageBase64, mediaType) {
   try {
     parsed = JSON.parse(stripJsonFences(text));
   } catch (_) {
-    const err = new Error('Could not parse ingredient transcription from vision model');
+    const err = new Error('Could not parse vision model JSON');
     err.statusCode = 502;
     throw err;
   }
   return parsed;
+}
+
+async function readCosmeticLabelFromPhoto(imageBase64, mediaType) {
+  return callVisionJson(imageBase64, mediaType, PHOTO_LABEL_PROMPT, { maxTokens: 1500 });
+}
+
+async function readFrontOfPackFromPhoto(imageBase64, mediaType) {
+  return callVisionJson(imageBase64, mediaType, PHOTO_FRONT_PROMPT, { maxTokens: 300 });
+}
+
+// Store front-of-pack image under productImages/{barcode}. Returns true when an
+// image is available afterwards (just written or an existing non-empty doc kept).
+async function storeProductFrontImage({ barcode, frontImageBase64, frontMediaType, capturedBy }) {
+  const code = normalizeBarcode(barcode);
+  if (!code) return false;
+
+  const rawBase64 = stripDataUrlBase64(frontImageBase64);
+  const bytes = Buffer.byteLength(rawBase64, 'utf8');
+  if (bytes > PRODUCT_IMAGE_MAX_BYTES) {
+    console.log(`[PRODUCT IMAGE TOO LARGE] barcode=${code} bytes=${bytes}`);
+    return false;
+  }
+  if (bytes <= 0) return false;
+
+  const docRef = db.collection(PRODUCT_IMAGES_COLLECTION).doc(code);
+  try {
+    const existingDoc = await docRef.get();
+    const existing = existingDoc.exists ? existingDoc.data() : null;
+    if (!shouldWriteProductImage(existing)) {
+      console.log(`[PRODUCT IMAGE KEPT EXISTING] barcode=${code} bytes=${existing.bytes}`);
+      return true;
+    }
+    await docRef.set({
+      data: rawBase64,
+      mediaType: frontMediaType,
+      bytes,
+      capturedAt: admin.firestore.FieldValue.serverTimestamp(),
+      capturedBy: capturedBy || null,
+    });
+    console.log(`[PRODUCT IMAGE STORED] barcode=${code} bytes=${bytes}`);
+    return true;
+  } catch (err) {
+    console.log(`[PRODUCT IMAGE STORE ERROR] barcode=${code} ${err.message}`);
+    return false;
+  }
 }
 
 app.post('/scan/photo', photoJsonParser, async (req, res) => {
@@ -2374,15 +2478,32 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
   }
 
   try {
-    const { imageBase64, mediaType, barcode } = req.body || {};
+    const {
+      imageBase64,
+      mediaType,
+      barcode,
+      frontImageBase64,
+      frontMediaType,
+    } = req.body || {};
+    const normalizedBarcode = barcode ? normalizeBarcode(barcode) : null;
     // Defer only works when we will write a cache doc the app can poll via /explain.
-    const deferExplanation = req.query.deferExplanation === '1' && !!barcode;
+    const deferExplanation = req.query.deferExplanation === '1' && !!normalizedBarcode;
 
     if (!imageBase64 || typeof imageBase64 !== 'string') {
       return res.status(400).json({ error: 'Missing imageBase64' });
     }
     if (mediaType !== 'image/jpeg' && mediaType !== 'image/png') {
       return res.status(400).json({ error: 'mediaType must be image/jpeg or image/png' });
+    }
+
+    const hasFrontImage = frontImageBase64 != null && frontImageBase64 !== '';
+    if (hasFrontImage) {
+      if (typeof frontImageBase64 !== 'string') {
+        return res.status(400).json({ error: 'frontImageBase64 must be a string' });
+      }
+      if (frontMediaType !== 'image/jpeg' && frontMediaType !== 'image/png') {
+        return res.status(400).json({ error: 'frontMediaType must be image/jpeg or image/png' });
+      }
     }
 
     // Hard daily ceiling — bounds the Anthropic bill regardless of per-user limits.
@@ -2394,7 +2515,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     const vision = await readCosmeticLabelFromPhoto(imageBase64, mediaType);
     // Photo scans have no upstream DB payload — keep the vision transcription.
     recordRawObservation({
-      barcode: barcode || null,
+      barcode: normalizedBarcode || null,
       productType: 'cosmetic',
       source: 'photo',
       payload: vision,
@@ -2407,7 +2528,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       : [];
 
     if (!vision.readable || ingredientNames.length === 0) {
-      console.log(`[PHOTO SCAN] barcode=${barcode || 'none'} readable=${!!vision.readable} parsed=${ingredientNames.length} matched=0 ms=${Date.now() - started}`);
+      console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=${!!vision.readable} parsed=${ingredientNames.length} matched=0 ms=${Date.now() - started}`);
       return res.status(422).json({ error: 'Could not read the ingredients' });
     }
 
@@ -2420,7 +2541,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     const photoParsedCount = Array.isArray(scored.ingredientList)
       ? scored.ingredientList.length
       : 0;
-    const canCache = !!barcode && photoParsedCount > 0;
+    const canCache = !!normalizedBarcode && photoParsedCount > 0;
     // Ignore defer when we are not caching — there is no doc for /explain to fill.
     const skipExplanation = deferExplanation && canCache;
 
@@ -2434,32 +2555,73 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     const namesTruncated = namesJoined.length > 200
       ? namesJoined.slice(0, 200) + '...'
       : namesJoined;
-    console.log(`[COSMETIC UNMATCHED] barcode=${barcode || 'none'} count=${unmatchedNames.length} names=${namesTruncated}`);
-    recordUnmatchedInci(barcode || null, unmatchedNames);
-    console.log(`[UNPARSEABLE] barcode=${barcode || 'none'} count=${scored.unparseableCount || 0}`);
+    console.log(`[COSMETIC UNMATCHED] barcode=${normalizedBarcode || 'none'} count=${unmatchedNames.length} names=${namesTruncated}`);
+    recordUnmatchedInci(normalizedBarcode || null, unmatchedNames);
+    console.log(`[UNPARSEABLE] barcode=${normalizedBarcode || 'none'} count=${scored.unparseableCount || 0}`);
     if (scored.drugFactsMarker) {
-      console.log(`[DRUG FACTS TRUNCATED] barcode=${barcode || 'none'} marker=${scored.drugFactsMarker}`);
+      console.log(`[DRUG FACTS TRUNCATED] barcode=${normalizedBarcode || 'none'} marker=${scored.drugFactsMarker}`);
     }
 
     // Prefer upstream product name + image when the barcode exists in OFF/OBF
     // (common: product known, ingredients missing). Ingredients stay from photo.
-    let productName = 'Scanned label';
+    let productName = '';
     let imageUrl = '';
-    if (barcode) {
+    if (normalizedBarcode) {
       try {
-        const resolved = await resolveProductType(String(barcode));
+        const resolved = await resolveProductType(String(normalizedBarcode));
         if (resolved.product) {
           const upstreamName = String(resolved.product.product_name || '').trim();
           if (upstreamName) productName = upstreamName;
           imageUrl = resolved.product.image_front_url || resolved.product.image_url || '';
         }
       } catch (upstreamLookupErr) {
-        console.log(`[PHOTO SCAN UPSTREAM LOOKUP] barcode=${barcode} ${upstreamLookupErr.message}`);
+        console.log(`[PHOTO SCAN UPSTREAM LOOKUP] barcode=${normalizedBarcode} ${upstreamLookupErr.message}`);
       }
     }
-    // Vision may still name the product when upstream has nothing.
-    if (productName === 'Scanned label' && vision.productName && String(vision.productName).trim()) {
+
+    // Optional front-of-pack: second vision call (name) + store image for serving.
+    // If the daily cap is hit mid-scan, keep the ingredients result and drop the front read.
+    let frontVision = null;
+    let hasStoredFrontImage = false;
+    if (hasFrontImage) {
+      if (tryConsumeVisionSlot()) {
+        try {
+          frontVision = await readFrontOfPackFromPhoto(frontImageBase64, frontMediaType);
+        } catch (frontErr) {
+          console.log(`[PHOTO FRONT READ ERROR] barcode=${normalizedBarcode || 'none'} ${frontErr.message}`);
+        }
+      } else {
+        console.log(
+          `[VISION CAP REACHED] cap=${VISION_DAILY_CAP} day=${visionDayKey} dropped=front_read barcode=${normalizedBarcode || 'none'}`
+        );
+      }
+
+      if (normalizedBarcode) {
+        hasStoredFrontImage = await storeProductFrontImage({
+          barcode: normalizedBarcode,
+          frontImageBase64,
+          frontMediaType,
+          capturedBy: photoCapturedBy,
+        });
+      }
+    }
+
+    // Name priority: upstream > front-of-pack > ingredients-panel name > "Scanned label".
+    if (!productName) {
+      const frontName = composeFrontProductName(frontVision);
+      if (frontName) productName = frontName;
+    }
+    if (!productName && vision.productName && String(vision.productName).trim()) {
       productName = String(vision.productName).trim();
+    }
+    if (!productName) productName = 'Scanned label';
+
+    // Point at our stored front image only when upstream provided none.
+    if (!imageUrl && hasStoredFrontImage && normalizedBarcode) {
+      const base = resolvePublicBaseUrl(req);
+      if (base) {
+        imageUrl = `${base}/image/${normalizedBarcode}`;
+      }
     }
 
     const photoCapturedAt = Date.now();
@@ -2504,7 +2666,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
 
     if (canCache) {
       try {
-        const docRef = db.collection(CACHE_COLLECTION).doc(String(barcode));
+        const docRef = db.collection(CACHE_COLLECTION).doc(String(normalizedBarcode));
         const existingDoc = await docRef.get();
         const existing = existingDoc.exists ? existingDoc.data() : null;
         const incomingMeta = {
@@ -2514,16 +2676,16 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         };
 
         if (existing && existing.source !== 'photo') {
-          console.log(`[PHOTO CACHE KEPT UPSTREAM] barcode=${barcode}`);
+          console.log(`[PHOTO CACHE KEPT UPSTREAM] barcode=${normalizedBarcode}`);
         } else if (existing && !shouldReplaceWithPhotoCache(existing, incomingMeta)) {
           console.log(
-            `[PHOTO CACHE KEPT EXISTING] barcode=${barcode} existing=${photoCacheParsedCount(existing)} new=${photoParsedCount}`
+            `[PHOTO CACHE KEPT EXISTING] barcode=${normalizedBarcode} existing=${photoCacheParsedCount(existing)} new=${photoParsedCount}`
           );
         } else {
           const { dietWarnings: _dietWarnings, ...cachePayload } = responseData;
           cachePayload.ingredientList = stringifyIngredientListForCache(
             scored.ingredientList,
-            barcode
+            normalizedBarcode
           );
           await docRef.set({
             ...cachePayload,
@@ -2531,23 +2693,47 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
           });
         }
       } catch (cacheWriteErr) {
-        console.log(`[PHOTO SCAN CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
+        console.log(`[PHOTO SCAN CACHE WRITE ERROR] barcode=${normalizedBarcode} ${cacheWriteErr.message}`);
       }
-    } else if (barcode && photoParsedCount === 0) {
-      console.log(`[PHOTO SCAN NOT CACHED] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
+    } else if (normalizedBarcode && photoParsedCount === 0) {
+      console.log(`[PHOTO SCAN NOT CACHED] barcode=${normalizedBarcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
     }
 
-    console.log(`[PHOTO SCAN] barcode=${barcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${scored.coverageMatched} ms=${Date.now() - started}`);
+    console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${scored.coverageMatched} front=${hasFrontImage ? 'yes' : 'no'} ms=${Date.now() - started}`);
     res.json(responseData);
 
     if (skipExplanation && responseData.explanationPending) {
-      ensureExplanation(String(barcode), responseData).catch(err => {
-        console.log(`[EXPLAIN DEFER ERROR] barcode=${barcode} ${err.message}`);
+      ensureExplanation(String(normalizedBarcode), responseData).catch(err => {
+        console.log(`[EXPLAIN DEFER ERROR] barcode=${normalizedBarcode} ${err.message}`);
       });
     }
   } catch (err) {
     console.log(`[PHOTO SCAN ERROR] ${err.message}`);
     res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+app.get('/image/:barcode', async (req, res) => {
+  const barcode = normalizeBarcode(req.params.barcode);
+  if (!barcode) {
+    return res.status(400).json({ error: 'Invalid barcode' });
+  }
+  try {
+    const doc = await db.collection(PRODUCT_IMAGES_COLLECTION).doc(barcode).get();
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const cached = doc.data() || {};
+    if (!cached.data || !(cached.bytes > 0)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const buf = Buffer.from(String(cached.data), 'base64');
+    res.set('Content-Type', cached.mediaType || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=2592000, immutable');
+    return res.send(buf);
+  } catch (err) {
+    console.log(`[PRODUCT IMAGE READ ERROR] barcode=${barcode} ${err.message}`);
+    return res.status(500).json({ error: err.message });
   }
 });
 
