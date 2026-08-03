@@ -1400,16 +1400,23 @@ module.exports = {
   getClientIp,
   parseBearerToken,
   tryConsumeVisionSlot,
+  getVisionCallsToday,
   utcDayKey,
   VISION_DAILY_CAP,
+  VISION_CAP_WARNING_RATIO,
   RATE_LIMIT_PHOTO_PER_UID,
   RATE_LIMIT_PHOTO_PER_IP,
   RATE_LIMIT_SCAN_SEARCH_PER_IP,
   RATE_LIMIT_ADMIN_PER_IP,
+  RATE_LIMIT_IMAGE_PER_IP,
   RATE_LIMIT_WINDOW_MS,
   // expose counters for day-rollover assertions
-  getVisionState: () => ({ visionDayKey, visionDayCount }),
-  setVisionState: (day, count) => { visionDayKey = day; visionDayCount = count; },
+  getVisionState: () => ({ visionDayKey, visionDayCount, visionCapWarningLoggedForDay }),
+  setVisionState: (day, count, warningDay = '') => {
+    visionDayKey = day;
+    visionDayCount = count;
+    visionCapWarningLoggedForDay = warningDay;
+  },
 };
 `;
 fs.writeFileSync('/tmp/request_guards.js', block);
@@ -1420,10 +1427,12 @@ function assert(cond, msg) {
 }
 
 assert(g.VISION_DAILY_CAP === 500, 'VISION_DAILY_CAP must be 500');
+assert(g.VISION_CAP_WARNING_RATIO === 0.8);
 assert(g.RATE_LIMIT_PHOTO_PER_UID === 20);
 assert(g.RATE_LIMIT_PHOTO_PER_IP === 60);
 assert(g.RATE_LIMIT_SCAN_SEARCH_PER_IP === 300);
 assert(g.RATE_LIMIT_ADMIN_PER_IP === 10);
+assert(g.RATE_LIMIT_IMAGE_PER_IP === 600);
 assert(g.RATE_LIMIT_WINDOW_MS === 60 * 60 * 1000);
 
 // Bearer token parsing — missing/malformed must fail closed.
@@ -1483,19 +1492,53 @@ assert(g.getClientIp({ headers: {} }) === 'unknown');
   assert(g.utcDayKey(day1) === '2026-08-03');
   assert(g.utcDayKey(day2) === '2026-08-04');
 
-  g.setVisionState('', 0);
+  g.setVisionState('', 0, '');
+  const warnAt = Math.ceil(g.VISION_DAILY_CAP * g.VISION_CAP_WARNING_RATIO);
+  assert(warnAt === 400, '80% of 500 is 400');
+
+  // Capture console.log for the once-per-day warning.
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => { logs.push(args.join(' ')); };
+
   for (let i = 0; i < g.VISION_DAILY_CAP; i++) {
     assert(g.tryConsumeVisionSlot(day1) === true, 'slot ' + i + ' should consume');
   }
+  console.log = originalLog;
+
+  const warnings = logs.filter(l => l.includes('[VISION CAP WARNING]'));
+  assert(warnings.length === 1, 'warning must log exactly once, got ' + warnings.length);
+  assert(warnings[0].includes('used=' + warnAt), 'warning at first cross of 80%: ' + warnings[0]);
+  assert(warnings[0].includes('cap=' + g.VISION_DAILY_CAP));
+  assert(g.getVisionState().visionCapWarningLoggedForDay === '2026-08-03');
+
+  // Further consumes past 80% (already at cap) must not warn again.
+  const logs2 = [];
+  console.log = (...args) => { logs2.push(args.join(' ')); };
   assert(g.tryConsumeVisionSlot(day1) === false, 'over cap must reject');
   assert(g.tryConsumeVisionSlot(day1) === false, 'still capped');
+  console.log = originalLog;
+  assert(logs2.filter(l => l.includes('[VISION CAP WARNING]')).length === 0);
+
   const st = g.getVisionState();
   assert(st.visionDayKey === '2026-08-03');
   assert(st.visionDayCount === g.VISION_DAILY_CAP);
+  assert(g.getVisionCallsToday(day1) === g.VISION_DAILY_CAP);
+  assert(g.getVisionCallsToday(day2) === 0, 'other UTC day reads as 0 until a consume');
 
   assert(g.tryConsumeVisionSlot(day2) === true, 'new UTC day resets cap');
   assert(g.getVisionState().visionDayKey === '2026-08-04');
   assert(g.getVisionState().visionDayCount === 1);
+  assert(g.getVisionCallsToday(day2) === 1);
+
+  // New day can warn again when crossing 80%.
+  g.setVisionState('2026-08-04', warnAt - 1, '');
+  const logs3 = [];
+  console.log = (...args) => { logs3.push(args.join(' ')); };
+  assert(g.tryConsumeVisionSlot(day2) === true);
+  console.log = originalLog;
+  assert(logs3.filter(l => l.includes('[VISION CAP WARNING]')).length === 1,
+    'new UTC day may warn once again');
 }
 
 console.log('request guards ok');
@@ -1511,6 +1554,115 @@ console.log('request guards ok');
         sys.stderr.write(proc.stderr)
         raise AssertionError(
             f"request guard assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
+def test_front_pack_name_and_image_helpers():
+    """Front-of-pack name compose, barcode validation, image overwrite rules."""
+    script = r"""
+const fs = require('fs');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const start = src.indexOf('// ── Request guards (rate limits + vision bill backstop)');
+const end = src.indexOf('// ── Cosmetic ingredient table');
+if (start < 0 || end < 0 || end <= start) throw new Error('could not locate helpers');
+
+const block = `
+const PRODUCT_IMAGE_MAX_BYTES = 200 * 1024;
+${src.slice(start, end)}
+module.exports = {
+  normalizeBarcode,
+  isValidBarcode,
+  composeFrontProductName,
+  shouldWriteProductImage,
+  stripDataUrlBase64,
+  resolvePublicBaseUrl,
+  PRODUCT_IMAGE_MAX_BYTES,
+  tryConsumeVisionSlot,
+  VISION_DAILY_CAP,
+  setVisionState: (day, count, warningDay = '') => {
+    visionDayKey = day;
+    visionDayCount = count;
+    visionCapWarningLoggedForDay = warningDay;
+  },
+  getVisionState: () => ({ visionDayKey, visionDayCount, visionCapWarningLoggedForDay }),
+};
+`;
+fs.writeFileSync('/tmp/front_pack_helpers.js', block);
+const g = require('/tmp/front_pack_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+assert(g.PRODUCT_IMAGE_MAX_BYTES === 200 * 1024);
+
+// Barcode validation — digits only, OFF/OBF-ish lengths.
+assert(g.normalizeBarcode(' 3017620422003 ') === '3017620422003');
+assert(g.normalizeBarcode('1234') === '1234');
+assert(g.normalizeBarcode('123') === null, 'too short');
+assert(g.normalizeBarcode('abc') === null);
+assert(g.normalizeBarcode('../etc') === null);
+assert(g.normalizeBarcode('') === null);
+assert(g.normalizeBarcode(null) === null);
+assert(g.isValidBarcode('3017620422003') === true);
+assert(g.isValidBarcode('nope') === false);
+
+assert(g.stripDataUrlBase64('data:image/jpeg;base64,abc') === 'abc');
+assert(g.stripDataUrlBase64('abc') === 'abc');
+
+// Name compose: brand + productName; either alone; null when unreadable.
+assert(g.composeFrontProductName(null) === null);
+assert(g.composeFrontProductName({ readable: false, brand: 'X', productName: 'Y' }) === null);
+assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: 'Serum' }) === 'Acme Serum');
+assert(g.composeFrontProductName({ readable: true, brand: null, productName: 'Serum' }) === 'Serum');
+assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: null }) === 'Acme');
+assert(g.composeFrontProductName({ readable: true, brand: '  ', productName: '  ' }) === null);
+assert(g.composeFrontProductName({ readable: true, brand: null, productName: null }) === null);
+
+// Never overwrite a non-empty productImages doc.
+assert(g.shouldWriteProductImage(null) === true);
+assert(g.shouldWriteProductImage(undefined) === true);
+assert(g.shouldWriteProductImage({ bytes: 0, data: '' }) === true);
+assert(g.shouldWriteProductImage({ bytes: 0, data: 'x' }) === true);
+assert(g.shouldWriteProductImage({ bytes: 10, data: null }) === true);
+assert(g.shouldWriteProductImage({ bytes: 10, data: 'abc' }) === false, 'keep existing');
+
+// PUBLIC_BASE_URL env wins; else host from request.
+{
+  const prev = process.env.PUBLIC_BASE_URL;
+  process.env.PUBLIC_BASE_URL = 'https://api.example.com/';
+  assert(g.resolvePublicBaseUrl({ get: () => 'ignored' }) === 'https://api.example.com');
+  delete process.env.PUBLIC_BASE_URL;
+  const req = {
+    protocol: 'https',
+    get: (h) => (h === 'host' ? 'scanner.up.railway.app' : undefined),
+  };
+  assert(g.resolvePublicBaseUrl(req) === 'https://scanner.up.railway.app');
+  if (prev !== undefined) process.env.PUBLIC_BASE_URL = prev;
+}
+
+// Mid-scan cap: ingredients took the last slot → front read must be dropped.
+{
+  const day = Date.parse('2026-08-03T12:00:00.000Z');
+  g.setVisionState('2026-08-03', g.VISION_DAILY_CAP - 1, '2026-08-03');
+  assert(g.tryConsumeVisionSlot(day) === true, 'ingredients gets last slot');
+  assert(g.tryConsumeVisionSlot(day) === false, 'front read dropped when capped');
+}
+
+console.log('front pack helpers ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"front pack helper assertions failed (exit {proc.returncode})"
         )
     print(proc.stdout.strip())
 
@@ -1532,6 +1684,7 @@ def main() -> int:
         test_paren_commas_and_drug_facts_truncation,
         test_photo_cache_below_gate_and_quality,
         test_request_guards_rate_limit_and_vision_cap,
+        test_front_pack_name_and_image_helpers,
     ]
     failed = 0
     for test in tests:
