@@ -1569,6 +1569,7 @@ if (start < 0 || end < 0 || end <= start) throw new Error('could not locate help
 
 const block = `
 const PRODUCT_IMAGE_MAX_BYTES = 200 * 1024;
+const FAILED_WRITES_PAYLOAD_MAX_BYTES = 800 * 1024;
 ${src.slice(start, end)}
 module.exports = {
   normalizeBarcode,
@@ -1577,7 +1578,9 @@ module.exports = {
   shouldWriteProductImage,
   stripDataUrlBase64,
   resolvePublicBaseUrl,
+  capFailedWritePayload,
   PRODUCT_IMAGE_MAX_BYTES,
+  FAILED_WRITES_PAYLOAD_MAX_BYTES,
   tryConsumeVisionSlot,
   VISION_DAILY_CAP,
   setVisionState: (day, count, warningDay = '') => {
@@ -1596,6 +1599,17 @@ function assert(cond, msg) {
 }
 
 assert(g.PRODUCT_IMAGE_MAX_BYTES === 200 * 1024);
+
+// failedWrites payload capping
+{
+  const small = g.capFailedWritePayload({ ok: true });
+  assert(small.truncated === false);
+  assert(small.payload.includes('"ok":true'));
+  const over = 'x'.repeat(g.FAILED_WRITES_PAYLOAD_MAX_BYTES + 50);
+  const capped = g.capFailedWritePayload(over);
+  assert(capped.truncated === true, 'oversize must set truncated');
+  assert(Buffer.byteLength(capped.payload, 'utf8') <= g.FAILED_WRITES_PAYLOAD_MAX_BYTES);
+}
 
 // Barcode validation — digits only, OFF/OBF-ish lengths.
 assert(g.normalizeBarcode(' 3017620422003 ') === '3017620422003');

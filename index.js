@@ -26,11 +26,15 @@ admin.initializeApp({
 const db = admin.firestore();
 const CACHE_COLLECTION = 'productCache';
 const RAW_COLLECTION = 'rawObservations';
+const RAW_LATEST_COLLECTION = 'rawLatest';
 const PRODUCT_IMAGES_COLLECTION = 'productImages';
+const FAILED_WRITES_COLLECTION = 'failedWrites';
 // Firestore docs cap at 1MB; leave headroom and skip oversize rather than truncate.
 const RAW_PAYLOAD_MAX_BYTES = 800 * 1024;
+const FAILED_WRITES_PAYLOAD_MAX_BYTES = 800 * 1024;
 // Front-of-pack images stored in productImages — app must send something small.
 const PRODUCT_IMAGE_MAX_BYTES = 200 * 1024;
+const CACHE_WRITE_RETRY_DELAY_MS = 300;
 // Cached entries older than this are treated as stale and get re-scanned,
 // so a product's data doesn't go permanently out of date if OFF updates it.
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -188,6 +192,72 @@ function shouldWriteProductImage(existing) {
   const bytes = typeof existing.bytes === 'number' ? existing.bytes : 0;
   const data = existing.data;
   if (!data || bytes <= 0) return true;
+  return false;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Cap a payload string for failedWrites. Returns { payload, truncated }.
+function capFailedWritePayload(payload) {
+  let payloadStr;
+  try {
+    payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload === undefined ? null : payload);
+  } catch (_) {
+    return { payload: null, truncated: false };
+  }
+  if (payloadStr == null) return { payload: null, truncated: false };
+  const bytes = Buffer.byteLength(payloadStr, 'utf8');
+  if (bytes <= FAILED_WRITES_PAYLOAD_MAX_BYTES) {
+    return { payload: payloadStr, truncated: false };
+  }
+  const sliced = Buffer.from(payloadStr, 'utf8').subarray(0, FAILED_WRITES_PAYLOAD_MAX_BYTES).toString('utf8');
+  return { payload: sliced, truncated: true };
+}
+
+// Append-only dead-letter for failed Firestore writes. Never throws to callers.
+function recordFailedWrite({ collection, barcode, payload, error, capturedBy }) {
+  (async () => {
+    try {
+      const capped = capFailedWritePayload(payload);
+      await db.collection(FAILED_WRITES_COLLECTION).add({
+        collection: collection || 'unknown',
+        barcode: barcode ? String(barcode) : null,
+        payload: capped.payload,
+        truncated: capped.truncated,
+        error: String(error || 'unknown'),
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+        capturedBy: capturedBy || null,
+      });
+    } catch (err) {
+      console.log(`[FAILED WRITES ERROR] collection=${collection || 'unknown'} ${err.message}`);
+    }
+  })();
+}
+
+// productCache set with one retry. Returns true on success.
+async function writeProductCacheWithRetry(docRef, cachePayload, { barcode, capturedBy }) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await docRef.set(cachePayload);
+      return true;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 1) {
+        await sleep(CACHE_WRITE_RETRY_DELAY_MS);
+      }
+    }
+  }
+  console.log(`[CACHE WRITE FAILED barcode=${barcode} attempts=2]`);
+  recordFailedWrite({
+    collection: 'productCache',
+    barcode,
+    payload: cachePayload,
+    error: lastErr ? lastErr.message : 'unknown',
+    capturedBy,
+  });
   return false;
 }
 
@@ -862,14 +932,22 @@ function recordUnmatchedInci(barcode, unmatchedNames) {
 
 // Append-only raw source log. Fire-and-forget; never blocks a scan.
 // One document per observation (auto-ID). Never updated, never expired.
+// Dedupe via rawLatest/{barcode} (doc-id read — no composite index).
 function recordRawObservation({ barcode, productType, source, payload, tableVersion, photoCapturedBy }) {
   (async () => {
+    let payloadStr;
     try {
-      let payloadStr;
       try {
         payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
       } catch (serErr) {
         console.log(`[RAW WRITE ERROR] barcode=${barcode || 'none'} serialize: ${serErr.message}`);
+        recordFailedWrite({
+          collection: 'rawObservations',
+          barcode,
+          payload: null,
+          error: `serialize: ${serErr.message}`,
+          capturedBy: photoCapturedBy,
+        });
         return;
       }
 
@@ -882,21 +960,15 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
       const payloadHash = crypto.createHash('sha256').update(payloadStr).digest('hex');
       let isNew = true;
 
-      // Dedupe only when we have a barcode to key on. Compare against the
-      // most recent observation for that barcode — formulations change, so
-      // same-hash-after-a-change still gets a new doc.
+      // Dedupe by single-doc read on rawLatest — no composite index required.
+      // If the read fails, fail open and write the observation (duplicate > data loss).
       if (barcode) {
         try {
-          const recent = await db.collection(RAW_COLLECTION)
-            .where('barcode', '==', String(barcode))
-            .orderBy('observedAt', 'desc')
-            .limit(1)
-            .get();
-          if (!recent.empty && recent.docs[0].data().payloadHash === payloadHash) {
+          const latestDoc = await db.collection(RAW_LATEST_COLLECTION).doc(String(barcode)).get();
+          if (latestDoc.exists && latestDoc.data().payloadHash === payloadHash) {
             isNew = false;
           }
         } catch (dedupeErr) {
-          // Fail open: missing composite index or query error must not drop data.
           console.log(`[RAW DEDUPE ERROR] barcode=${barcode} ${dedupeErr.message}`);
         }
       }
@@ -921,8 +993,27 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
       }
       await db.collection(RAW_COLLECTION).add(doc);
       console.log(`[RAW] barcode=${barcode || 'none'} source=${source} bytes=${bytes} new=true`);
+
+      if (barcode) {
+        try {
+          await db.collection(RAW_LATEST_COLLECTION).doc(String(barcode)).set({
+            payloadHash,
+            observedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } catch (latestErr) {
+          // Observation is already archived; latest pointer can lag without data loss.
+          console.log(`[RAW LATEST WRITE ERROR] barcode=${barcode} ${latestErr.message}`);
+        }
+      }
     } catch (err) {
       console.log(`[RAW WRITE ERROR] barcode=${barcode || 'none'} ${err.message}`);
+      recordFailedWrite({
+        collection: 'rawObservations',
+        barcode,
+        payload: payloadStr || payload,
+        error: err.message,
+        capturedBy: photoCapturedBy,
+      });
     }
   })();
 }
@@ -2424,19 +2515,23 @@ async function readFrontOfPackFromPhoto(imageBase64, mediaType) {
   return callVisionJson(imageBase64, mediaType, PHOTO_FRONT_PROMPT, { maxTokens: 300 });
 }
 
-// Store front-of-pack image under productImages/{barcode}. Returns true when an
-// image is available afterwards (just written or an existing non-empty doc kept).
+// Store front-of-pack image under productImages/{barcode}.
+// Returns { stored, skipReason } — never throws.
 async function storeProductFrontImage({ barcode, frontImageBase64, frontMediaType, capturedBy }) {
   const code = normalizeBarcode(barcode);
-  if (!code) return false;
+  if (!code) {
+    return { stored: false, skipReason: 'no_barcode' };
+  }
 
   const rawBase64 = stripDataUrlBase64(frontImageBase64);
   const bytes = Buffer.byteLength(rawBase64, 'utf8');
   if (bytes > PRODUCT_IMAGE_MAX_BYTES) {
-    console.log(`[PRODUCT IMAGE TOO LARGE] barcode=${code} bytes=${bytes}`);
-    return false;
+    console.log(`[PRODUCT IMAGE TOO LARGE] barcode=${code} bytes=${bytes} cap=${PRODUCT_IMAGE_MAX_BYTES}`);
+    return { stored: false, skipReason: 'too_large' };
   }
-  if (bytes <= 0) return false;
+  if (bytes <= 0) {
+    return { stored: false, skipReason: 'too_large' };
+  }
 
   const docRef = db.collection(PRODUCT_IMAGES_COLLECTION).doc(code);
   try {
@@ -2444,7 +2539,7 @@ async function storeProductFrontImage({ barcode, frontImageBase64, frontMediaTyp
     const existing = existingDoc.exists ? existingDoc.data() : null;
     if (!shouldWriteProductImage(existing)) {
       console.log(`[PRODUCT IMAGE KEPT EXISTING] barcode=${code} bytes=${existing.bytes}`);
-      return true;
+      return { stored: true, skipReason: 'existing_kept' };
     }
     await docRef.set({
       data: rawBase64,
@@ -2454,10 +2549,17 @@ async function storeProductFrontImage({ barcode, frontImageBase64, frontMediaTyp
       capturedBy: capturedBy || null,
     });
     console.log(`[PRODUCT IMAGE STORED] barcode=${code} bytes=${bytes}`);
-    return true;
+    return { stored: true, skipReason: null };
   } catch (err) {
     console.log(`[PRODUCT IMAGE STORE ERROR] barcode=${code} ${err.message}`);
-    return false;
+    recordFailedWrite({
+      collection: 'productImages',
+      barcode: code,
+      payload: { mediaType: frontMediaType, bytes, data: rawBase64 },
+      error: err.message,
+      capturedBy,
+    });
+    return { stored: false, skipReason: 'write_failed' };
   }
 }
 
@@ -2597,7 +2699,8 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     // Optional front-of-pack: second vision call (name) + store image for serving.
     // If the daily cap is hit mid-scan, keep the ingredients result and drop the front read.
     let frontVision = null;
-    let hasStoredFrontImage = false;
+    let imageStored = false;
+    let imageSkipReason = null;
     if (hasFrontImage) {
       if (tryConsumeVisionSlot()) {
         try {
@@ -2611,13 +2714,18 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         );
       }
 
-      if (normalizedBarcode) {
-        hasStoredFrontImage = await storeProductFrontImage({
+      if (!normalizedBarcode) {
+        imageStored = false;
+        imageSkipReason = 'no_barcode';
+      } else {
+        const imageResult = await storeProductFrontImage({
           barcode: normalizedBarcode,
           frontImageBase64,
           frontMediaType,
           capturedBy: photoCapturedBy,
         });
+        imageStored = !!imageResult.stored;
+        imageSkipReason = imageResult.skipReason;
       }
     }
 
@@ -2632,7 +2740,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     if (!productName) productName = 'Scanned label';
 
     // Point at our stored front image only when upstream provided none.
-    if (!imageUrl && hasStoredFrontImage && normalizedBarcode) {
+    if (!imageUrl && imageStored && normalizedBarcode) {
       const base = resolvePublicBaseUrl(req);
       if (base) {
         imageUrl = `${base}/image/${normalizedBarcode}`;
@@ -2640,6 +2748,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     }
 
     const photoCapturedAt = Date.now();
+    let persisted = false;
     const responseData = {
       productType: 'cosmetic',
       productName,
@@ -2674,6 +2783,9 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       photoCapturedAt,
       photoCapturedBy,
       dietWarnings: '',
+      imageStored,
+      imageSkipReason,
+      persisted,
     };
     if (skipExplanation) {
       responseData.explanationPending = true;
@@ -2692,29 +2804,43 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
 
         if (existing && existing.source !== 'photo') {
           console.log(`[PHOTO CACHE KEPT UPSTREAM] barcode=${normalizedBarcode}`);
+          persisted = true;
         } else if (existing && !shouldReplaceWithPhotoCache(existing, incomingMeta)) {
           console.log(
             `[PHOTO CACHE KEPT EXISTING] barcode=${normalizedBarcode} existing=${photoCacheParsedCount(existing)} new=${photoParsedCount}`
           );
+          persisted = true;
         } else {
-          const { dietWarnings: _dietWarnings, ...cachePayload } = responseData;
+          const { dietWarnings: _dietWarnings, persisted: _p, imageStored: _is, imageSkipReason: _isr, ...cachePayload } = responseData;
           cachePayload.ingredientList = stringifyIngredientListForCache(
             scored.ingredientList,
             normalizedBarcode
           );
-          await docRef.set({
-            ...cachePayload,
-            cachedAt: Date.now(),
-          });
+          const wrote = await writeProductCacheWithRetry(
+            docRef,
+            { ...cachePayload, cachedAt: Date.now() },
+            { barcode: normalizedBarcode, capturedBy: photoCapturedBy }
+          );
+          persisted = wrote;
         }
       } catch (cacheWriteErr) {
+        // Outer guard — writeProductCacheWithRetry is non-throwing; reads can still fail.
         console.log(`[PHOTO SCAN CACHE WRITE ERROR] barcode=${normalizedBarcode} ${cacheWriteErr.message}`);
+        persisted = false;
+        recordFailedWrite({
+          collection: 'productCache',
+          barcode: normalizedBarcode,
+          payload: responseData,
+          error: cacheWriteErr.message,
+          capturedBy: photoCapturedBy,
+        });
       }
     } else if (normalizedBarcode && photoParsedCount === 0) {
       console.log(`[PHOTO SCAN NOT CACHED] barcode=${normalizedBarcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
     }
+    responseData.persisted = persisted;
 
-    console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${scored.coverageMatched} front=${hasFrontImage ? 'yes' : 'no'} ms=${Date.now() - started}`);
+    console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${scored.coverageMatched} front=${hasFrontImage ? 'yes' : 'no'} persisted=${persisted} imageStored=${imageStored} ms=${Date.now() - started}`);
     res.json(responseData);
 
     if (skipExplanation && responseData.explanationPending) {
@@ -3009,17 +3135,54 @@ app.post('/admin/cache/delete', async (req, res) => {
   if (!barcode) {
     return res.status(400).json({ error: 'Missing barcode' });
   }
+  const keepImage = req.query.keepImage === '1';
   try {
-    const docRef = db.collection(CACHE_COLLECTION).doc(barcode);
-    const doc = await docRef.get();
-    if (!doc.exists) {
-      return res.status(404).json({ error: 'Not cached', barcode });
+    const deleted = { productCache: false, productImages: false };
+
+    const cacheRef = db.collection(CACHE_COLLECTION).doc(barcode);
+    const cacheDoc = await cacheRef.get();
+    if (cacheDoc.exists) {
+      await cacheRef.delete();
+      deleted.productCache = true;
     }
-    await docRef.delete();
-    console.log(`[ADMIN CACHE DELETE] barcode=${barcode}`);
-    return res.json({ deleted: true, barcode });
+
+    if (!keepImage) {
+      const imageRef = db.collection(PRODUCT_IMAGES_COLLECTION).doc(barcode);
+      const imageDoc = await imageRef.get();
+      if (imageDoc.exists) {
+        await imageRef.delete();
+        deleted.productImages = true;
+      }
+    }
+
+    if (!deleted.productCache && !deleted.productImages) {
+      return res.status(404).json({ error: 'Not cached', barcode, deleted, keepImage });
+    }
+
+    console.log(
+      `[ADMIN CACHE DELETE] barcode=${barcode} cache=${deleted.productCache} image=${deleted.productImages} keepImage=${keepImage}`
+    );
+    return res.json({ deleted, barcode, keepImage });
   } catch (err) {
     console.log(`[ADMIN CACHE DELETE ERROR] barcode=${barcode} ${err.message}`);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/failed-writes', async (req, res) => {
+  if (req.query.secret !== PRESCORE_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  try {
+    const snap = await db.collection(FAILED_WRITES_COLLECTION)
+      .orderBy('failedAt', 'desc')
+      .limit(limit)
+      .get();
+    const entries = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    return res.json({ entries, limit });
+  } catch (err) {
+    console.log(`[ADMIN FAILED WRITES ERROR] ${err.message}`);
     return res.status(500).json({ error: err.message });
   }
 });
