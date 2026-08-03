@@ -40,9 +40,47 @@
     "vitamin b5": "Panthenol",
     "provitamin b5": "Panthenol",
     "vitamin b3": "Niacinamide",
-    "glycerine": "Glycerin"
+    "glycerine": "Glycerin",
+
+    "fragrance": "Parfum",
+    "perfume": "Parfum",
+
+    "eau": "Aqua",
+    "glycérine": "Glycerin",
+    "phénoxyéthanol": "Phenoxyethanol",
+    "phenoxyethanol": "Phenoxyethanol",
+    "diméthicone": "Dimethicone",
+    "dimethicone": "Dimethicone",
+    "carbomère": "Carbomer",
+    "carbomere": "Carbomer",
+    "tocophérol": "Tocopherol",
+    "tocopherol": "Tocopherol",
+    "vaseline": "Petrolatum",
+    "gomme xanthane": "Xanthan Gum",
+    "cholestérol": "Cholesterol",
+    "cholesterol": "Cholesterol",
+    "hyaluronate de sodium": "Sodium Hyaluronate",
+    "edta disodique": "Disodium EDTA",
+    "céteareth-20": "Ceteareth-20",
+    "ceteareth-20": "Ceteareth-20",
+    "alcool cétéarylique": "Cetearyl Alcohol",
+    "alcool cetearylique": "Cetearyl Alcohol",
+    "alcool cétylique": "Cetyl Alcohol",
+    "alcool cetylique": "Cetyl Alcohol",
+    "éthylhexylglycérine": "Ethylhexylglycerin",
+    "ethylhexylglycerine": "Ethylhexylglycerin",
+    "méthosulfate de béhentrimonium": "Behentrimonium Methosulfate",
+    "methosulfate de behentrimonium": "Behentrimonium Methosulfate",
+    "céramide NP": "Ceramide NP",
+    "ceramide NP": "Ceramide NP",
+    "céramide AP": "Ceramide AP",
+    "ceramide AP": "Ceramide AP",
+    "céramide EOP": "Ceramide EOP",
+    "ceramide EOP": "Ceramide EOP",
+    "triglycérides caprylique": "Caprylic/Capric Triglyceride",
+    "triglycerides caprylique": "Caprylic/Capric Triglyceride"
   },
   "_meta": {
-    "note": "Common English label names -> exact INCI already present in purla_cosmetic_ingredients.json. Explicit pairs only; last-resort after declare_as/inci/covers_inci."
+    "note": "Common English/French label names -> exact INCI already present in purla_cosmetic_ingredients.json. Explicit pairs only; last-resort after declare_as/inci/covers_inci. Accented French keys include unaccented OCR/label variants."
   }
 }

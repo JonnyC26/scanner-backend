@@ -170,8 +170,25 @@ function cleanParsedIngredientFragment(fragment) {
   return cleaned.length >= 3 ? cleaned : '';
 }
 
-// Returns [{ name, mayContain }]. mayContain rows are parsed for display but
-// excluded from coverage and scoring.
+// Packaging / address / URL / non-Latin junk scraped into ingredients_text.
+// Conservative: a false positive silently drops a real ingredient from coverage.
+function isUnparseableIngredientName(name) {
+  const s = String(name || '').trim();
+  if (!s) return true;
+  // a) no Latin letters at all (Arabic, CJK, digit-only noise)
+  if (!/[A-Za-z]/.test(s)) return true;
+  // b) longer than any legitimate hazard-table INCI (longest is 57 chars)
+  if (s.length > 70) return true;
+  // c) URL or email markers
+  if (/http|www\.|\.com|@/i.test(s)) return true;
+  // d) 4+ consecutive digits — barcodes/phones — unless CI colorant code
+  if (/\d{4}/.test(s) && !/^CI\s/i.test(s)) return true;
+  return false;
+}
+
+// Returns [{ name, mayContain, unparseable }]. mayContain and unparseable rows
+// are kept in ingredientList for display but excluded from coverage, scoring,
+// and the unmatchedInci tally.
 //
 // Intentional: may-contain / +/- / ± splitting applies only to ingredients_text.
 // The structured product.ingredients array path returns early with mayContain:false
@@ -180,13 +197,21 @@ function cleanParsedIngredientFragment(fragment) {
 function parseCosmeticIngredientList(product) {
   const parsed = [];
 
+  const push = (cleaned, mayContain) => {
+    if (!cleaned) return;
+    parsed.push({
+      name: cleaned,
+      mayContain: !!mayContain,
+      unparseable: isUnparseableIngredientName(cleaned),
+    });
+  };
+
   if (Array.isArray(product.ingredients) && product.ingredients.length > 0) {
     for (const item of product.ingredients) {
       const raw = (item.text || item.id || item.ingredient_id || '').toString();
       // OFF/OBF ids look like "en:aqua" — turn into displayable text when needed.
       const text = raw.startsWith('en:') ? raw.slice(3).replace(/-/g, ' ') : raw;
-      const cleaned = cleanParsedIngredientFragment(text);
-      if (cleaned) parsed.push({ name: cleaned, mayContain: false });
+      push(cleanParsedIngredientFragment(text), false);
     }
     return parsed;
   }
@@ -195,13 +220,11 @@ function parseCosmeticIngredientList(product) {
   const { main, conditional } = splitMayContainSections(text);
 
   for (const part of splitCosmeticIngredientText(main)) {
-    const cleaned = cleanParsedIngredientFragment(part);
-    if (cleaned) parsed.push({ name: cleaned, mayContain: false });
+    push(cleanParsedIngredientFragment(part), false);
   }
   if (conditional) {
     for (const part of splitCosmeticIngredientText(conditional)) {
-      const cleaned = cleanParsedIngredientFragment(part);
-      if (cleaned) parsed.push({ name: cleaned, mayContain: true });
+      push(cleanParsedIngredientFragment(part), true);
     }
   }
 
@@ -226,23 +249,44 @@ function cosmeticPenaltyForRisk(risk) {
 
 function scoreCosmeticProduct(product) {
   const parsedItems = parseCosmeticIngredientList(product);
-  // may-contain / +/- rows are listed for display but do not inflate coverage
-  // or participate in scoring — they may not actually be in the product.
-  const coverageItems = parsedItems.filter(item => !item.mayContain);
+  // may-contain / +/- and unparseable packaging junk are listed for display
+  // but do not inflate coverage or participate in scoring.
+  const coverageItems = parsedItems.filter(item => !item.mayContain && !item.unparseable);
   const coverageTotal = coverageItems.length;
+  const unparseableCount = parsedItems.filter(item => item.unparseable).length;
 
   const findings = [];
   const ingredientList = [];
   const scoredEntries = []; // unique parents that contribute to the score
   const seenInci = new Set();
   // INCI names that did not hit the hazard table — used for table-gap logging only.
+  // Unparseable rows are excluded so packaging junk does not pollute the tally.
   const unmatchedNames = [];
   const seenUnmatched = new Set();
 
   parsedItems.forEach((item, index) => {
     const displayName = item.name;
     const mayContain = !!item.mayContain;
+    const unparseable = !!item.unparseable;
     const position = index + 1;
+
+    if (unparseable) {
+      ingredientList.push({
+        name: displayName,
+        position,
+        matched: false,
+        inci: null,
+        risk: null,
+        riskType: null,
+        reason: null,
+        disputed: false,
+        countsTowardScore: false,
+        mayContain,
+        unparseable: true,
+      });
+      return;
+    }
+
     const entry = lookupCosmeticIngredient(displayName);
 
     if (mayContain) {
@@ -257,6 +301,7 @@ function scoreCosmeticProduct(product) {
         disputed: entry ? !!entry.disputed : false,
         countsTowardScore: false,
         mayContain: true,
+        unparseable: false,
       });
       return;
     }
@@ -278,6 +323,7 @@ function scoreCosmeticProduct(product) {
         disputed: false,
         countsTowardScore: false,
         mayContain: false,
+        unparseable: false,
       });
       return;
     }
@@ -318,6 +364,7 @@ function scoreCosmeticProduct(product) {
       disputed: !!entry.disputed,
       countsTowardScore,
       mayContain: false,
+      unparseable: false,
     });
   });
 
@@ -333,6 +380,7 @@ function scoreCosmeticProduct(product) {
       coverageTotal,
       coverage,
       noIngredientData: coverageTotal === 0,
+      unparseableCount,
       ingredientFindings: findings,
       ingredientList,
       unmatchedNames,
@@ -431,6 +479,7 @@ function scoreCosmeticProduct(product) {
     coverageTotal,
     coverage,
     noIngredientData: false,
+    unparseableCount,
     ingredientFindings: findings,
     ingredientList,
     unmatchedNames,
@@ -1375,6 +1424,7 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
   }
 
   console.log(`[COSMETIC SCORE] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal} score=${scored.score} noIngredientData=${!!scored.noIngredientData} table=${COSMETIC_TABLE_VERSION}`);
+  console.log(`[UNPARSEABLE] barcode=${barcode} count=${scored.unparseableCount || 0}`);
 
   const unmatchedNames = scored.unmatchedNames || [];
   const namesJoined = unmatchedNames.join('|');
@@ -1664,6 +1714,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
           const rescored = rescorePhotoCachedDocument(cached);
           if (rescored) {
             console.log(`[CACHE PHOTO RESCORE] barcode=${barcode} coverage=${rescored.scored.coverageMatched}/${rescored.scored.coverageTotal} score=${rescored.scored.score} table=${COSMETIC_TABLE_VERSION}`);
+            console.log(`[UNPARSEABLE] barcode=${barcode} count=${rescored.scored.unparseableCount || 0}`);
             const unmatchedNames = rescored.unmatchedNames;
             const namesJoined = unmatchedNames.join('|');
             const namesTruncated = namesJoined.length > 200
@@ -1977,6 +2028,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       : namesJoined;
     console.log(`[COSMETIC UNMATCHED] barcode=${barcode || 'none'} count=${unmatchedNames.length} names=${namesTruncated}`);
     recordUnmatchedInci(barcode || null, unmatchedNames);
+    console.log(`[UNPARSEABLE] barcode=${barcode || 'none'} count=${scored.unparseableCount || 0}`);
 
     const productName = (vision.productName && String(vision.productName).trim())
       || 'Scanned label';
@@ -2277,12 +2329,15 @@ const DIAGNOSTIC_TOP_UNMATCHED_CAP = 200;
 const DIAGNOSTIC_FIRESTORE_MAX_BYTES = 900 * 1024; // headroom under 1MB
 let diagnoseRunning = false;
 
-async function fetchPopularCosmeticBarcodes(limit) {
+async function fetchPopularCosmeticBarcodes(limit, countries) {
   const barcodes = [];
   const pageSize = 100;
   let page = 1;
   while (barcodes.length < limit) {
-    const url = `https://world.openbeautyfacts.org/api/v2/search?sort_by=unique_scans_n&page_size=${pageSize}&page=${page}&fields=code`;
+    let url = `https://world.openbeautyfacts.org/api/v2/search?sort_by=unique_scans_n&page_size=${pageSize}&page=${page}&fields=code`;
+    if (countries) {
+      url += `&countries_tags_en=${encodeURIComponent(countries)}`;
+    }
     const res = await fetch(url, {
       headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
     });
@@ -2342,10 +2397,11 @@ function truncateDiagnosticReport(report) {
   return report;
 }
 
-async function runDiagnoseJob(limit) {
+async function runDiagnoseJob(limit, countries) {
   diagnoseRunning = true;
   const startedAt = Date.now();
-  console.log(`[DIAGNOSE] start limit=${limit}`);
+  const countriesFilter = countries || null;
+  console.log(`[DIAGNOSE] start limit=${limit} countries=${countriesFilter || '(none)'}`);
 
   const tallies = {
     productsAttempted: 0,
@@ -2358,6 +2414,7 @@ async function runDiagnoseJob(limit) {
     scored: 0,
     belowGate: 0,
     errors: 0,
+    unparseableTotal: 0,
     coverageSum: 0,
     coverageCount: 0,
     coverageBuckets: { '0-20': 0, '20-40': 0, '40-60': 0, '60-80': 0, '80-100': 0 },
@@ -2366,7 +2423,7 @@ async function runDiagnoseJob(limit) {
   const unmatchedTally = new Map();
 
   try {
-    const barcodes = await fetchPopularCosmeticBarcodes(limit);
+    const barcodes = await fetchPopularCosmeticBarcodes(limit, countriesFilter);
     console.log(`[DIAGNOSE] fetched ${barcodes.length} barcodes, beginning measure loop`);
 
     for (const barcode of barcodes) {
@@ -2385,6 +2442,7 @@ async function runDiagnoseJob(limit) {
           tallies.classifiedCosmetic++;
           // Pure measurement: score only — no explanations, cache, or side-effect logs.
           const scored = scoreCosmeticProduct(product);
+          tallies.unparseableTotal += scored.unparseableCount || 0;
 
           if (scored.coverageTotal > 0) {
             tallies.coverageSum += scored.coverage;
@@ -2440,6 +2498,7 @@ async function runDiagnoseJob(limit) {
       startedAt,
       finishedAt: Date.now(),
       limit,
+      countries: countriesFilter,
       tableVersion: COSMETIC_TABLE_VERSION,
       productsAttempted: tallies.productsAttempted,
       notFound: tallies.notFound,
@@ -2455,6 +2514,7 @@ async function runDiagnoseJob(limit) {
       scored: tallies.scored,
       belowGate: tallies.belowGate,
       errors: tallies.errors,
+      unparseableTotal: tallies.unparseableTotal,
       coverageAverage,
       coverageBuckets: tallies.coverageBuckets,
       topUnmatched,
@@ -2478,6 +2538,7 @@ async function runDiagnoseJob(limit) {
         startedAt,
         finishedAt: Date.now(),
         limit,
+        countries: countriesFilter,
         tableVersion: COSMETIC_TABLE_VERSION,
         status: 'crashed',
         error: err.message,
@@ -2495,6 +2556,7 @@ async function runDiagnoseJob(limit) {
         scored: tallies.scored,
         belowGate: tallies.belowGate,
         errors: tallies.errors,
+        unparseableTotal: tallies.unparseableTotal,
       });
     } catch (writeErr) {
       console.log(`[DIAGNOSE] crash report write failed: ${writeErr.message}`);
@@ -2512,9 +2574,10 @@ app.get('/admin/diagnose', (req, res) => {
     return res.json({ status: 'already running' });
   }
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+  const countries = (req.query.countries || '').toString().trim() || null;
   // Fire-and-forget — progress in Railway logs; report lands in diagnosticRuns.
-  runDiagnoseJob(limit);
-  res.json({ status: 'started', limit });
+  runDiagnoseJob(limit, countries);
+  res.json({ status: 'started', limit, countries });
 });
 
 app.get('/admin/diagnose/report', async (req, res) => {
