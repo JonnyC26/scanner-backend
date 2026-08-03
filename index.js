@@ -14,7 +14,7 @@ app.use((req, res, next) => {
 });
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   next();
 });
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -31,6 +31,103 @@ const RAW_PAYLOAD_MAX_BYTES = 800 * 1024;
 // Cached entries older than this are treated as stale and get re-scanned,
 // so a product's data doesn't go permanently out of date if OFF updates it.
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+// ── Request guards (rate limits + vision bill backstop) ─────────────────────
+// In-memory only — fine for a single Railway instance. No npm dependency.
+const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const RATE_LIMIT_PHOTO_PER_UID = 20;
+const RATE_LIMIT_PHOTO_PER_IP = 60;
+const RATE_LIMIT_SCAN_SEARCH_PER_IP = 300;
+const RATE_LIMIT_ADMIN_PER_IP = 10;
+// Hard daily ceiling on Anthropic vision calls across the whole service (UTC day).
+const VISION_DAILY_CAP = 500;
+
+const rateLimitBuckets = new Map(); // key -> { count, resetAt }
+let visionDayKey = ''; // YYYY-MM-DD UTC
+let visionDayCount = 0;
+
+function getClientIp(req) {
+  const xff = req.headers && req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) {
+    return xff.split(',')[0].trim();
+  }
+  if (Array.isArray(xff) && xff.length > 0) {
+    return String(xff[0]).trim();
+  }
+  return (req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
+}
+
+function parseBearerToken(authHeader) {
+  if (typeof authHeader !== 'string') return null;
+  const match = authHeader.match(/^Bearer\s+(\S+)/i);
+  return match ? match[1] : null;
+}
+
+function checkRateLimit(key, limit, now = Date.now(), windowMs = RATE_LIMIT_WINDOW_MS) {
+  let entry = rateLimitBuckets.get(key);
+  if (!entry || now >= entry.resetAt) {
+    entry = { count: 0, resetAt: now + windowMs };
+    rateLimitBuckets.set(key, entry);
+  }
+  if (entry.count >= limit) {
+    const retryAfter = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+    return { allowed: false, retryAfter, remaining: 0 };
+  }
+  entry.count += 1;
+  return {
+    allowed: true,
+    retryAfter: 0,
+    remaining: Math.max(0, limit - entry.count),
+  };
+}
+
+function sweepRateLimitBuckets(now = Date.now()) {
+  for (const [key, entry] of rateLimitBuckets) {
+    if (!entry || now >= entry.resetAt) {
+      rateLimitBuckets.delete(key);
+    }
+  }
+}
+
+function utcDayKey(now = Date.now()) {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+// Consume one vision slot for the current UTC day. Returns false when capped.
+function tryConsumeVisionSlot(now = Date.now()) {
+  const day = utcDayKey(now);
+  if (day !== visionDayKey) {
+    visionDayKey = day;
+    visionDayCount = 0;
+  }
+  if (visionDayCount >= VISION_DAILY_CAP) {
+    return false;
+  }
+  visionDayCount += 1;
+  return true;
+}
+
+function sendRateLimited(res, route, key, retryAfter) {
+  console.log(`[RATE LIMIT] route=${route} key=${key}`);
+  res.set('Retry-After', String(retryAfter));
+  return res.status(429).json({ error: 'Too many requests', retryAfter });
+}
+
+function enforceIpRateLimit(req, res, route, limit) {
+  const ip = getClientIp(req);
+  const result = checkRateLimit(`${route}:ip:${ip}`, limit);
+  if (!result.allowed) {
+    sendRateLimited(res, route, `ip:${ip}`, result.retryAfter);
+    return false;
+  }
+  return true;
+}
+
+function startRateLimitSweeper(intervalMs = 10 * 60 * 1000) {
+  const id = setInterval(() => sweepRateLimitBuckets(), intervalMs);
+  if (id && typeof id.unref === 'function') id.unref();
+  return id;
+}
 
 // ── Cosmetic ingredient table (Open Beauty Facts path) ──────────────────────
 const cosmeticTable = JSON.parse(
@@ -703,7 +800,7 @@ function recordUnmatchedInci(barcode, unmatchedNames) {
 
 // Append-only raw source log. Fire-and-forget; never blocks a scan.
 // One document per observation (auto-ID). Never updated, never expired.
-function recordRawObservation({ barcode, productType, source, payload, tableVersion }) {
+function recordRawObservation({ barcode, productType, source, payload, tableVersion, photoCapturedBy }) {
   (async () => {
     try {
       let payloadStr;
@@ -747,7 +844,7 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
         return;
       }
 
-      await db.collection(RAW_COLLECTION).add({
+      const doc = {
         barcode: barcode ? String(barcode) : null,
         productType,
         source,
@@ -755,7 +852,12 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
         payload: payloadStr,
         payloadHash,
         tableVersion: tableVersion == null ? null : tableVersion,
-      });
+      };
+      // Photo observations always record the verified uid (required auth).
+      if (source === 'photo') {
+        doc.photoCapturedBy = photoCapturedBy || null;
+      }
+      await db.collection(RAW_COLLECTION).add(doc);
       console.log(`[RAW] barcode=${barcode || 'none'} source=${source} bytes=${bytes} new=true`);
     } catch (err) {
       console.log(`[RAW WRITE ERROR] barcode=${barcode || 'none'} ${err.message}`);
@@ -2097,6 +2199,8 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
 
 app.get('/scan/:barcode', async (req, res) => {
   try {
+    if (!enforceIpRateLimit(req, res, '/scan', RATE_LIMIT_SCAN_SEARCH_PER_IP)) return;
+
     const { barcode } = req.params;
     const deferExplanation = req.query.deferExplanation === '1';
 
@@ -2241,17 +2345,32 @@ async function readCosmeticLabelFromPhoto(imageBase64, mediaType) {
 app.post('/scan/photo', photoJsonParser, async (req, res) => {
   const started = Date.now();
 
-  // Same best-effort auth as /scan — never blocking. Capture uid for provenance.
-  let photoCapturedBy = null;
+  // IP limit first — cheap backstop before Firebase verify / Anthropic.
+  if (!enforceIpRateLimit(req, res, '/scan/photo', RATE_LIMIT_PHOTO_PER_IP)) return;
+
+  // Required auth — /scan/photo is a permanent global write path.
+  let photoCapturedBy;
   try {
-    const authHeader = req.headers['authorization'] || '';
-    const token = authHeader.replace('Bearer ', '').trim();
-    if (token) {
-      const decoded = await admin.auth().verifyIdToken(token);
-      photoCapturedBy = decoded.uid || null;
+    const token = parseBearerToken(req.headers['authorization'] || '');
+    if (!token) {
+      return res.status(401).json({ error: 'Sign in required' });
     }
+    const decoded = await admin.auth().verifyIdToken(token);
+    if (!decoded || !decoded.uid) {
+      return res.status(401).json({ error: 'Sign in required' });
+    }
+    photoCapturedBy = decoded.uid;
   } catch (authErr) {
-    console.log(`[PHOTO SCAN] auth lookup failed: ${authErr.message}`);
+    console.log(`[PHOTO SCAN] auth failed: ${authErr.message}`);
+    return res.status(401).json({ error: 'Sign in required' });
+  }
+
+  const uidLimit = checkRateLimit(
+    `/scan/photo:uid:${photoCapturedBy}`,
+    RATE_LIMIT_PHOTO_PER_UID
+  );
+  if (!uidLimit.allowed) {
+    return sendRateLimited(res, '/scan/photo', `uid:${photoCapturedBy}`, uidLimit.retryAfter);
   }
 
   try {
@@ -2266,6 +2385,12 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       return res.status(400).json({ error: 'mediaType must be image/jpeg or image/png' });
     }
 
+    // Hard daily ceiling — bounds the Anthropic bill regardless of per-user limits.
+    if (!tryConsumeVisionSlot()) {
+      console.log(`[VISION CAP REACHED] cap=${VISION_DAILY_CAP} day=${visionDayKey}`);
+      return res.status(503).json({ error: 'Photo scanning temporarily unavailable' });
+    }
+
     const vision = await readCosmeticLabelFromPhoto(imageBase64, mediaType);
     // Photo scans have no upstream DB payload — keep the vision transcription.
     recordRawObservation({
@@ -2274,6 +2399,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       source: 'photo',
       payload: vision,
       tableVersion: COSMETIC_TABLE_VERSION,
+      photoCapturedBy,
     });
 
     const ingredientNames = Array.isArray(vision.ingredients)
@@ -2462,6 +2588,8 @@ app.get('/explain/:barcode', async (req, res) => {
 });
 
 app.get('/search', async (req, res) => {
+  if (!enforceIpRateLimit(req, res, '/search', RATE_LIMIT_SCAN_SEARCH_PER_IP)) return;
+
   const query = (req.query.q || '').trim();
   if (!query) return res.status(400).json({ error: 'Missing search query' });
 
@@ -2628,6 +2756,11 @@ async function runPrescoreJob(limit) {
     prescoreRunning = false;
   }
 }
+
+app.use('/admin', (req, res, next) => {
+  if (!enforceIpRateLimit(req, res, '/admin', RATE_LIMIT_ADMIN_PER_IP)) return;
+  next();
+});
 
 app.get('/admin/prescore', (req, res) => {
   if (req.query.secret !== PRESCORE_SECRET) {
@@ -2993,4 +3126,5 @@ app.get('/admin/diagnose/report', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+startRateLimitSweeper();
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));
