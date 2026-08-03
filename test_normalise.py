@@ -1408,6 +1408,7 @@ module.exports = {
   RATE_LIMIT_PHOTO_PER_IP,
   RATE_LIMIT_SCAN_SEARCH_PER_IP,
   RATE_LIMIT_ADMIN_PER_IP,
+  RATE_LIMIT_IMAGE_PER_IP,
   RATE_LIMIT_WINDOW_MS,
   // expose counters for day-rollover assertions
   getVisionState: () => ({ visionDayKey, visionDayCount, visionCapWarningLoggedForDay }),
@@ -1431,6 +1432,7 @@ assert(g.RATE_LIMIT_PHOTO_PER_UID === 20);
 assert(g.RATE_LIMIT_PHOTO_PER_IP === 60);
 assert(g.RATE_LIMIT_SCAN_SEARCH_PER_IP === 300);
 assert(g.RATE_LIMIT_ADMIN_PER_IP === 10);
+assert(g.RATE_LIMIT_IMAGE_PER_IP === 600);
 assert(g.RATE_LIMIT_WINDOW_MS === 60 * 60 * 1000);
 
 // Bearer token parsing — missing/malformed must fail closed.

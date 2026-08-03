@@ -42,6 +42,7 @@ const RATE_LIMIT_PHOTO_PER_UID = 20;
 const RATE_LIMIT_PHOTO_PER_IP = 60;
 const RATE_LIMIT_SCAN_SEARCH_PER_IP = 300;
 const RATE_LIMIT_ADMIN_PER_IP = 10;
+const RATE_LIMIT_IMAGE_PER_IP = 600; // public /image — generous; Cache-Control means one fetch per client
 // Hard daily ceiling on Anthropic vision calls across the whole service (UTC day).
 const VISION_DAILY_CAP = 500;
 const VISION_CAP_WARNING_RATIO = 0.8; // log once when used first crosses this fraction
@@ -2728,6 +2729,8 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
 });
 
 app.get('/image/:barcode', async (req, res) => {
+  if (!enforceIpRateLimit(req, res, '/image', RATE_LIMIT_IMAGE_PER_IP)) return;
+
   const barcode = normalizeBarcode(req.params.barcode);
   if (!barcode) {
     return res.status(400).json({ error: 'Invalid barcode' });
@@ -2746,8 +2749,9 @@ app.get('/image/:barcode', async (req, res) => {
     res.set('Cache-Control', 'public, max-age=2592000, immutable');
     return res.send(buf);
   } catch (err) {
+    // Do not leak Firestore internals — treat read failures as missing.
     console.log(`[PRODUCT IMAGE READ ERROR] barcode=${barcode} ${err.message}`);
-    return res.status(500).json({ error: err.message });
+    return res.status(404).json({ error: 'Not found' });
   }
 });
 
