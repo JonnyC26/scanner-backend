@@ -29,6 +29,8 @@ const RAW_COLLECTION = 'rawObservations';
 const RAW_LATEST_COLLECTION = 'rawLatest';
 const PRODUCT_IMAGES_COLLECTION = 'productImages';
 const FAILED_WRITES_COLLECTION = 'failedWrites';
+const IMAGE_REPORTS_COLLECTION = 'imageReports';
+const IMAGE_SUPPRESS_REPORT_THRESHOLD = 2;
 // Firestore docs cap at 1MB; leave headroom and skip oversize rather than truncate.
 const RAW_PAYLOAD_MAX_BYTES = 800 * 1024;
 const FAILED_WRITES_PAYLOAD_MAX_BYTES = 800 * 1024;
@@ -47,6 +49,7 @@ const RATE_LIMIT_PHOTO_PER_IP = 60;
 const RATE_LIMIT_SCAN_SEARCH_PER_IP = 300;
 const RATE_LIMIT_ADMIN_PER_IP = 10;
 const RATE_LIMIT_IMAGE_PER_IP = 600; // public /image — generous; Cache-Control means one fetch per client
+const RATE_LIMIT_IMAGE_REPORT_PER_UID = 10;
 // Hard daily ceiling on Anthropic vision calls across the whole service (UTC day).
 const VISION_DAILY_CAP = 500;
 const VISION_CAP_WARNING_RATIO = 0.8; // log once when used first crosses this fraction
@@ -176,8 +179,10 @@ function resolvePublicBaseUrl(req) {
 }
 
 // Prefer brand + product name; either alone is fine; null when nothing usable.
+// Reject names from non-packaging photos (isProductPackaging must be true).
 function composeFrontProductName(front) {
   if (!front || front.readable === false) return null;
+  if (front.isProductPackaging !== true) return null;
   const brand = front.brand != null ? String(front.brand).trim() : '';
   const name = front.productName != null ? String(front.productName).trim() : '';
   if (brand && name) return `${brand} ${name}`;
@@ -186,13 +191,18 @@ function composeFrontProductName(front) {
   return null;
 }
 
-// Keep an existing non-empty productImages doc; only write when missing or empty.
+// Write when missing/empty OR suppressed (troll image must be replaceable).
 function shouldWriteProductImage(existing) {
   if (!existing) return true;
+  if (existing.suppressed === true) return true;
   const bytes = typeof existing.bytes === 'number' ? existing.bytes : 0;
   const data = existing.data;
   if (!data || bytes <= 0) return true;
   return false;
+}
+
+function isFrontProductPackaging(front) {
+  return !!(front && front.isProductPackaging === true);
 }
 
 function sleep(ms) {
@@ -2428,15 +2438,16 @@ Rules:
 
 const PHOTO_FRONT_PROMPT = `You are reading the FRONT of a cosmetic product pack from a photo.
 
-Read ONLY the brand and product name printed on the pack.
+Decide whether the photo shows commercial product packaging, and if so read ONLY the brand and product name printed on the pack.
 
 Return strict JSON only — no prose, no markdown fences:
-{"readable":true|false,"brand":string|null,"productName":string|null}
+{"isProductPackaging":true|false,"readable":true|false,"brand":string|null,"productName":string|null}
 
 Rules:
+- isProductPackaging is true ONLY when the image clearly shows commercial product packaging — a bottle, box, tube, jar or label. false for people, body parts, pets, screens, scenery, documents or anything else. When uncertain, return false.
 - Read ONLY what is printed on the pack. Never guess, never infer a brand from packaging style, never complete a partially visible name.
 - productName excludes the brand; brand is a separate field. Either may be null.
-- Set readable to false when nothing usable is legible.
+- Set readable to false when nothing usable is legible, or when isProductPackaging is false.
 - NEVER invent text that is not clearly printed.`;
 
 function stripJsonFences(text) {
@@ -2512,7 +2523,7 @@ async function readCosmeticLabelFromPhoto(imageBase64, mediaType) {
 }
 
 async function readFrontOfPackFromPhoto(imageBase64, mediaType) {
-  return callVisionJson(imageBase64, mediaType, PHOTO_FRONT_PROMPT, { maxTokens: 300 });
+  return callVisionJson(imageBase64, mediaType, PHOTO_FRONT_PROMPT, { maxTokens: 400 });
 }
 
 // Store front-of-pack image under productImages/{barcode}.
@@ -2541,12 +2552,16 @@ async function storeProductFrontImage({ barcode, frontImageBase64, frontMediaTyp
       console.log(`[PRODUCT IMAGE KEPT EXISTING] barcode=${code} bytes=${existing.bytes}`);
       return { stored: true, skipReason: 'existing_kept' };
     }
+    // New write (including replacing a suppressed image) always starts clean.
     await docRef.set({
       data: rawBase64,
       mediaType: frontMediaType,
       bytes,
       capturedAt: admin.firestore.FieldValue.serverTimestamp(),
       capturedBy: capturedBy || null,
+      reportedBy: [],
+      reportCount: 0,
+      suppressed: false,
     });
     console.log(`[PRODUCT IMAGE STORED] barcode=${code} bytes=${bytes}`);
     return { stored: true, skipReason: null };
@@ -2560,6 +2575,94 @@ async function storeProductFrontImage({ barcode, frontImageBase64, frontMediaTyp
       capturedBy,
     });
     return { stored: false, skipReason: 'write_failed' };
+  }
+}
+
+// Append imageReports audit row. Never throws.
+function recordImageReportAudit({ barcode, reason, reportedBy }) {
+  (async () => {
+    try {
+      await db.collection(IMAGE_REPORTS_COLLECTION).add({
+        barcode: barcode ? String(barcode) : null,
+        reason: reason != null ? String(reason).slice(0, 500) : null,
+        reportedBy: reportedBy || null,
+        reportedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (err) {
+      console.log(`[IMAGE REPORT AUDIT ERROR] barcode=${barcode || 'none'} ${err.message}`);
+      recordFailedWrite({
+        collection: 'imageReports',
+        barcode,
+        payload: { reason, reportedBy },
+        error: err.message,
+        capturedBy: reportedBy,
+      });
+    }
+  })();
+}
+
+// Apply a user report to productImages in a transaction. Clears cache imageUrl
+// when suppressing. Returns { suppressed, alreadyReported, missing }. Never throws.
+async function applyProductImageReport({ barcode, uid }) {
+  const code = normalizeBarcode(barcode);
+  if (!code || !uid) return { suppressed: false, alreadyReported: false, missing: true };
+
+  try {
+    let suppressed = false;
+    let alreadyReported = false;
+    let missing = false;
+    let reportCount = 0;
+
+    await db.runTransaction(async (tx) => {
+      const imageRef = db.collection(PRODUCT_IMAGES_COLLECTION).doc(code);
+      const imageDoc = await tx.get(imageRef);
+      if (!imageDoc.exists) {
+        missing = true;
+        return;
+      }
+      const data = imageDoc.data() || {};
+      const reportedBy = Array.isArray(data.reportedBy) ? data.reportedBy.slice() : [];
+      if (reportedBy.includes(uid)) {
+        alreadyReported = true;
+        reportCount = typeof data.reportCount === 'number' ? data.reportCount : reportedBy.length;
+        suppressed = data.suppressed === true;
+        return;
+      }
+
+      reportedBy.push(uid);
+      reportCount = (typeof data.reportCount === 'number' ? data.reportCount : 0) + 1;
+      const update = {
+        reportedBy,
+        reportCount,
+      };
+
+      if (reportCount >= IMAGE_SUPPRESS_REPORT_THRESHOLD) {
+        update.suppressed = true;
+        suppressed = true;
+        const cacheRef = db.collection(CACHE_COLLECTION).doc(code);
+        const cacheDoc = await tx.get(cacheRef);
+        if (cacheDoc.exists) {
+          tx.update(cacheRef, { imageUrl: '' });
+        }
+      }
+
+      tx.update(imageRef, update);
+    });
+
+    if (suppressed && !alreadyReported) {
+      console.log(`[PRODUCT IMAGE SUPPRESSED] barcode=${code} reports=${reportCount}`);
+    }
+    return { suppressed, alreadyReported, missing, reportCount };
+  } catch (err) {
+    console.log(`[PRODUCT IMAGE REPORT ERROR] barcode=${code} ${err.message}`);
+    recordFailedWrite({
+      collection: 'productImages',
+      barcode: code,
+      payload: { action: 'report', uid },
+      error: err.message,
+      capturedBy: uid,
+    });
+    return { suppressed: false, alreadyReported: false, missing: false, error: err.message };
   }
 }
 
@@ -2714,10 +2817,18 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         );
       }
 
-      if (!normalizedBarcode) {
+      if (frontVision && !isFrontProductPackaging(frontVision)) {
+        console.log(
+          `[PRODUCT IMAGE REJECTED] barcode=${normalizedBarcode || 'none'} uid=${photoCapturedBy}`
+        );
+        imageStored = false;
+        imageSkipReason = 'not_product';
+        // Do not trust brand/productName from a non-packaging photo.
+        frontVision = null;
+      } else if (!normalizedBarcode) {
         imageStored = false;
         imageSkipReason = 'no_barcode';
-      } else {
+      } else if (frontVision && isFrontProductPackaging(frontVision)) {
         const imageResult = await storeProductFrontImage({
           barcode: normalizedBarcode,
           frontImageBase64,
@@ -2727,9 +2838,10 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         imageStored = !!imageResult.stored;
         imageSkipReason = imageResult.skipReason;
       }
+      // else: vision missing/failed — do not store without packaging confirmation
     }
 
-    // Name priority: upstream > front-of-pack > ingredients-panel name > "Scanned label".
+    // Name priority: upstream > front-of-pack (packaging only) > ingredients-panel > "Scanned label".
     if (!productName) {
       const frontName = composeFrontProductName(frontVision);
       if (frontName) productName = frontName;
@@ -2867,6 +2979,9 @@ app.get('/image/:barcode', async (req, res) => {
       return res.status(404).json({ error: 'Not found' });
     }
     const cached = doc.data() || {};
+    if (cached.suppressed === true) {
+      return res.status(404).json({ error: 'Not found' });
+    }
     if (!cached.data || !(cached.bytes > 0)) {
       return res.status(404).json({ error: 'Not found' });
     }
@@ -2879,6 +2994,50 @@ app.get('/image/:barcode', async (req, res) => {
     console.log(`[PRODUCT IMAGE READ ERROR] barcode=${barcode} ${err.message}`);
     return res.status(404).json({ error: 'Not found' });
   }
+});
+
+// Report a bad product image. Same success body whether or not an image exists
+// (cannot probe). Auth required. One report per uid per barcode.
+app.post('/report/image', async (req, res) => {
+  let uid;
+  try {
+    const token = parseBearerToken(req.headers['authorization'] || '');
+    if (!token) {
+      return res.status(401).json({ error: 'Sign in required' });
+    }
+    const decoded = await admin.auth().verifyIdToken(token);
+    if (!decoded || !decoded.uid) {
+      return res.status(401).json({ error: 'Sign in required' });
+    }
+    uid = decoded.uid;
+  } catch (authErr) {
+    console.log(`[IMAGE REPORT] auth failed: ${authErr.message}`);
+    return res.status(401).json({ error: 'Sign in required' });
+  }
+
+  const uidLimit = checkRateLimit(
+    `/report/image:uid:${uid}`,
+    RATE_LIMIT_IMAGE_REPORT_PER_UID
+  );
+  if (!uidLimit.allowed) {
+    return sendRateLimited(res, '/report/image', `uid:${uid}`, uidLimit.retryAfter);
+  }
+
+  const barcode = normalizeBarcode((req.body && req.body.barcode) || '');
+  if (!barcode) {
+    return res.status(400).json({ error: 'Invalid barcode' });
+  }
+  const reason = req.body && req.body.reason != null
+    ? String(req.body.reason).slice(0, 500)
+    : null;
+
+  // Audit trail always — even when there is no productImages doc (upstream image).
+  recordImageReportAudit({ barcode, reason, reportedBy: uid });
+
+  await applyProductImageReport({ barcode, uid });
+
+  // Uniform success — do not reveal whether an image document existed.
+  return res.json({ ok: true });
 });
 
 app.get('/explain/:barcode', async (req, res) => {
@@ -3183,6 +3342,106 @@ app.get('/admin/failed-writes', async (req, res) => {
     return res.json({ entries, limit });
   } catch (err) {
     console.log(`[ADMIN FAILED WRITES ERROR] ${err.message}`);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/image-reports', async (req, res) => {
+  if (req.query.secret !== PRESCORE_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+  try {
+    const snap = await db.collection(IMAGE_REPORTS_COLLECTION)
+      .orderBy('reportedAt', 'desc')
+      .limit(limit)
+      .get();
+
+    const reports = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const barcodes = [];
+    const seen = new Set();
+    for (const r of reports) {
+      const code = r.barcode ? String(r.barcode) : '';
+      if (!code || seen.has(code)) continue;
+      seen.add(code);
+      barcodes.push(code);
+    }
+
+    const byBarcode = {};
+    await Promise.all(barcodes.map(async (code) => {
+      try {
+        const doc = await db.collection(PRODUCT_IMAGES_COLLECTION).doc(code).get();
+        if (doc.exists) {
+          const d = doc.data() || {};
+          byBarcode[code] = {
+            reportCount: typeof d.reportCount === 'number' ? d.reportCount : 0,
+            suppressed: d.suppressed === true,
+            hasImage: !!(d.data && d.bytes > 0),
+          };
+        } else {
+          byBarcode[code] = { reportCount: 0, suppressed: false, hasImage: false };
+        }
+      } catch (_) {
+        byBarcode[code] = { reportCount: null, suppressed: null, hasImage: null };
+      }
+    }));
+
+    const entries = barcodes.map(code => ({
+      barcode: code,
+      ...(byBarcode[code] || { reportCount: 0, suppressed: false, hasImage: false }),
+    }));
+
+    return res.json({ entries, reports, limit });
+  } catch (err) {
+    console.log(`[ADMIN IMAGE REPORTS ERROR] ${err.message}`);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/image/delete', async (req, res) => {
+  if (req.query.secret !== PRESCORE_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const barcode = normalizeBarcode(req.query.barcode || (req.body && req.body.barcode) || '');
+  if (!barcode) {
+    return res.status(400).json({ error: 'Invalid barcode' });
+  }
+  try {
+    const deleted = { productImages: false, cacheImageUrlCleared: false };
+    const imageRef = db.collection(PRODUCT_IMAGES_COLLECTION).doc(barcode);
+    const imageDoc = await imageRef.get();
+    if (imageDoc.exists) {
+      await imageRef.delete();
+      deleted.productImages = true;
+    }
+
+    const cacheRef = db.collection(CACHE_COLLECTION).doc(barcode);
+    const cacheDoc = await cacheRef.get();
+    if (cacheDoc.exists) {
+      const data = cacheDoc.data() || {};
+      if (data.imageUrl) {
+        await cacheRef.update({ imageUrl: '' });
+        deleted.cacheImageUrlCleared = true;
+      }
+    }
+
+    if (!deleted.productImages && !deleted.cacheImageUrlCleared) {
+      return res.status(404).json({ error: 'Not found', barcode, deleted });
+    }
+
+    console.log(
+      `[ADMIN IMAGE DELETE] barcode=${barcode} image=${deleted.productImages} cacheCleared=${deleted.cacheImageUrlCleared}`
+    );
+    return res.json({ deleted, barcode });
+  } catch (err) {
+    console.log(`[ADMIN IMAGE DELETE ERROR] barcode=${barcode} ${err.message}`);
+    recordFailedWrite({
+      collection: 'productImages',
+      barcode,
+      payload: { action: 'admin_delete' },
+      error: err.message,
+      capturedBy: null,
+    });
     return res.status(500).json({ error: err.message });
   }
 });
