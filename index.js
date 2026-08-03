@@ -99,7 +99,9 @@ function resolveCosmeticEntry(entry) {
   return entry;
 }
 
-function lookupCosmeticIngredient(rawName) {
+// declare_as → inci → covers_inci → synonym. No slash splitting — used as the
+// inner step so multilingual "Aqua/Water/Eau" segments do not recurse.
+function lookupCosmeticIngredientDirect(rawName) {
   const key = normalizeInci(rawName);
   if (!key) return null;
   const hit =
@@ -109,6 +111,34 @@ function lookupCosmeticIngredient(rawName) {
     cosmeticBySynonym.get(key) ||
     null;
   return resolveCosmeticEntry(hit);
+}
+
+function lookupCosmeticIngredient(rawName) {
+  // Always try the whole name first — many legitimate INCIs contain slashes
+  // (Caprylic/Capric Triglyceride, Flower/Leaf/Stem extracts, etc.).
+  const whole = lookupCosmeticIngredientDirect(rawName);
+  if (whole) return whole;
+
+  const key = normalizeInci(rawName);
+  if (!key || !key.includes('/')) return null;
+
+  // Last resort: EU multilingual labels join aliases with "/". Try each segment
+  // through the same lookup order; require unanimous agreement if several hit.
+  const segments = key.split('/').map(s => s.trim()).filter(s => s.length >= 3);
+  const resolved = [];
+  for (const segment of segments) {
+    const hit = lookupCosmeticIngredientDirect(segment);
+    if (hit) resolved.push(hit);
+  }
+  if (resolved.length === 0) return null;
+
+  const firstKey = normalizeInci(resolved[0].inci);
+  const ambiguous = resolved.some(entry => normalizeInci(entry.inci) !== firstKey);
+  if (ambiguous) {
+    console.log(`[SLASH AMBIGUOUS] name=${String(rawName || '').trim()}`);
+    return null;
+  }
+  return resolved[0];
 }
 
 function stripCosmeticAnnotations(fragment) {

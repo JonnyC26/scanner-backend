@@ -6,6 +6,8 @@ Combines:
 - parse/classify fixes: digit-safe commas, Ingredients: prefix, may-contain,
   tidy-up, (nano), category fragments
 - photo-cache stale re-score and stale-beats-nothing fallback
+- fragrance/French synonyms + unparseable packaging filter
+- EU multilingual slash-joined INCI aliases (Aqua/Water/Eau)
 """
 
 from __future__ import annotations
@@ -932,6 +934,120 @@ console.log('fragrance/french synonyms + unparseable ok');
         )
     print(proc.stdout.strip())
 
+def test_slash_joined_multilingual_inci_lookup():
+    """EU multilingual Aqua/Water/Eau aliases; whole-name slash INCIs stay intact."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = '/workspace';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+module.exports = {
+  lookupCosmeticIngredient,
+  lookupCosmeticIngredientDirect,
+  scoreCosmeticProduct,
+};
+`;
+fs.writeFileSync('/tmp/slash_inci_helpers.js', block);
+const {
+  lookupCosmeticIngredient,
+  lookupCosmeticIngredientDirect,
+  scoreCosmeticProduct,
+} = require('/tmp/slash_inci_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// Multilingual slash aliases resolve via segment fallback.
+for (const [raw, expected] of [
+  ['Aqua/Water/Eau', 'Aqua'],
+  ['Water/Aqua/Eau', 'Aqua'],
+  ['Parfum/Fragrance', 'Parfum'],
+  ['Aqua / Water / Eau', 'Aqua'],
+]) {
+  const hit = lookupCosmeticIngredient(raw);
+  assert(hit && hit.inci === expected, raw + ' -> ' + (hit && hit.inci));
+}
+
+// Whole-name slash INCIs must match BEFORE any split — not via a segment.
+{
+  const cap = 'Caprylic/Capric Triglyceride';
+  const wholeDirect = lookupCosmeticIngredientDirect(cap);
+  assert(wholeDirect && wholeDirect.inci === cap, 'direct whole Caprylic/Capric miss');
+  const viaLookup = lookupCosmeticIngredient(cap);
+  assert(viaLookup && viaLookup.inci === cap, 'lookup must return whole Caprylic/Capric');
+  // Caprylic alone must not be how we got there.
+  const caprylicOnly = lookupCosmeticIngredientDirect('Caprylic');
+  assert(!caprylicOnly || caprylicOnly.inci !== cap,
+    'Caprylic segment must not equal the triglyceride entry');
+}
+
+{
+  const lav = 'Lavandula Angustifolia Flower/Leaf/Stem Extract';
+  const hit = lookupCosmeticIngredient(lav);
+  assert(hit, 'Lavandula Flower/Leaf/Stem must resolve as whole name');
+  const leafOnly = lookupCosmeticIngredientDirect('Leaf');
+  assert(!leafOnly, 'Leaf alone must not resolve');
+  assert(hit.inci === lav || /Lavandula/i.test(hit.inci),
+    'expected lavender family inci, got ' + (hit && hit.inci));
+}
+
+// Ambiguous: two segments hit DIFFERENT entries → null + log, do not guess.
+{
+  let logged = '';
+  const origLog = console.log;
+  console.log = (...args) => { logged += args.join(' '); };
+  try {
+    const amb = lookupCosmeticIngredient('Aqua/Parfum');
+    assert(amb === null, 'Aqua/Parfum must be unmatched, got ' + (amb && amb.inci));
+  } finally {
+    console.log = origLog;
+  }
+  assert(/\[SLASH AMBIGUOUS\]/.test(logged) && /Aqua\/Parfum/.test(logged),
+    'expected SLASH AMBIGUOUS log, got: ' + logged);
+}
+
+// Splitting must not shadow a direct whole-name match.
+{
+  const name = 'Caprylic/Capric Triglyceride';
+  assert(lookupCosmeticIngredient(name).inci === name);
+}
+
+// ingredientList keeps original label text; inci is canonical.
+{
+  const scored = scoreCosmeticProduct({
+    ingredients_text: 'Aqua/Water/Eau, Glycerin, Parfum/Fragrance',
+  });
+  const aquaRow = scored.ingredientList.find(r => r.name === 'Aqua/Water/Eau');
+  assert(aquaRow && aquaRow.matched && aquaRow.inci === 'Aqua',
+    'ingredientList must keep original name, canonical inci: ' + JSON.stringify(aquaRow));
+  const parfumRow = scored.ingredientList.find(r => r.name === 'Parfum/Fragrance');
+  assert(parfumRow && parfumRow.matched && parfumRow.inci === 'Parfum',
+    'Parfum/Fragrance row: ' + JSON.stringify(parfumRow));
+}
+
+console.log('slash multilingual inci lookup ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"slash multilingual assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
 
 def main() -> int:
     tests = [
@@ -946,6 +1062,7 @@ def main() -> int:
         test_strip_leading_prefix_helper_via_node,
         test_photo_cache_rescore_and_stale_fallback,
         test_fragrance_french_synonyms_and_unparseable_rules,
+        test_slash_joined_multilingual_inci_lookup,
     ]
     failed = 0
     for test in tests:
