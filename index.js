@@ -1773,6 +1773,9 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
 // Photo-rescued cache docs have no upstream to re-fetch from. Re-score from
 // the stored ingredients text when the entry is stale (TTL or tableVersion).
 // Returns null when ingredients are missing — caller falls through to upstream.
+// Also: quality overwrite, 30-day upstream recheck, provenance fields.
+const PHOTO_UPSTREAM_RECHECK_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 function rescorePhotoCachedDocument(cached) {
   const ingredientsText = String((cached && cached.ingredients) || '').trim();
   if (!ingredientsText) return null;
@@ -1793,6 +1796,8 @@ function rescorePhotoCachedDocument(cached) {
     ingredientFindings: JSON.stringify(scored.ingredientFindings),
     ingredientList: JSON.stringify(scored.ingredientList || []),
     tableVersion: COSMETIC_TABLE_VERSION,
+    // photoCapturedAt / photoParsedCount / photoCapturedBy are provenance of
+    // the human transcription — never refresh them on local re-score.
   };
   delete responseData.cachedAt;
 
@@ -1811,6 +1816,62 @@ function rescorePhotoCachedDocument(cached) {
   }
 
   return { responseData, scored, unmatchedNames: scored.unmatchedNames || [] };
+}
+
+// Quality of a photo-derived cache candidate.
+function photoCacheParsedCount(entry) {
+  if (!entry) return 0;
+  if (typeof entry.photoParsedCount === 'number') return entry.photoParsedCount;
+  // Legacy photo docs written before photoParsedCount existed.
+  if (typeof entry.coverageTotal === 'number') return entry.coverageTotal;
+  return 0;
+}
+
+function photoCacheCoverageMatched(entry) {
+  if (!entry) return 0;
+  return typeof entry.coverageMatched === 'number' ? entry.coverageMatched : 0;
+}
+
+function photoParsedCountWithin50Percent(existingParsed, incomingParsed) {
+  if (existingParsed <= 0) return true;
+  const ratio = incomingParsed / existingParsed;
+  return ratio >= 0.5 && ratio <= 1.5;
+}
+
+// Incoming photo may replace an existing photo entry only when:
+//   - the existing entry is sparse (< 3 parsed ingredients), OR
+//   - incoming matches MORE hazard-table ingredients AND its parsed count is
+//     within 50% of existing (similar product, better coverage — not a wrong label).
+// Upstream (non-photo) data is never overwritten by a photo.
+function shouldReplaceWithPhotoCache(existing, incoming) {
+  if (!existing) return true;
+  if (existing.source !== 'photo') return false;
+
+  const existingParsed = photoCacheParsedCount(existing);
+  const incomingParsed = photoCacheParsedCount(incoming);
+  const existingMatched = photoCacheCoverageMatched(existing);
+  const incomingMatched = photoCacheCoverageMatched(incoming);
+
+  if (existingParsed < 3) return true;
+
+  if (
+    incomingMatched > existingMatched &&
+    photoParsedCountWithin50Percent(existingParsed, incomingParsed)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function photoNeedsUpstreamRecheck(cached) {
+  if (!cached || cached.source !== 'photo') return false;
+  const last = typeof cached.lastUpstreamCheck === 'number' ? cached.lastUpstreamCheck : 0;
+  return Date.now() - last >= PHOTO_UPSTREAM_RECHECK_MS;
+}
+
+// Whether an upstream resolve result should replace a photo cache entry.
+function shouldReplacePhotoWithUpstream(product) {
+  return !!(product && productHasIngredients(product));
 }
 
 // When a re-scan fails, prefer a stale cache over a false "not found".
@@ -1862,8 +1923,64 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
           console.log(`[CACHE STALE] barcode=${barcode} age=${Math.round(age / 3600000)}h — re-scanning`);
         }
 
-        // Photo entries have no OFF/OBF upstream — re-score from cached text.
+        // Photo entries: optional 30-day upstream recheck, else local re-score.
+        // Never 404 from this path — fall through to stale-fallback if needed.
         if (cached.source === 'photo') {
+          let attemptedUpstreamRecheck = false;
+
+          if (photoNeedsUpstreamRecheck(cached)) {
+            attemptedUpstreamRecheck = true;
+            try {
+              const resolved = await resolveProductType(barcode);
+              if (shouldReplacePhotoWithUpstream(resolved.product)) {
+                console.log(
+                  `[CACHE PHOTO UPSTREAM REPLACE] barcode=${barcode} type=${resolved.productType}`
+                );
+                const upstreamData = resolved.productType === 'cosmetic'
+                  ? await scanAndCacheCosmetic(barcode, resolved.product, { skipExplanation })
+                  : await scanAndCacheFood(barcode, resolved.product, { skipExplanation });
+
+                if (!upstreamData.noIngredientData) {
+                  try {
+                    const cachePayload = {
+                      ...upstreamData,
+                      cachedAt: Date.now(),
+                    };
+                    if (upstreamData.productType === 'cosmetic' && upstreamData.ingredientList) {
+                      cachePayload.ingredientList = stringifyIngredientListForCache(
+                        (() => { try { return JSON.parse(upstreamData.ingredientList); } catch (_) { return []; } })(),
+                        barcode
+                      );
+                    }
+                    await db.collection(CACHE_COLLECTION).doc(barcode).set(cachePayload);
+                  } catch (cacheWriteErr) {
+                    console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
+                  }
+                } else {
+                  console.log(`[CACHE SKIP] barcode=${barcode} noIngredientData=true`);
+                }
+
+                if (!skipExplanation && !hasUsableExplanation(upstreamData)) {
+                  try {
+                    const explanation = await ensureExplanation(barcode, upstreamData);
+                    upstreamData.explanation = explanation;
+                    upstreamData.explanationPending = false;
+                  } catch (fillErr) {
+                    console.log(`[EXPLAIN FILL ERROR] barcode=${barcode} ${fillErr.message}`);
+                  }
+                }
+                return upstreamData;
+              }
+              console.log(
+                `[CACHE PHOTO UPSTREAM MISS] barcode=${barcode} hasProduct=${!!resolved.product}`
+              );
+            } catch (upstreamErr) {
+              console.log(
+                `[CACHE PHOTO UPSTREAM ERROR] barcode=${barcode} ${upstreamErr.message}`
+              );
+            }
+          }
+
           const rescored = rescorePhotoCachedDocument(cached);
           if (rescored) {
             console.log(`[CACHE PHOTO RESCORE] barcode=${barcode} coverage=${rescored.scored.coverageMatched}/${rescored.scored.coverageTotal} score=${rescored.scored.score} table=${COSMETIC_TABLE_VERSION}`);
@@ -1885,6 +2002,9 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
                 ...responseData,
                 cachedAt: Date.now(),
               };
+              if (attemptedUpstreamRecheck) {
+                cachePayload.lastUpstreamCheck = Date.now();
+              }
               if (responseData.ingredientList) {
                 cachePayload.ingredientList = stringifyIngredientListForCache(
                   (() => { try { return JSON.parse(responseData.ingredientList); } catch (_) { return []; } })(),
@@ -2121,12 +2241,14 @@ async function readCosmeticLabelFromPhoto(imageBase64, mediaType) {
 app.post('/scan/photo', photoJsonParser, async (req, res) => {
   const started = Date.now();
 
-  // Same best-effort auth as /scan — never blocking.
+  // Same best-effort auth as /scan — never blocking. Capture uid for provenance.
+  let photoCapturedBy = null;
   try {
     const authHeader = req.headers['authorization'] || '';
     const token = authHeader.replace('Bearer ', '').trim();
     if (token) {
-      await admin.auth().verifyIdToken(token);
+      const decoded = await admin.auth().verifyIdToken(token);
+      photoCapturedBy = decoded.uid || null;
     }
   } catch (authErr) {
     console.log(`[PHOTO SCAN] auth lookup failed: ${authErr.message}`);
@@ -2167,8 +2289,12 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     const product = { ingredients_text: ingredientsText };
     const scored = scoreCosmeticProduct(product);
 
-    // Partial photo reads must not poison the shared 30-day cache.
-    const canCache = !!barcode && scored.score !== null;
+    // Cache below-gate photo rescues too — transcribed ingredients are valuable
+    // even when score is null. Never cache a zero-ingredient parse.
+    const photoParsedCount = Array.isArray(scored.ingredientList)
+      ? scored.ingredientList.length
+      : 0;
+    const canCache = !!barcode && photoParsedCount > 0;
     // Ignore defer when we are not caching — there is no doc for /explain to fill.
     const skipExplanation = deferExplanation && canCache;
 
@@ -2189,9 +2315,28 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       console.log(`[DRUG FACTS TRUNCATED] barcode=${barcode || 'none'} marker=${scored.drugFactsMarker}`);
     }
 
-    const productName = (vision.productName && String(vision.productName).trim())
-      || 'Scanned label';
+    // Prefer upstream product name + image when the barcode exists in OFF/OBF
+    // (common: product known, ingredients missing). Ingredients stay from photo.
+    let productName = 'Scanned label';
+    let imageUrl = '';
+    if (barcode) {
+      try {
+        const resolved = await resolveProductType(String(barcode));
+        if (resolved.product) {
+          const upstreamName = String(resolved.product.product_name || '').trim();
+          if (upstreamName) productName = upstreamName;
+          imageUrl = resolved.product.image_front_url || resolved.product.image_url || '';
+        }
+      } catch (upstreamLookupErr) {
+        console.log(`[PHOTO SCAN UPSTREAM LOOKUP] barcode=${barcode} ${upstreamLookupErr.message}`);
+      }
+    }
+    // Vision may still name the product when upstream has nothing.
+    if (productName === 'Scanned label' && vision.productName && String(vision.productName).trim()) {
+      productName = String(vision.productName).trim();
+    }
 
+    const photoCapturedAt = Date.now();
     const responseData = {
       productType: 'cosmetic',
       productName,
@@ -2213,14 +2358,18 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       alternatives: JSON.stringify([]),
       explanation,
       scoreColor: scored.scoreColor,
-      imageUrl: '',
+      imageUrl,
       scoreLabel: scored.scoreLabel,
       coverageMatched: scored.coverageMatched,
       coverageTotal: scored.coverageTotal,
+      noIngredientData: !!scored.noIngredientData,
       ingredientFindings: JSON.stringify(scored.ingredientFindings),
       ingredientList: JSON.stringify(scored.ingredientList || []),
       tableVersion: COSMETIC_TABLE_VERSION,
       source: 'photo',
+      photoParsedCount,
+      photoCapturedAt,
+      photoCapturedBy,
       dietWarnings: '',
     };
     if (skipExplanation) {
@@ -2229,19 +2378,36 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
 
     if (canCache) {
       try {
-        const { dietWarnings: _dietWarnings, ...cachePayload } = responseData;
-        cachePayload.ingredientList = stringifyIngredientListForCache(
-          scored.ingredientList,
-          barcode
-        );
-        await db.collection(CACHE_COLLECTION).doc(String(barcode)).set({
-          ...cachePayload,
-          cachedAt: Date.now(),
-        });
+        const docRef = db.collection(CACHE_COLLECTION).doc(String(barcode));
+        const existingDoc = await docRef.get();
+        const existing = existingDoc.exists ? existingDoc.data() : null;
+        const incomingMeta = {
+          source: 'photo',
+          photoParsedCount,
+          coverageMatched: scored.coverageMatched,
+        };
+
+        if (existing && existing.source !== 'photo') {
+          console.log(`[PHOTO CACHE KEPT UPSTREAM] barcode=${barcode}`);
+        } else if (existing && !shouldReplaceWithPhotoCache(existing, incomingMeta)) {
+          console.log(
+            `[PHOTO CACHE KEPT EXISTING] barcode=${barcode} existing=${photoCacheParsedCount(existing)} new=${photoParsedCount}`
+          );
+        } else {
+          const { dietWarnings: _dietWarnings, ...cachePayload } = responseData;
+          cachePayload.ingredientList = stringifyIngredientListForCache(
+            scored.ingredientList,
+            barcode
+          );
+          await docRef.set({
+            ...cachePayload,
+            cachedAt: Date.now(),
+          });
+        }
       } catch (cacheWriteErr) {
         console.log(`[PHOTO SCAN CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
       }
-    } else if (barcode && scored.score === null) {
+    } else if (barcode && photoParsedCount === 0) {
       console.log(`[PHOTO SCAN NOT CACHED] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
     }
 
@@ -2475,6 +2641,50 @@ app.get('/admin/prescore', (req, res) => {
   // could take hours; progress is visible in the Railway logs instead.
   runPrescoreJob(limit);
   res.json({ status: 'started', limit });
+});
+
+// Admin repair: inspect / delete a permanent cache entry (photo or upstream).
+app.get('/admin/cache/inspect', async (req, res) => {
+  if (req.query.secret !== PRESCORE_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const barcode = String(req.query.barcode || '').trim();
+  if (!barcode) {
+    return res.status(400).json({ error: 'Missing barcode' });
+  }
+  try {
+    const doc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Not cached', barcode });
+    }
+    return res.json({ barcode, cached: doc.data() });
+  } catch (err) {
+    console.log(`[ADMIN CACHE INSPECT ERROR] barcode=${barcode} ${err.message}`);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/admin/cache/delete', async (req, res) => {
+  if (req.query.secret !== PRESCORE_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const barcode = String(req.query.barcode || '').trim();
+  if (!barcode) {
+    return res.status(400).json({ error: 'Missing barcode' });
+  }
+  try {
+    const docRef = db.collection(CACHE_COLLECTION).doc(barcode);
+    const doc = await docRef.get();
+    if (!doc.exists) {
+      return res.status(404).json({ error: 'Not cached', barcode });
+    }
+    await docRef.delete();
+    console.log(`[ADMIN CACHE DELETE] barcode=${barcode}`);
+    return res.json({ deleted: true, barcode });
+  } catch (err) {
+    console.log(`[ADMIN CACHE DELETE ERROR] barcode=${barcode} ${err.message}`);
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------

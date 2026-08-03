@@ -634,6 +634,8 @@ ${src.slice(helperStart, helperEnd)}
 module.exports = {
   rescorePhotoCachedDocument,
   staleCacheFallbackPayload,
+  shouldReplaceWithPhotoCache,
+  photoCacheParsedCount,
   scoreCosmeticProduct,
   COSMETIC_TABLE_VERSION,
 };
@@ -642,6 +644,8 @@ fs.writeFileSync('/tmp/photo_cache_helpers.js', block);
 const {
   rescorePhotoCachedDocument,
   staleCacheFallbackPayload,
+  shouldReplaceWithPhotoCache,
+  photoCacheParsedCount,
   scoreCosmeticProduct,
   COSMETIC_TABLE_VERSION,
 } = require('/tmp/photo_cache_helpers.js');
@@ -670,6 +674,9 @@ global.fetch = async function (...args) {
     scoreColor: '#8BC34A',
     coverageMatched: 1,
     coverageTotal: 4,
+    photoParsedCount: 4,
+    photoCapturedAt: 111111,
+    photoCapturedBy: 'uid-abc',
     ingredientFindings: '[]',
     ingredientList: '[]',
     tableVersion: '0.4',
@@ -688,6 +695,12 @@ global.fetch = async function (...args) {
   assert(rescored.responseData.tableVersion === COSMETIC_TABLE_VERSION,
     'tableVersion must refresh to current: ' + rescored.responseData.tableVersion);
   assert(rescored.responseData.cachedAt === undefined, 'cachedAt stripped from response payload');
+  assert(rescored.responseData.photoCapturedAt === stalePhoto.photoCapturedAt,
+    'photoCapturedAt must not refresh on re-score');
+  assert(rescored.responseData.photoParsedCount === stalePhoto.photoParsedCount,
+    'photoParsedCount must not refresh on re-score');
+  assert(rescored.responseData.photoCapturedBy === 'uid-abc',
+    'photoCapturedBy must not refresh on re-score');
   assert(typeof rescored.responseData.score === 'number' || rescored.responseData.score === null,
     'score must be recomputed');
   assert(rescored.responseData.coverageTotal === 4, 'coverageTotal from re-parse');
@@ -1197,6 +1210,178 @@ console.log('paren commas + drug facts truncation ok');
     print(proc.stdout.strip())
 
 
+def test_photo_cache_below_gate_and_quality():
+    """Below-gate photo cache; sparse/match overwrite rule; upstream replaces photo."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+const helperStart = src.indexOf('// Photo-rescued cache docs have no upstream');
+const helperEnd = src.indexOf('async function scanAndCache(barcode');
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = '/workspace';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+function productHasIngredients(product) {
+  if (!product) return false;
+  if (Array.isArray(product.ingredients) && product.ingredients.length > 0) return true;
+  return !!(product.ingredients_text && product.ingredients_text.trim());
+}
+${src.slice(helperStart, helperEnd)}
+module.exports = {
+  scoreCosmeticProduct,
+  shouldReplaceWithPhotoCache,
+  photoCacheParsedCount,
+  photoParsedCountWithin50Percent,
+  shouldReplacePhotoWithUpstream,
+  photoNeedsUpstreamRecheck,
+  productHasIngredients,
+  PHOTO_UPSTREAM_RECHECK_MS,
+};
+`;
+fs.writeFileSync('/tmp/photo_quality_helpers.js', block);
+const {
+  scoreCosmeticProduct,
+  shouldReplaceWithPhotoCache,
+  photoCacheParsedCount,
+  photoParsedCountWithin50Percent,
+  shouldReplacePhotoWithUpstream,
+  photoNeedsUpstreamRecheck,
+  productHasIngredients,
+  PHOTO_UPSTREAM_RECHECK_MS,
+} = require('/tmp/photo_quality_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// Mirror /scan/photo canCache decision: barcode + at least one parsed ingredient.
+function wouldCachePhoto(barcode, scored) {
+  const photoParsedCount = Array.isArray(scored.ingredientList)
+    ? scored.ingredientList.length
+    : 0;
+  return !!barcode && photoParsedCount > 0;
+}
+
+// Below-gate (score null) WITH parsed ingredients IS cacheable.
+{
+  const below = scoreCosmeticProduct({
+    ingredients_text: 'CompletelyFakeInciOne, CompletelyFakeInciTwo, CompletelyFakeInciThree',
+  });
+  assert(below.score === null, 'expected below-gate null score, got ' + below.score);
+  assert(below.ingredientList.length >= 3, 'expected parsed rows');
+  assert(wouldCachePhoto('123', below) === true, 'below-gate with ingredients must cache');
+  assert(wouldCachePhoto('', below) === false, 'no barcode → no cache');
+  assert(wouldCachePhoto(null, below) === false, 'null barcode → no cache');
+}
+
+// Zero parsed ingredients is NOT cached.
+{
+  const empty = scoreCosmeticProduct({ ingredients_text: '' });
+  assert(empty.ingredientList.length === 0);
+  assert(wouldCachePhoto('123', empty) === false, 'zero ingredients must not cache');
+  const junk = scoreCosmeticProduct({ ingredients_text: 'Ab, X' }); // < 3 chars dropped
+  assert(junk.ingredientList.length === 0, 'short tokens dropped');
+  assert(wouldCachePhoto('123', junk) === false);
+}
+
+// Overwrite rule BOTH directions:
+//   - existing < 3 parsed → incoming may overwrite
+//   - existing >= 3 → only if incoming has MORE hazard matches AND parsed within 50%
+{
+  const sparse = { source: 'photo', photoParsedCount: 2, coverageMatched: 0 };
+  const richerWrongProduct = { source: 'photo', photoParsedCount: 20, coverageMatched: 1 };
+  assert(shouldReplaceWithPhotoCache(sparse, richerWrongProduct) === true,
+    'sparse existing (<3) may be overwritten');
+
+  const solid = { source: 'photo', photoParsedCount: 10, coverageMatched: 2 };
+  const differentProduct = { source: 'photo', photoParsedCount: 25, coverageMatched: 5 };
+  assert(shouldReplaceWithPhotoCache(solid, differentProduct) === false,
+    'large parsed-count gap is a different product — keep existing');
+  assert(shouldReplaceWithPhotoCache(differentProduct, solid) === false,
+    'fewer parsed must not overwrite a solid entry either');
+
+  const betterCoverage = { source: 'photo', photoParsedCount: 11, coverageMatched: 5 };
+  assert(shouldReplaceWithPhotoCache(solid, betterCoverage) === true,
+    'more hazard matches + within 50% parsed may overwrite');
+  assert(shouldReplaceWithPhotoCache(betterCoverage, solid) === false,
+    'fewer matches must not overwrite (reverse direction)');
+
+  const moreMatchesButFar = { source: 'photo', photoParsedCount: 3, coverageMatched: 3 };
+  assert(shouldReplaceWithPhotoCache(solid, moreMatchesButFar) === false,
+    'more matches but parsed far outside 50% → keep existing');
+
+  // Same matched count → do not overwrite solid entry (even within 50%).
+  const sameMatch = { source: 'photo', photoParsedCount: 10, coverageMatched: 2 };
+  assert(shouldReplaceWithPhotoCache(solid, sameMatch) === false,
+    'equal matched count must not overwrite');
+}
+
+assert(photoParsedCountWithin50Percent(10, 5) === true);
+assert(photoParsedCountWithin50Percent(10, 15) === true);
+assert(photoParsedCountWithin50Percent(10, 4) === false);
+assert(photoParsedCountWithin50Percent(10, 16) === false);
+assert(photoParsedCountWithin50Percent(0, 5) === true);
+
+// Upstream entry is never overwritten by a photo entry.
+{
+  const upstream = { source: 'obf', photoParsedCount: 0, coverageMatched: 0 };
+  const photo = { source: 'photo', photoParsedCount: 99, coverageMatched: 50 };
+  assert(shouldReplaceWithPhotoCache(upstream, photo) === false, 'upstream must win');
+  assert(shouldReplaceWithPhotoCache({ source: 'off' }, photo) === false);
+  assert(shouldReplaceWithPhotoCache(null, photo) === true, 'empty cache accepts photo');
+  assert(shouldReplaceWithPhotoCache(undefined, photo) === true);
+}
+
+// Upstream replaces a photo entry when it gains ingredients.
+{
+  assert(shouldReplacePhotoWithUpstream(null) === false);
+  assert(shouldReplacePhotoWithUpstream({}) === false);
+  assert(shouldReplacePhotoWithUpstream({ ingredients_text: '' }) === false);
+  assert(shouldReplacePhotoWithUpstream({ ingredients_text: '   ' }) === false);
+  assert(shouldReplacePhotoWithUpstream({ ingredients_text: 'Aqua, Glycerin' }) === true,
+    'upstream with ingredients must replace photo');
+  assert(productHasIngredients({ ingredients_text: 'Aqua' }) === true);
+  assert(productHasIngredients({ ingredients_text: '' }) === false);
+
+  // photoNeedsUpstreamRecheck: never checked → due; recent check → not due.
+  assert(photoNeedsUpstreamRecheck({ source: 'photo' }) === true);
+  assert(photoNeedsUpstreamRecheck({ source: 'photo', lastUpstreamCheck: 0 }) === true);
+  assert(photoNeedsUpstreamRecheck({
+    source: 'photo',
+    lastUpstreamCheck: Date.now() - 1000,
+  }) === false, 'recent check must not recheck');
+  assert(photoNeedsUpstreamRecheck({
+    source: 'photo',
+    lastUpstreamCheck: Date.now() - PHOTO_UPSTREAM_RECHECK_MS - 1000,
+  }) === true, 'check older than 30d must recheck');
+  assert(photoNeedsUpstreamRecheck({ source: 'obf', lastUpstreamCheck: 0 }) === false);
+}
+
+assert(photoCacheParsedCount({ photoParsedCount: 7 }) === 7);
+assert(photoCacheParsedCount({ coverageTotal: 3 }) === 3, 'legacy fallback');
+assert(PHOTO_UPSTREAM_RECHECK_MS === 30 * 24 * 60 * 60 * 1000);
+
+console.log('photo below-gate + quality + upstream recheck ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"photo below-gate/quality assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -1212,6 +1397,7 @@ def main() -> int:
         test_fragrance_french_synonyms_and_unparseable_rules,
         test_slash_joined_multilingual_inci_lookup,
         test_paren_commas_and_drug_facts_truncation,
+        test_photo_cache_below_gate_and_quality,
     ]
     failed = 0
     for test in tests:
