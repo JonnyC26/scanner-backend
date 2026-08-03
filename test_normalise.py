@@ -624,7 +624,7 @@ global.fetch = async function (...args) {
     ingredientFindings: '[]',
     ingredientList: '[]',
     tableVersion: '0.4',
-    explanation: 'Old explanation kept',
+    explanation: 'Old explanation naming findings for score 50',
     imageUrl: '',
     cachedAt: Date.now() - (60 * 24 * 60 * 60 * 1000),
   };
@@ -635,7 +635,6 @@ global.fetch = async function (...args) {
   assert(fetchCalls === beforeFetch, 'photo rescore must not call fetch/network');
   assert(rescored.responseData.source === 'photo', 'source must stay photo');
   assert(rescored.responseData.productName === 'Rescued Toothpaste', 'preserve name');
-  assert(rescored.responseData.explanation === 'Old explanation kept', 'preserve explanation');
   assert(rescored.responseData.ingredients === stalePhoto.ingredients, 'preserve ingredients text');
   assert(rescored.responseData.tableVersion === COSMETIC_TABLE_VERSION,
     'tableVersion must refresh to current: ' + rescored.responseData.tableVersion);
@@ -644,6 +643,28 @@ global.fetch = async function (...args) {
     'score must be recomputed');
   assert(rescored.responseData.coverageTotal === 4, 'coverageTotal from re-parse');
   assert(rescored.scored.coverageMatched >= 2, 'table should match aqua/glycerin/hexanediol');
+
+  // Outcome changed (score 50 / coverage 1 → live values) → drop stale explanation.
+  assert(rescored.responseData.score !== 50 || rescored.responseData.coverageMatched !== 1,
+    'test setup expects outcome to change from cached 50/1');
+  assert(!rescored.responseData.explanation,
+    'changed outcome must not retain previous explanation, got: ' + rescored.responseData.explanation);
+  assert(rescored.responseData.explanationPending === true,
+    'changed outcome must set explanationPending for deferred regeneration');
+
+  // Same score + coverage → keep explanation (no Haiku regen needed).
+  const live = scoreCosmeticProduct({ ingredients_text: stalePhoto.ingredients });
+  const unchanged = rescorePhotoCachedDocument({
+    ...stalePhoto,
+    score: live.score,
+    coverageMatched: live.coverageMatched,
+    coverageTotal: live.coverageTotal,
+    explanation: 'Still accurate for this score',
+  });
+  assert(unchanged.responseData.explanation === 'Still accurate for this score',
+    'unchanged outcome must keep explanation');
+  assert(unchanged.responseData.explanationPending === false,
+    'unchanged outcome must clear explanationPending');
 
   // Empty ingredients → null (caller falls through to upstream)
   assert(rescorePhotoCachedDocument({ source: 'photo', ingredients: '' }) === null);
@@ -660,12 +681,15 @@ global.fetch = async function (...args) {
     ingredients: 'Aqua, Glycerin',
     score: 90,
     tableVersion: '0.4',
+    explanation: 'Kept on fallback path',
     cachedAt: 1,
   };
   const fallback = staleCacheFallbackPayload(stale);
   assert(fallback, 'expected fallback payload');
   assert(fallback.productName === 'Stale Rescue');
   assert(fallback.score === 90);
+  assert(fallback.explanation === 'Kept on fallback path',
+    'stale FALLBACK deliberately keeps its old explanation');
   assert(fallback.cachedAt === undefined, 'cachedAt must not leak into response');
   assert(staleCacheFallbackPayload(null) === null, 'no cache → no fallback');
   assert(staleCacheFallbackPayload(undefined) === null);
@@ -691,6 +715,7 @@ global.fetch = async function (...args) {
   const r1 = refreshOrFallback(stale, notFound);
   assert(r1.kind === 'stale-fallback', '404 must fall back to stale');
   assert(r1.data.productName === 'Stale Rescue');
+  assert(r1.data.explanation === 'Kept on fallback path', 'fallback keeps explanation');
 
   const r2 = refreshOrFallback(stale, networkBoom);
   assert(r2.kind === 'stale-fallback', 'network error must fall back to stale');

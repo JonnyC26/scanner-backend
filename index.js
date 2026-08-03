@@ -1592,6 +1592,21 @@ function rescorePhotoCachedDocument(cached) {
     tableVersion: COSMETIC_TABLE_VERSION,
   };
   delete responseData.cachedAt;
+
+  // Drop a stale Haiku explanation when the scored outcome changed — otherwise
+  // hasUsableExplanation keeps the old sentence (written for the previous
+  // score/findings) after a tableVersion bump.
+  const outcomeChanged =
+    scored.score !== cached.score ||
+    scored.coverageMatched !== cached.coverageMatched ||
+    scored.coverageTotal !== cached.coverageTotal;
+  if (outcomeChanged) {
+    responseData.explanation = null;
+    responseData.explanationPending = true;
+  } else if (responseData.explanation && String(responseData.explanation).trim()) {
+    responseData.explanationPending = false;
+  }
+
   return { responseData, scored, unmatchedNames: scored.unmatchedNames || [] };
 }
 
