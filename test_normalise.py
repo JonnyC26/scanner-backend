@@ -98,20 +98,20 @@ def _run_node_lookup_assertions() -> None:
     script = r"""
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync(path.join('/workspace', 'index.js'), 'utf8');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('function stripCosmeticAnnotations');
 if (start < 0 || end < 0) throw new Error('could not locate cosmetic lookup block');
 const block = `
 const fs = require('fs');
 const path = require('path');
-const __cosmeticDir = '/workspace';
+const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 module.exports = { lookupCosmeticIngredient, normalizeInci, cosmeticBySynonym };
 `;
 fs.writeFileSync('/tmp/inci_lookup_helpers.js', block);
 const { lookupCosmeticIngredient, normalizeInci } = require('/tmp/inci_lookup_helpers.js');
-const synonyms = JSON.parse(fs.readFileSync('/workspace/purla_inci_synonyms.json', 'utf8')).synonyms;
+const synonyms = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'purla_inci_synonyms.json'), 'utf8')).synonyms;
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -181,13 +181,13 @@ def test_no_ingredient_data_flag_via_node():
     script = r"""
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('function stringifyIngredientListForCache');
 const block = `
 const fs = require('fs');
 const path = require('path');
-const __cosmeticDir = '/workspace';
+const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 module.exports = { scoreCosmeticProduct };
 `;
@@ -268,13 +268,13 @@ def test_positional_and_stereo_prefixes_never_conflated():
     script = r"""
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('function stripCosmeticAnnotations');
 const block = `
 const fs = require('fs');
 const path = require('path');
-const __cosmeticDir = '/workspace';
+const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 module.exports = { lookupCosmeticIngredient, normalizeInci };
 `;
@@ -371,7 +371,7 @@ def _run_node_parse_assertions() -> None:
     script = r"""
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync(path.join('/workspace', 'index.js'), 'utf8');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('// Firestore docs are size-capped');
@@ -384,7 +384,7 @@ if (fragStart < 0 || fragEnd < 0) throw new Error('could not locate category blo
 const block = `
 const fs = require('fs');
 const path = require('path');
-const __cosmeticDir = '/workspace';
+const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 module.exports = {
@@ -586,7 +586,7 @@ def test_strip_leading_prefix_helper_via_node():
     """Isolated assertion that only the leading label prefix is removed."""
     script = r"""
 const fs = require('fs');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('function stripLeadingIngredientLabelPrefix');
 const end = src.indexOf('function splitMayContainSections');
 eval(src.slice(start, end));
@@ -614,7 +614,7 @@ def test_photo_cache_rescore_and_stale_fallback():
     script = r"""
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('// Firestore docs are size-capped');
@@ -628,7 +628,7 @@ if (helperEnd <= helperStart) throw new Error('photo cache helper slice inverted
 const block = `
 const fs = require('fs');
 const path = require('path');
-const __cosmeticDir = '/workspace';
+const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(helperStart, helperEnd)}
 module.exports = {
@@ -814,7 +814,7 @@ def test_fragrance_french_synonyms_and_unparseable_rules():
     script = r"""
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('// Firestore docs are size-capped');
@@ -823,7 +823,7 @@ if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
 const block = `
 const fs = require('fs');
 const path = require('path');
-const __cosmeticDir = '/workspace';
+const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 module.exports = {
   lookupCosmeticIngredient,
@@ -964,14 +964,14 @@ def test_slash_joined_multilingual_inci_lookup():
     script = r"""
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('// Firestore docs are size-capped');
 if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
 const block = `
 const fs = require('fs');
 const path = require('path');
-const __cosmeticDir = '/workspace';
+const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 module.exports = {
   lookupCosmeticIngredient,
@@ -1080,13 +1080,13 @@ def test_paren_commas_and_drug_facts_truncation():
     script = r"""
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('// Firestore docs are size-capped');
 const block = `
 const fs = require('fs');
 const path = require('path');
-const __cosmeticDir = '/workspace';
+const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 module.exports = {
   splitCosmeticIngredientText,
@@ -1215,7 +1215,7 @@ def test_photo_cache_below_gate_and_quality():
     script = r"""
 const fs = require('fs');
 const path = require('path');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('// Firestore docs are size-capped');
 const helperStart = src.indexOf('// Photo-rescued cache docs have no upstream');
@@ -1223,7 +1223,7 @@ const helperEnd = src.indexOf('async function scanAndCache(barcode');
 const block = `
 const fs = require('fs');
 const path = require('path');
-const __cosmeticDir = '/workspace';
+const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 function productHasIngredients(product) {
   if (!product) return false;
@@ -1386,7 +1386,7 @@ def test_request_guards_rate_limit_and_vision_cap():
     """Rate-limit buckets, sweep, bearer parse, and UTC vision daily cap."""
     script = r"""
 const fs = require('fs');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('// ── Request guards (rate limits + vision bill backstop)');
 const end = src.indexOf('// ── Cosmetic ingredient table');
 if (start < 0 || end < 0 || end <= start) throw new Error('could not locate request guards');
@@ -1564,7 +1564,7 @@ def test_front_pack_name_and_image_helpers():
     """Front-of-pack name compose, barcode validation, image overwrite rules."""
     script = r"""
 const fs = require('fs');
-const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('// ── Request guards (rate limits + vision bill backstop)');
 const end = src.indexOf('// ── Cosmetic ingredient table');
 if (start < 0 || end < 0 || end <= start) throw new Error('could not locate helpers');
