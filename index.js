@@ -164,6 +164,76 @@ function stripLeadingIngredientLabelPrefix(text) {
   );
 }
 
+// When warning/marketing copy precedes the list, jump to the Ingredients:/INCI
+// header so stripLeadingIngredientLabelPrefix can remove it. Require a colon or
+// dash so "Ingredients Extract" mid-list is not treated as a section header.
+function extractFromIngredientLabel(text) {
+  const s = String(text || '');
+  const re = /(?:^|[\n.;!?,]\s*|\s+)((?:ingredients|ingr[eé]dients|inci)\s*[:\-–—]\s*)/i;
+  const m = s.match(re);
+  if (!m || m.index == null) return s;
+  // Start at the label itself (group 1), not the leading boundary punctuation.
+  const labelOffset = m[0].lastIndexOf(m[1]);
+  const labelStart = m.index + (labelOffset >= 0 ? labelOffset : 0);
+  return s.slice(labelStart).trim();
+}
+
+// OTC Drug Facts / warning panels scraped into ingredients_text. Truncate at the
+// first section marker (same idea as may-contain). Markers must start a segment
+// so mid-sentence "uses" / "directions" / "caution" do not fire.
+const DRUG_FACTS_MARKERS = [
+  'drug facts',
+  'warnings',
+  'warning:',
+  'directions',
+  'uses:',
+  'caution',
+  'keep out of reach of children',
+  'if swallowed',
+  'stop use',
+  'ask a doctor',
+  'other information',
+  'questions?',
+];
+
+function isDrugFactsSegmentStart(text, index) {
+  if (index <= 0) return true;
+  let i = index - 1;
+  while (i >= 0 && /[ \t\r]/.test(text[i])) i--;
+  if (i < 0) return true;
+  return /[\n.;!?]/.test(text[i]);
+}
+
+function truncateDrugFactsAndWarnings(text) {
+  const s = String(text || '');
+  if (!s) return { text: '', marker: null };
+
+  const lower = s.toLowerCase();
+  let bestIdx = -1;
+  let bestMarker = null;
+
+  for (const marker of DRUG_FACTS_MARKERS) {
+    const needle = marker.toLowerCase();
+    let from = 0;
+    while (from <= lower.length) {
+      const idx = lower.indexOf(needle, from);
+      if (idx < 0) break;
+      if (isDrugFactsSegmentStart(s, idx)) {
+        // Prefer the earliest marker in the string.
+        if (bestIdx < 0 || idx < bestIdx) {
+          bestIdx = idx;
+          bestMarker = marker;
+        }
+        break;
+      }
+      from = idx + 1;
+    }
+  }
+
+  if (bestIdx < 0) return { text: s.trim(), marker: null };
+  return { text: s.slice(0, bestIdx).trim(), marker: bestMarker };
+}
+
 function splitMayContainSections(text) {
   // "May Contain (+/-): …" / "+/-" / "±" introduce conditional colorants.
   // Consume an optional (+/-) that immediately follows "may contain".
@@ -181,17 +251,57 @@ function splitMayContainSections(text) {
 }
 
 function splitCosmeticIngredientText(text) {
-  // Split on bullets, and on commas that are NOT between two digits
-  // (so "1,2-Hexanediol" stays intact while "Water, Glycerin" splits).
+  // Split on bullets and on commas that are NOT between two digits and NOT
+  // inside parentheses (botanical "Helianthus Annuus (Sunflower, Corn) Seed Oil").
+  // Unbalanced "(" must not swallow the rest of the label: only suppress commas
+  // when a closing ")" still lies ahead.
+  const raw = String(text || '');
   const parts = [];
-  const re = /[•·●‣⁃∙⋅]+|(?<!\d),|,(?!\d)/g;
-  let last = 0;
-  let match;
-  while ((match = re.exec(text)) !== null) {
-    parts.push(text.slice(last, match.index));
-    last = match.index + match[0].length;
+  let buf = '';
+  let depth = 0;
+  const bullet = /[•·●‣⁃∙⋅]/;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    const prev = i > 0 ? raw[i - 1] : '';
+    const next = i + 1 < raw.length ? raw[i + 1] : '';
+
+    if (ch === '(') {
+      depth += 1;
+      buf += ch;
+      continue;
+    }
+    if (ch === ')') {
+      if (depth > 0) depth -= 1;
+      buf += ch;
+      continue;
+    }
+    if (bullet.test(ch)) {
+      if (buf.trim()) parts.push(buf);
+      buf = '';
+      // Bullets reset depth so a stray "(" cannot poison later segments.
+      depth = 0;
+      continue;
+    }
+    if (ch === ',') {
+      const closingAhead = depth > 0 && raw.indexOf(')', i + 1) !== -1;
+      if (closingAhead) {
+        buf += ch;
+        continue;
+      }
+      // Digit-locant: keep "1,2-Hexanediol" intact.
+      if (/\d/.test(prev) && /\d/.test(next)) {
+        buf += ch;
+        continue;
+      }
+      if (buf.trim()) parts.push(buf);
+      buf = '';
+      depth = 0;
+      continue;
+    }
+    buf += ch;
   }
-  parts.push(text.slice(last));
+  if (buf.trim()) parts.push(buf);
   return parts;
 }
 
@@ -224,11 +334,15 @@ function isUnparseableIngredientName(name) {
 // The structured product.ingredients array path returns early with mayContain:false
 // on every row — OFF/OBF parsed arrays are already tokenised and do not carry the
 // free-text "May Contain (+/-):" marker, so marker-based splitting does not apply.
+//
+// Also returns { items, drugFactsMarker } so callers can log truncation.
 function parseCosmeticIngredientList(product) {
   const parsed = [];
 
   const push = (cleaned, mayContain) => {
     if (!cleaned) return;
+    // Lone "INGREDIENTS" / "INCI" tokens from OBF scrapes are not ingredients.
+    if (/^(ingredients|ingr[eé]dients|inci)$/i.test(cleaned)) return;
     parsed.push({
       name: cleaned,
       mayContain: !!mayContain,
@@ -243,10 +357,14 @@ function parseCosmeticIngredientList(product) {
       const text = raw.startsWith('en:') ? raw.slice(3).replace(/-/g, ' ') : raw;
       push(cleanParsedIngredientFragment(text), false);
     }
-    return parsed;
+    return { items: parsed, drugFactsMarker: null };
   }
 
-  let text = stripLeadingIngredientLabelPrefix(product.ingredients_text || '');
+  // Prefer the Ingredients:/INCI: section when warning copy precedes it, then
+  // drop Drug Facts / warning panels that follow the list.
+  let text = extractFromIngredientLabel(product.ingredients_text || '');
+  const truncated = truncateDrugFactsAndWarnings(text);
+  text = stripLeadingIngredientLabelPrefix(truncated.text);
   const { main, conditional } = splitMayContainSections(text);
 
   for (const part of splitCosmeticIngredientText(main)) {
@@ -258,7 +376,7 @@ function parseCosmeticIngredientList(product) {
     }
   }
 
-  return parsed;
+  return { items: parsed, drugFactsMarker: truncated.marker };
 }
 
 function isFragranceAllergen(entry) {
@@ -278,7 +396,7 @@ function cosmeticPenaltyForRisk(risk) {
 }
 
 function scoreCosmeticProduct(product) {
-  const parsedItems = parseCosmeticIngredientList(product);
+  const { items: parsedItems, drugFactsMarker } = parseCosmeticIngredientList(product);
   // may-contain / +/- and unparseable packaging junk are listed for display
   // but do not inflate coverage or participate in scoring.
   const coverageItems = parsedItems.filter(item => !item.mayContain && !item.unparseable);
@@ -411,6 +529,7 @@ function scoreCosmeticProduct(product) {
       coverage,
       noIngredientData: coverageTotal === 0,
       unparseableCount,
+      drugFactsMarker: drugFactsMarker || null,
       ingredientFindings: findings,
       ingredientList,
       unmatchedNames,
@@ -510,6 +629,7 @@ function scoreCosmeticProduct(product) {
     coverage,
     noIngredientData: false,
     unparseableCount,
+    drugFactsMarker: drugFactsMarker || null,
     ingredientFindings: findings,
     ingredientList,
     unmatchedNames,
@@ -1455,6 +1575,9 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
 
   console.log(`[COSMETIC SCORE] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal} score=${scored.score} noIngredientData=${!!scored.noIngredientData} table=${COSMETIC_TABLE_VERSION}`);
   console.log(`[UNPARSEABLE] barcode=${barcode} count=${scored.unparseableCount || 0}`);
+  if (scored.drugFactsMarker) {
+    console.log(`[DRUG FACTS TRUNCATED] barcode=${barcode} marker=${scored.drugFactsMarker}`);
+  }
 
   const unmatchedNames = scored.unmatchedNames || [];
   const namesJoined = unmatchedNames.join('|');
@@ -1745,6 +1868,9 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
           if (rescored) {
             console.log(`[CACHE PHOTO RESCORE] barcode=${barcode} coverage=${rescored.scored.coverageMatched}/${rescored.scored.coverageTotal} score=${rescored.scored.score} table=${COSMETIC_TABLE_VERSION}`);
             console.log(`[UNPARSEABLE] barcode=${barcode} count=${rescored.scored.unparseableCount || 0}`);
+            if (rescored.scored.drugFactsMarker) {
+              console.log(`[DRUG FACTS TRUNCATED] barcode=${barcode} marker=${rescored.scored.drugFactsMarker}`);
+            }
             const unmatchedNames = rescored.unmatchedNames;
             const namesJoined = unmatchedNames.join('|');
             const namesTruncated = namesJoined.length > 200
@@ -2059,6 +2185,9 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     console.log(`[COSMETIC UNMATCHED] barcode=${barcode || 'none'} count=${unmatchedNames.length} names=${namesTruncated}`);
     recordUnmatchedInci(barcode || null, unmatchedNames);
     console.log(`[UNPARSEABLE] barcode=${barcode || 'none'} count=${scored.unparseableCount || 0}`);
+    if (scored.drugFactsMarker) {
+      console.log(`[DRUG FACTS TRUNCATED] barcode=${barcode || 'none'} marker=${scored.drugFactsMarker}`);
+    }
 
     const productName = (vision.productName && String(vision.productName).trim())
       || 'Scanned label';
@@ -2416,6 +2545,7 @@ function truncateDiagnosticReport(report) {
   while (Buffer.byteLength(json, 'utf8') > DIAGNOSTIC_FIRESTORE_MAX_BYTES) {
     const shrunk =
       shrinkList('topUnmatched', 20) ||
+      shrinkList('rawSamples', 3) ||
       shrinkList('classifiedFood', 5) ||
       shrinkList('noIngredientData', 5);
     if (!shrunk) break;
@@ -2448,6 +2578,7 @@ async function runDiagnoseJob(limit, countries) {
     coverageSum: 0,
     coverageCount: 0,
     coverageBuckets: { '0-20': 0, '20-40': 0, '40-60': 0, '60-80': 0, '80-100': 0 },
+    rawSamples: [],
   };
   // name(normalized) -> { name, count, exampleBarcode }
   const unmatchedTally = new Map();
@@ -2473,11 +2604,22 @@ async function runDiagnoseJob(limit, countries) {
           // Pure measurement: score only — no explanations, cache, or side-effect logs.
           const scored = scoreCosmeticProduct(product);
           tallies.unparseableTotal += scored.unparseableCount || 0;
+          if (scored.drugFactsMarker) {
+            console.log(`[DRUG FACTS TRUNCATED] barcode=${barcode} marker=${scored.drugFactsMarker}`);
+          }
 
           if (scored.coverageTotal > 0) {
             tallies.coverageSum += scored.coverage;
             tallies.coverageCount++;
             tallies.coverageBuckets[coverageBucketKey(scored.coverage)]++;
+          }
+
+          // First 10 below 0.30 coverage — keep a raw excerpt for cause analysis.
+          if (scored.coverage < 0.30 && tallies.rawSamples.length < 10) {
+            tallies.rawSamples.push({
+              barcode,
+              ingredientsTextExcerpt: String(product.ingredients_text || '').slice(0, 400),
+            });
           }
 
           if (scored.noIngredientData || scored.coverageTotal === 0) {
@@ -2548,6 +2690,7 @@ async function runDiagnoseJob(limit, countries) {
       coverageAverage,
       coverageBuckets: tallies.coverageBuckets,
       topUnmatched,
+      rawSamples: tallies.rawSamples,
     });
 
     try {
