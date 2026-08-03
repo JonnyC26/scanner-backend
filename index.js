@@ -1793,6 +1793,8 @@ function rescorePhotoCachedDocument(cached) {
     ingredientFindings: JSON.stringify(scored.ingredientFindings),
     ingredientList: JSON.stringify(scored.ingredientList || []),
     tableVersion: COSMETIC_TABLE_VERSION,
+    // photoCapturedAt / photoParsedCount are provenance of the human
+    // transcription — never refresh them on local re-score.
   };
   delete responseData.cachedAt;
 
@@ -1811,6 +1813,38 @@ function rescorePhotoCachedDocument(cached) {
   }
 
   return { responseData, scored, unmatchedNames: scored.unmatchedNames || [] };
+}
+
+// Quality of a photo-derived cache candidate. Higher is better.
+function photoCacheParsedCount(entry) {
+  if (!entry) return 0;
+  if (typeof entry.photoParsedCount === 'number') return entry.photoParsedCount;
+  // Legacy photo docs written before photoParsedCount existed.
+  if (typeof entry.coverageTotal === 'number') return entry.coverageTotal;
+  return 0;
+}
+
+function photoCacheCoverageMatched(entry) {
+  if (!entry) return 0;
+  return typeof entry.coverageMatched === 'number' ? entry.coverageMatched : 0;
+}
+
+// Decide whether an incoming photo scan may replace what's already cached.
+// Upstream (non-photo) data always wins. Among photo entries: more parsed
+// ingredients, then higher coverageMatched, then newer.
+function shouldReplaceWithPhotoCache(existing, incoming) {
+  if (!existing) return true;
+  if (existing.source !== 'photo') return false;
+
+  const existingParsed = photoCacheParsedCount(existing);
+  const incomingParsed = photoCacheParsedCount(incoming);
+  if (incomingParsed !== existingParsed) return incomingParsed > existingParsed;
+
+  const existingMatched = photoCacheCoverageMatched(existing);
+  const incomingMatched = photoCacheCoverageMatched(incoming);
+  if (incomingMatched !== existingMatched) return incomingMatched > existingMatched;
+
+  return true; // tie → newer wins
 }
 
 // When a re-scan fails, prefer a stale cache over a false "not found".
@@ -2167,8 +2201,12 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     const product = { ingredients_text: ingredientsText };
     const scored = scoreCosmeticProduct(product);
 
-    // Partial photo reads must not poison the shared 30-day cache.
-    const canCache = !!barcode && scored.score !== null;
+    // Cache below-gate photo rescues too — transcribed ingredients are valuable
+    // even when score is null. Never cache a zero-ingredient parse.
+    const photoParsedCount = Array.isArray(scored.ingredientList)
+      ? scored.ingredientList.length
+      : 0;
+    const canCache = !!barcode && photoParsedCount > 0;
     // Ignore defer when we are not caching — there is no doc for /explain to fill.
     const skipExplanation = deferExplanation && canCache;
 
@@ -2192,6 +2230,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     const productName = (vision.productName && String(vision.productName).trim())
       || 'Scanned label';
 
+    const photoCapturedAt = Date.now();
     const responseData = {
       productType: 'cosmetic',
       productName,
@@ -2217,10 +2256,13 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       scoreLabel: scored.scoreLabel,
       coverageMatched: scored.coverageMatched,
       coverageTotal: scored.coverageTotal,
+      noIngredientData: !!scored.noIngredientData,
       ingredientFindings: JSON.stringify(scored.ingredientFindings),
       ingredientList: JSON.stringify(scored.ingredientList || []),
       tableVersion: COSMETIC_TABLE_VERSION,
       source: 'photo',
+      photoParsedCount,
+      photoCapturedAt,
       dietWarnings: '',
     };
     if (skipExplanation) {
@@ -2229,19 +2271,36 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
 
     if (canCache) {
       try {
-        const { dietWarnings: _dietWarnings, ...cachePayload } = responseData;
-        cachePayload.ingredientList = stringifyIngredientListForCache(
-          scored.ingredientList,
-          barcode
-        );
-        await db.collection(CACHE_COLLECTION).doc(String(barcode)).set({
-          ...cachePayload,
-          cachedAt: Date.now(),
-        });
+        const docRef = db.collection(CACHE_COLLECTION).doc(String(barcode));
+        const existingDoc = await docRef.get();
+        const existing = existingDoc.exists ? existingDoc.data() : null;
+        const incomingMeta = {
+          source: 'photo',
+          photoParsedCount,
+          coverageMatched: scored.coverageMatched,
+        };
+
+        if (existing && existing.source !== 'photo') {
+          console.log(`[PHOTO CACHE KEPT UPSTREAM] barcode=${barcode}`);
+        } else if (existing && !shouldReplaceWithPhotoCache(existing, incomingMeta)) {
+          console.log(
+            `[PHOTO CACHE KEPT EXISTING] barcode=${barcode} existing=${photoCacheParsedCount(existing)} new=${photoParsedCount}`
+          );
+        } else {
+          const { dietWarnings: _dietWarnings, ...cachePayload } = responseData;
+          cachePayload.ingredientList = stringifyIngredientListForCache(
+            scored.ingredientList,
+            barcode
+          );
+          await docRef.set({
+            ...cachePayload,
+            cachedAt: Date.now(),
+          });
+        }
       } catch (cacheWriteErr) {
         console.log(`[PHOTO SCAN CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
       }
-    } else if (barcode && scored.score === null) {
+    } else if (barcode && photoParsedCount === 0) {
       console.log(`[PHOTO SCAN NOT CACHED] barcode=${barcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
     }
 

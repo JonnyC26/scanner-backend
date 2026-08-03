@@ -634,6 +634,8 @@ ${src.slice(helperStart, helperEnd)}
 module.exports = {
   rescorePhotoCachedDocument,
   staleCacheFallbackPayload,
+  shouldReplaceWithPhotoCache,
+  photoCacheParsedCount,
   scoreCosmeticProduct,
   COSMETIC_TABLE_VERSION,
 };
@@ -642,6 +644,8 @@ fs.writeFileSync('/tmp/photo_cache_helpers.js', block);
 const {
   rescorePhotoCachedDocument,
   staleCacheFallbackPayload,
+  shouldReplaceWithPhotoCache,
+  photoCacheParsedCount,
   scoreCosmeticProduct,
   COSMETIC_TABLE_VERSION,
 } = require('/tmp/photo_cache_helpers.js');
@@ -670,6 +674,8 @@ global.fetch = async function (...args) {
     scoreColor: '#8BC34A',
     coverageMatched: 1,
     coverageTotal: 4,
+    photoParsedCount: 4,
+    photoCapturedAt: 111111,
     ingredientFindings: '[]',
     ingredientList: '[]',
     tableVersion: '0.4',
@@ -688,6 +694,10 @@ global.fetch = async function (...args) {
   assert(rescored.responseData.tableVersion === COSMETIC_TABLE_VERSION,
     'tableVersion must refresh to current: ' + rescored.responseData.tableVersion);
   assert(rescored.responseData.cachedAt === undefined, 'cachedAt stripped from response payload');
+  assert(rescored.responseData.photoCapturedAt === stalePhoto.photoCapturedAt,
+    'photoCapturedAt must not refresh on re-score');
+  assert(rescored.responseData.photoParsedCount === stalePhoto.photoParsedCount,
+    'photoParsedCount must not refresh on re-score');
   assert(typeof rescored.responseData.score === 'number' || rescored.responseData.score === null,
     'score must be recomputed');
   assert(rescored.responseData.coverageTotal === 4, 'coverageTotal from re-parse');
@@ -1197,6 +1207,116 @@ console.log('paren commas + drug facts truncation ok');
     print(proc.stdout.strip())
 
 
+def test_photo_cache_below_gate_and_quality():
+    """Below-gate photo results cache; quality compare; upstream never overwritten."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+const helperStart = src.indexOf('// Photo-rescued cache docs have no upstream');
+const helperEnd = src.indexOf('async function scanAndCache(barcode');
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = '/workspace';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(helperStart, helperEnd)}
+module.exports = {
+  scoreCosmeticProduct,
+  shouldReplaceWithPhotoCache,
+  photoCacheParsedCount,
+};
+`;
+fs.writeFileSync('/tmp/photo_quality_helpers.js', block);
+const {
+  scoreCosmeticProduct,
+  shouldReplaceWithPhotoCache,
+  photoCacheParsedCount,
+} = require('/tmp/photo_quality_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// Mirror /scan/photo canCache decision: barcode + at least one parsed ingredient.
+function wouldCachePhoto(barcode, scored) {
+  const photoParsedCount = Array.isArray(scored.ingredientList)
+    ? scored.ingredientList.length
+    : 0;
+  return !!barcode && photoParsedCount > 0;
+}
+
+// Below-gate (score null) WITH parsed ingredients IS cacheable.
+{
+  // Many unknown names → coverage below 0.40 → score null, but rows exist.
+  const below = scoreCosmeticProduct({
+    ingredients_text: 'CompletelyFakeInciOne, CompletelyFakeInciTwo, CompletelyFakeInciThree',
+  });
+  assert(below.score === null, 'expected below-gate null score, got ' + below.score);
+  assert(below.ingredientList.length >= 3, 'expected parsed rows');
+  assert(wouldCachePhoto('123', below) === true, 'below-gate with ingredients must cache');
+  assert(wouldCachePhoto('', below) === false, 'no barcode → no cache');
+  assert(wouldCachePhoto(null, below) === false, 'null barcode → no cache');
+}
+
+// Zero parsed ingredients is NOT cached.
+{
+  const empty = scoreCosmeticProduct({ ingredients_text: '' });
+  assert(empty.ingredientList.length === 0);
+  assert(wouldCachePhoto('123', empty) === false, 'zero ingredients must not cache');
+  const junk = scoreCosmeticProduct({ ingredients_text: 'Ab, X' }); // < 3 chars dropped
+  assert(junk.ingredientList.length === 0, 'short tokens dropped');
+  assert(wouldCachePhoto('123', junk) === false);
+}
+
+// Higher-quality photo overwrites lower-quality; reverse does not.
+{
+  const low = { source: 'photo', photoParsedCount: 2, coverageMatched: 1 };
+  const high = { source: 'photo', photoParsedCount: 5, coverageMatched: 2 };
+  assert(shouldReplaceWithPhotoCache(low, high) === true, 'higher parsed count wins');
+  assert(shouldReplaceWithPhotoCache(high, low) === false, 'lower must not overwrite higher');
+
+  const tieLowMatch = { source: 'photo', photoParsedCount: 5, coverageMatched: 1 };
+  const tieHighMatch = { source: 'photo', photoParsedCount: 5, coverageMatched: 4 };
+  assert(shouldReplaceWithPhotoCache(tieLowMatch, tieHighMatch) === true, 'higher matched wins on tie');
+  assert(shouldReplaceWithPhotoCache(tieHighMatch, tieLowMatch) === false);
+
+  // Full tie → newer wins
+  assert(shouldReplaceWithPhotoCache(high, { ...high }) === true, 'tie prefers newer');
+}
+
+// Upstream entry is never overwritten by a photo entry.
+{
+  const upstream = { source: 'obf', photoParsedCount: 0, coverageMatched: 0 };
+  const photo = { source: 'photo', photoParsedCount: 99, coverageMatched: 50 };
+  assert(shouldReplaceWithPhotoCache(upstream, photo) === false, 'upstream must win');
+  assert(shouldReplaceWithPhotoCache({ source: 'off' }, photo) === false);
+  assert(shouldReplaceWithPhotoCache(null, photo) === true, 'empty cache accepts photo');
+  assert(shouldReplaceWithPhotoCache(undefined, photo) === true);
+}
+
+assert(photoCacheParsedCount({ photoParsedCount: 7 }) === 7);
+assert(photoCacheParsedCount({ coverageTotal: 3 }) === 3, 'legacy fallback');
+
+console.log('photo below-gate + quality ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"photo below-gate/quality assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -1212,6 +1332,7 @@ def main() -> int:
         test_fragrance_french_synonyms_and_unparseable_rules,
         test_slash_joined_multilingual_inci_lookup,
         test_paren_commas_and_drug_facts_truncation,
+        test_photo_cache_below_gate_and_quality,
     ]
     failed = 0
     for test in tests:
