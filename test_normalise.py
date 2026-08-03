@@ -1578,8 +1578,12 @@ module.exports = {
   PRODUCT_IMAGE_MAX_BYTES,
   tryConsumeVisionSlot,
   VISION_DAILY_CAP,
-  setVisionState: (day, count) => { visionDayKey = day; visionDayCount = count; },
-  getVisionState: () => ({ visionDayKey, visionDayCount }),
+  setVisionState: (day, count, warningDay = '') => {
+    visionDayKey = day;
+    visionDayCount = count;
+    visionCapWarningLoggedForDay = warningDay;
+  },
+  getVisionState: () => ({ visionDayKey, visionDayCount, visionCapWarningLoggedForDay }),
 };
 `;
 fs.writeFileSync('/tmp/front_pack_helpers.js', block);
