@@ -392,6 +392,9 @@ module.exports = {
   scoreCosmeticProduct,
   stripLeadingIngredientLabelPrefix,
   splitMayContainSections,
+  splitCosmeticIngredientText,
+  truncateDrugFactsAndWarnings,
+  extractFromIngredientLabel,
   tidyParsedIngredientName,
   tagIndicatesCosmetic,
   hasCosmeticCategory,
@@ -401,15 +404,24 @@ module.exports = {
 `;
 fs.writeFileSync('/tmp/cosmetic_parse_helpers.js', block);
 const {
-  parseCosmeticIngredientList,
+  parseCosmeticIngredientList: parseCosmeticIngredientListRaw,
   scoreCosmeticProduct,
   stripLeadingIngredientLabelPrefix,
   splitMayContainSections,
+  splitCosmeticIngredientText,
+  truncateDrugFactsAndWarnings,
+  extractFromIngredientLabel,
   tidyParsedIngredientName,
   tagIndicatesCosmetic,
   hasCosmeticCategory,
   lookupCosmeticIngredient,
 } = require('/tmp/cosmetic_parse_helpers.js');
+
+// parseCosmeticIngredientList now returns { items, drugFactsMarker }.
+function parseCosmeticIngredientList(product) {
+  const result = parseCosmeticIngredientListRaw(product);
+  return result.items || result;
+}
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
@@ -1049,6 +1061,142 @@ console.log('slash multilingual inci lookup ok');
         )
     print(proc.stdout.strip())
 
+
+def test_paren_commas_and_drug_facts_truncation():
+    """Parenthesis-aware splits, Drug Facts truncation, mid-text Ingredients."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = '/workspace';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+module.exports = {
+  splitCosmeticIngredientText,
+  truncateDrugFactsAndWarnings,
+  extractFromIngredientLabel,
+  parseCosmeticIngredientList,
+  scoreCosmeticProduct,
+  lookupCosmeticIngredient,
+  DRUG_FACTS_MARKERS,
+};
+`;
+fs.writeFileSync('/tmp/paren_drug_helpers.js', block);
+const {
+  splitCosmeticIngredientText,
+  truncateDrugFactsAndWarnings,
+  extractFromIngredientLabel,
+  parseCosmeticIngredientList,
+  scoreCosmeticProduct,
+  lookupCosmeticIngredient,
+  DRUG_FACTS_MARKERS,
+} = require('/tmp/paren_drug_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+function namesOf(product) {
+  const r = parseCosmeticIngredientList(product);
+  return (r.items || r).map(p => p.name);
+}
+
+// --- 1. Parenthetical commas must not split ---
+{
+  let parts = splitCosmeticIngredientText('Butyrospermum Parkii (Shea Butter), Glycerin').map(s => s.trim());
+  assert(parts.length === 2, JSON.stringify(parts));
+  assert(parts[0] === 'Butyrospermum Parkii (Shea Butter)', parts[0]);
+  assert(parts[1] === 'Glycerin', parts[1]);
+
+  parts = splitCosmeticIngredientText('Helianthus Annuus (Sunflower, Corn) Seed Oil').map(s => s.trim());
+  assert(parts.length === 1, 'sunflower/corn must stay one token: ' + JSON.stringify(parts));
+  assert(parts[0].includes('Sunflower, Corn'), parts[0]);
+
+  // Nested parentheses
+  parts = splitCosmeticIngredientText('A (B (C, D), E), F').map(s => s.trim());
+  assert(parts.length === 2, JSON.stringify(parts));
+  assert(parts[0].includes('C, D') && parts[0].includes('E'), parts[0]);
+  assert(parts[1] === 'F', parts[1]);
+
+  // Unbalanced "(" must not swallow the rest of the label
+  parts = splitCosmeticIngredientText('Foo (Bar, Glycerin, Aqua').map(s => s.trim());
+  assert(parts.length >= 2, 'unbalanced paren must still split: ' + JSON.stringify(parts));
+  assert(parts.some(p => p.includes('Glycerin') || p.trim() === 'Glycerin'), JSON.stringify(parts));
+
+  // Digit-locant rule preserved
+  parts = splitCosmeticIngredientText('Water, 1,2-Hexanediol, Glycerin').map(s => s.trim());
+  assert(parts.includes('1,2-Hexanediol'), JSON.stringify(parts));
+}
+
+// --- 2. Each Drug Facts marker truncates ---
+{
+  for (const marker of DRUG_FACTS_MARKERS) {
+    const text = 'Aqua, Glycerin. ' + marker.charAt(0).toUpperCase() + marker.slice(1) + ' do not eat';
+    // Normalize: markers are matched case-insensitively; build a clear segment.
+    const labeled = 'Aqua, Glycerin. ' + marker + ' extra warning copy here';
+    const t = truncateDrugFactsAndWarnings(labeled);
+    assert(t.marker && t.marker.toLowerCase() === marker.toLowerCase(),
+      'marker ' + marker + ' -> ' + t.marker);
+    assert(t.text === 'Aqua, Glycerin.', 'truncated text for ' + marker + ': ' + JSON.stringify(t));
+    assert(!/extra warning/i.test(t.text), 'must discard after marker');
+  }
+
+  // Mid-sentence uses / directions / caution must NOT truncate
+  assert(truncateDrugFactsAndWarnings('product that uses: water as solvent, Glycerin').marker === null);
+  assert(truncateDrugFactsAndWarnings('follow directions carefully with Glycerin').marker === null);
+  assert(truncateDrugFactsAndWarnings('use with caution when applying').marker === null);
+
+  // Ordinary ingredient names containing those words are not truncated away
+  const scoredUses = scoreCosmeticProduct({
+    ingredients_text: 'Aqua, Glycerin, Caprylic/Capric Triglyceride',
+  });
+  assert(scoredUses.drugFactsMarker == null);
+  assert(scoredUses.ingredientList.some(r => r.name === 'Caprylic/Capric Triglyceride' && r.matched));
+}
+
+// --- 3. Ingredients: mid-text after preamble ---
+{
+  assert(extractFromIngredientLabel('Marketing blurb. Ingredients: Aqua, Glycerin').startsWith('Ingredients'));
+  const names = namesOf({
+    ingredients_text: 'Marketing blurb. Ingredients: Aqua, Glycerin. Warnings: do not eat',
+  });
+  assert(names.join('|') === 'Aqua|Glycerin', JSON.stringify(names));
+  const scored = scoreCosmeticProduct({
+    ingredients_text: 'Preamble INGREDIENTS: Water, Glycerin. If swallowed call poison control',
+  });
+  // "if swallowed" truncates; Ingredients mid-text extracts the list first
+  assert(scored.drugFactsMarker === 'if swallowed', scored.drugFactsMarker);
+  assert(scored.ingredientList.map(r => r.name).join('|') === 'Water|Glycerin');
+
+  // Lone INGREDIENTS token dropped
+  const lone = namesOf({ ingredients_text: 'Water, INGREDIENTS, Glycerin' });
+  assert(!lone.some(n => /^ingredients$/i.test(n)), JSON.stringify(lone));
+  assert(lone.includes('Water') && lone.includes('Glycerin'));
+}
+
+// Caprylic/Capric still matches as whole name (slash fallback unchanged)
+assert(lookupCosmeticIngredient('Caprylic/Capric Triglyceride').inci === 'Caprylic/Capric Triglyceride');
+
+console.log('paren commas + drug facts truncation ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"paren/drug-facts assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -1063,6 +1211,7 @@ def main() -> int:
         test_photo_cache_rescore_and_stale_fallback,
         test_fragrance_french_synonyms_and_unparseable_rules,
         test_slash_joined_multilingual_inci_lookup,
+        test_paren_commas_and_drug_facts_truncation,
     ]
     failed = 0
     for test in tests:
