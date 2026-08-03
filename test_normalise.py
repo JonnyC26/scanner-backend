@@ -5,6 +5,7 @@ Combines:
 - PR #8 synonym / normalizeInci / noIngredientData / prefix-stereo rules
 - parse/classify fixes: digit-safe commas, Ingredients: prefix, may-contain,
   tidy-up, (nano), category fragments
+- photo-cache stale re-score and stale-beats-nothing fallback
 """
 
 from __future__ import annotations
@@ -559,6 +560,193 @@ console.log('prefix helper ok');
     print(proc.stdout.strip())
 
 
+def test_photo_cache_rescore_and_stale_fallback():
+    """Stale photo entries re-score locally; failed re-scans return stale cache."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
+
+const helperStart = src.indexOf('// Photo-rescued cache docs have no upstream');
+const helperEnd = src.indexOf('async function scanAndCache(barcode');
+if (helperStart < 0 || helperEnd < 0) throw new Error('could not locate photo cache helpers');
+if (helperEnd <= helperStart) throw new Error('photo cache helper slice inverted');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = '/workspace';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(helperStart, helperEnd)}
+module.exports = {
+  rescorePhotoCachedDocument,
+  staleCacheFallbackPayload,
+  scoreCosmeticProduct,
+  COSMETIC_TABLE_VERSION,
+};
+`;
+fs.writeFileSync('/tmp/photo_cache_helpers.js', block);
+const {
+  rescorePhotoCachedDocument,
+  staleCacheFallbackPayload,
+  scoreCosmeticProduct,
+  COSMETIC_TABLE_VERSION,
+} = require('/tmp/photo_cache_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// Guard: these helpers must not touch the network.
+const originalFetch = global.fetch;
+let fetchCalls = 0;
+global.fetch = async function (...args) {
+  fetchCalls += 1;
+  throw new Error('UNEXPECTED FETCH: ' + JSON.stringify(args[0]));
+};
+
+// --- FIX 1: stale photo entry re-scores from cached ingredients, no network ---
+{
+  const stalePhoto = {
+    productType: 'cosmetic',
+    source: 'photo',
+    productName: 'Rescued Toothpaste',
+    ingredients: 'Aqua, Glycerin, 1,2-Hexanediol, Sodium Fluoride',
+    score: 50,
+    scoreLabel: 'Good',
+    scoreColor: '#8BC34A',
+    coverageMatched: 1,
+    coverageTotal: 4,
+    ingredientFindings: '[]',
+    ingredientList: '[]',
+    tableVersion: '0.4',
+    explanation: 'Old explanation naming findings for score 50',
+    imageUrl: '',
+    cachedAt: Date.now() - (60 * 24 * 60 * 60 * 1000),
+  };
+
+  const beforeFetch = fetchCalls;
+  const rescored = rescorePhotoCachedDocument(stalePhoto);
+  assert(rescored, 'expected photo rescore payload');
+  assert(fetchCalls === beforeFetch, 'photo rescore must not call fetch/network');
+  assert(rescored.responseData.source === 'photo', 'source must stay photo');
+  assert(rescored.responseData.productName === 'Rescued Toothpaste', 'preserve name');
+  assert(rescored.responseData.ingredients === stalePhoto.ingredients, 'preserve ingredients text');
+  assert(rescored.responseData.tableVersion === COSMETIC_TABLE_VERSION,
+    'tableVersion must refresh to current: ' + rescored.responseData.tableVersion);
+  assert(rescored.responseData.cachedAt === undefined, 'cachedAt stripped from response payload');
+  assert(typeof rescored.responseData.score === 'number' || rescored.responseData.score === null,
+    'score must be recomputed');
+  assert(rescored.responseData.coverageTotal === 4, 'coverageTotal from re-parse');
+  assert(rescored.scored.coverageMatched >= 2, 'table should match aqua/glycerin/hexanediol');
+
+  // Outcome changed (score 50 / coverage 1 → live values) → drop stale explanation.
+  assert(rescored.responseData.score !== 50 || rescored.responseData.coverageMatched !== 1,
+    'test setup expects outcome to change from cached 50/1');
+  assert(!rescored.responseData.explanation,
+    'changed outcome must not retain previous explanation, got: ' + rescored.responseData.explanation);
+  assert(rescored.responseData.explanationPending === true,
+    'changed outcome must set explanationPending for deferred regeneration');
+
+  // Same score + coverage → keep explanation (no Haiku regen needed).
+  const live = scoreCosmeticProduct({ ingredients_text: stalePhoto.ingredients });
+  const unchanged = rescorePhotoCachedDocument({
+    ...stalePhoto,
+    score: live.score,
+    coverageMatched: live.coverageMatched,
+    coverageTotal: live.coverageTotal,
+    explanation: 'Still accurate for this score',
+  });
+  assert(unchanged.responseData.explanation === 'Still accurate for this score',
+    'unchanged outcome must keep explanation');
+  assert(unchanged.responseData.explanationPending === false,
+    'unchanged outcome must clear explanationPending');
+
+  // Empty ingredients → null (caller falls through to upstream)
+  assert(rescorePhotoCachedDocument({ source: 'photo', ingredients: '' }) === null);
+  assert(rescorePhotoCachedDocument({ source: 'photo', ingredients: '   ' }) === null);
+  assert(rescorePhotoCachedDocument({ source: 'photo' }) === null);
+}
+
+// --- FIX 2: stale beats nothing when re-scan throws ---
+{
+  const stale = {
+    productType: 'cosmetic',
+    source: 'photo',
+    productName: 'Stale Rescue',
+    ingredients: 'Aqua, Glycerin',
+    score: 90,
+    tableVersion: '0.4',
+    explanation: 'Kept on fallback path',
+    cachedAt: 1,
+  };
+  const fallback = staleCacheFallbackPayload(stale);
+  assert(fallback, 'expected fallback payload');
+  assert(fallback.productName === 'Stale Rescue');
+  assert(fallback.score === 90);
+  assert(fallback.explanation === 'Kept on fallback path',
+    'stale FALLBACK deliberately keeps its old explanation');
+  assert(fallback.cachedAt === undefined, 'cachedAt must not leak into response');
+  assert(staleCacheFallbackPayload(null) === null, 'no cache → no fallback');
+  assert(staleCacheFallbackPayload(undefined) === null);
+
+  // Simulate scanAndCache refresh failure path: prefer stale over propagating.
+  function refreshOrFallback(staleCached, refreshFn) {
+    try {
+      return { kind: 'fresh', data: refreshFn() };
+    } catch (err) {
+      const fb = staleCacheFallbackPayload(staleCached);
+      if (fb) return { kind: 'stale-fallback', data: fb, reason: err.message };
+      throw err;
+    }
+  }
+
+  const notFound = () => {
+    const e = new Error('Product not found');
+    e.statusCode = 404;
+    throw e;
+  };
+  const networkBoom = () => { throw new Error('fetch failed'); };
+
+  const r1 = refreshOrFallback(stale, notFound);
+  assert(r1.kind === 'stale-fallback', '404 must fall back to stale');
+  assert(r1.data.productName === 'Stale Rescue');
+  assert(r1.data.explanation === 'Kept on fallback path', 'fallback keeps explanation');
+
+  const r2 = refreshOrFallback(stale, networkBoom);
+  assert(r2.kind === 'stale-fallback', 'network error must fall back to stale');
+
+  let threw = false;
+  try {
+    refreshOrFallback(null, notFound);
+  } catch (e) {
+    threw = e.statusCode === 404;
+  }
+  assert(threw, 'with no cache, 404 must still propagate');
+}
+
+global.fetch = originalFetch;
+console.log('photo cache rescore + stale fallback ok', 'table=' + COSMETIC_TABLE_VERSION);
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"photo cache assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -570,6 +758,7 @@ def main() -> int:
         test_hazard_table_has_digit_comma_chemicals,
         test_cosmetic_parse_and_classify,
         test_strip_leading_prefix_helper_via_node,
+        test_photo_cache_rescore_and_stale_fallback,
     ]
     failed = 0
     for test in tests:

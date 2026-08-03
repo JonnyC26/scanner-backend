@@ -1567,7 +1567,61 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   return responseData;
 }
 
+// Photo-rescued cache docs have no upstream to re-fetch from. Re-score from
+// the stored ingredients text when the entry is stale (TTL or tableVersion).
+// Returns null when ingredients are missing — caller falls through to upstream.
+function rescorePhotoCachedDocument(cached) {
+  const ingredientsText = String((cached && cached.ingredients) || '').trim();
+  if (!ingredientsText) return null;
+
+  const scored = scoreCosmeticProduct({ ingredients_text: ingredientsText });
+  const responseData = {
+    ...cached,
+    productType: 'cosmetic',
+    source: 'photo',
+    ingredients: ingredientsText,
+    score: scored.score,
+    scoreBreakdown: JSON.stringify(scored.scoreBreakdown),
+    scoreColor: scored.scoreColor,
+    scoreLabel: scored.scoreLabel,
+    coverageMatched: scored.coverageMatched,
+    coverageTotal: scored.coverageTotal,
+    noIngredientData: !!scored.noIngredientData,
+    ingredientFindings: JSON.stringify(scored.ingredientFindings),
+    ingredientList: JSON.stringify(scored.ingredientList || []),
+    tableVersion: COSMETIC_TABLE_VERSION,
+  };
+  delete responseData.cachedAt;
+
+  // Drop a stale Haiku explanation when the scored outcome changed — otherwise
+  // hasUsableExplanation keeps the old sentence (written for the previous
+  // score/findings) after a tableVersion bump.
+  const outcomeChanged =
+    scored.score !== cached.score ||
+    scored.coverageMatched !== cached.coverageMatched ||
+    scored.coverageTotal !== cached.coverageTotal;
+  if (outcomeChanged) {
+    responseData.explanation = null;
+    responseData.explanationPending = true;
+  } else if (responseData.explanation && String(responseData.explanation).trim()) {
+    responseData.explanationPending = false;
+  }
+
+  return { responseData, scored, unmatchedNames: scored.unmatchedNames || [] };
+}
+
+// When a re-scan fails, prefer a stale cache over a false "not found".
+// Returns the response payload, or null if there is nothing to fall back to.
+function staleCacheFallbackPayload(staleCached) {
+  if (!staleCached) return null;
+  const { cachedAt, ...responseData } = staleCached;
+  if (!responseData.productType) responseData.productType = 'food';
+  return responseData;
+}
+
 async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation = false } = {}) {
+  let staleCached = null;
+
   if (!skipCacheCheck) {
     try {
       const cacheDoc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
@@ -1596,10 +1650,57 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
           }
           return responseData;
         }
+
+        // Keep the stale doc for photo local re-score and stale-beats-nothing.
+        staleCached = cached;
         if (tableStale) {
           console.log(`[CACHE STALE TABLE] barcode=${barcode} cached=${cached.tableVersion} current=${COSMETIC_TABLE_VERSION} — re-scanning`);
         } else {
           console.log(`[CACHE STALE] barcode=${barcode} age=${Math.round(age / 3600000)}h — re-scanning`);
+        }
+
+        // Photo entries have no OFF/OBF upstream — re-score from cached text.
+        if (cached.source === 'photo') {
+          const rescored = rescorePhotoCachedDocument(cached);
+          if (rescored) {
+            console.log(`[CACHE PHOTO RESCORE] barcode=${barcode} coverage=${rescored.scored.coverageMatched}/${rescored.scored.coverageTotal} score=${rescored.scored.score} table=${COSMETIC_TABLE_VERSION}`);
+            const unmatchedNames = rescored.unmatchedNames;
+            const namesJoined = unmatchedNames.join('|');
+            const namesTruncated = namesJoined.length > 200
+              ? namesJoined.slice(0, 200) + '...'
+              : namesJoined;
+            console.log(`[COSMETIC UNMATCHED] barcode=${barcode} count=${unmatchedNames.length} names=${namesTruncated}`);
+            recordUnmatchedInci(barcode, unmatchedNames);
+
+            const responseData = rescored.responseData;
+            try {
+              const cachePayload = {
+                ...responseData,
+                cachedAt: Date.now(),
+              };
+              if (responseData.ingredientList) {
+                cachePayload.ingredientList = stringifyIngredientListForCache(
+                  (() => { try { return JSON.parse(responseData.ingredientList); } catch (_) { return []; } })(),
+                  barcode
+                );
+              }
+              await db.collection(CACHE_COLLECTION).doc(barcode).set(cachePayload);
+            } catch (cacheWriteErr) {
+              console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
+            }
+
+            if (!skipExplanation && !hasUsableExplanation(responseData)) {
+              try {
+                const explanation = await ensureExplanation(barcode, responseData);
+                responseData.explanation = explanation;
+                responseData.explanationPending = false;
+              } catch (fillErr) {
+                console.log(`[EXPLAIN FILL ERROR] barcode=${barcode} ${fillErr.message}`);
+              }
+            }
+            return responseData;
+          }
+          console.log(`[CACHE PHOTO RESCORE SKIP] barcode=${barcode} reason=no_ingredients`);
         }
       }
     } catch (cacheErr) {
@@ -1607,16 +1708,38 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
     }
   }
 
-  const { productType, product } = await resolveProductType(barcode);
-  if (!product) {
-    const notFoundErr = new Error('Product not found');
-    notFoundErr.statusCode = 404;
-    throw notFoundErr;
-  }
+  let responseData;
+  try {
+    const { productType, product } = await resolveProductType(barcode);
+    if (!product) {
+      const notFoundErr = new Error('Product not found');
+      notFoundErr.statusCode = 404;
+      throw notFoundErr;
+    }
 
-  const responseData = productType === 'cosmetic'
-    ? await scanAndCacheCosmetic(barcode, product, { skipExplanation })
-    : await scanAndCacheFood(barcode, product, { skipExplanation });
+    responseData = productType === 'cosmetic'
+      ? await scanAndCacheCosmetic(barcode, product, { skipExplanation })
+      : await scanAndCacheFood(barcode, product, { skipExplanation });
+  } catch (refreshErr) {
+    // Stale beats nothing: a slightly old answer is better than a false 404
+    // (photo-rescued products, OFF/OBF outages, network errors).
+    const fallback = staleCacheFallbackPayload(staleCached);
+    if (fallback) {
+      const reason = refreshErr.statusCode === 404 ? 'not_found' : (refreshErr.message || 'refresh_failed');
+      console.log(`[CACHE STALE FALLBACK] barcode=${barcode} reason=${reason}`);
+      if (!skipExplanation && !hasUsableExplanation(fallback)) {
+        try {
+          const explanation = await ensureExplanation(barcode, fallback);
+          fallback.explanation = explanation;
+          fallback.explanationPending = false;
+        } catch (fillErr) {
+          console.log(`[EXPLAIN FILL ERROR] barcode=${barcode} ${fillErr.message}`);
+        }
+      }
+      return fallback;
+    }
+    throw refreshErr;
+  }
 
   // Products found without an ingredient list are not worth caching — OBF may
   // gain ingredients later, and "0 of 0" is not a durable result.
