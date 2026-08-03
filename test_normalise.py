@@ -51,9 +51,44 @@ def test_seeded_and_extended_pairs_present():
         "fractionated coconut oil": "Cocos Nucifera Oil",
         "tea tree oil": "Melaleuca Alternifolia Leaf Oil",
         "clove oil": "Eugenia Caryophyllus Leaf Oil",
+        # Highest-value fragrance aliases + French label / OCR variants
+        "fragrance": "Parfum",
+        "perfume": "Parfum",
+        "eau": "Aqua",
+        "glycérine": "Glycerin",
+        "glycerine": "Glycerin",
+        "phénoxyéthanol": "Phenoxyethanol",
+        "phenoxyethanol": "Phenoxyethanol",
+        "diméthicone": "Dimethicone",
+        "carbomère": "Carbomer",
+        "carbomere": "Carbomer",
+        "tocophérol": "Tocopherol",
+        "vaseline": "Petrolatum",
+        "gomme xanthane": "Xanthan Gum",
+        "cholestérol": "Cholesterol",
+        "hyaluronate de sodium": "Sodium Hyaluronate",
+        "edta disodique": "Disodium EDTA",
+        "céteareth-20": "Ceteareth-20",
+        "alcool cétéarylique": "Cetearyl Alcohol",
+        "alcool cetearylique": "Cetearyl Alcohol",
+        "alcool cétylique": "Cetyl Alcohol",
+        "alcool cetylique": "Cetyl Alcohol",
+        "éthylhexylglycérine": "Ethylhexylglycerin",
+        "ethylhexylglycerine": "Ethylhexylglycerin",
+        "méthosulfate de béhentrimonium": "Behentrimonium Methosulfate",
+        "methosulfate de behentrimonium": "Behentrimonium Methosulfate",
+        "céramide NP": "Ceramide NP",
+        "ceramide NP": "Ceramide NP",
+        "céramide AP": "Ceramide AP",
+        "ceramide AP": "Ceramide AP",
+        "céramide EOP": "Ceramide EOP",
+        "ceramide EOP": "Ceramide EOP",
+        "triglycérides caprylique": "Caprylic/Capric Triglyceride",
+        "triglycerides caprylique": "Caprylic/Capric Triglyceride",
     }
     for common, target in required.items():
         assert synonyms.get(common) == target, f"{common} -> {synonyms.get(common)}"
+    assert "caprique" not in synonyms, "must not add ambiguous fragment 'caprique'"
 
 
 def _run_node_lookup_assertions() -> None:
@@ -747,6 +782,157 @@ console.log('photo cache rescore + stale fallback ok', 'table=' + COSMETIC_TABLE
     print(proc.stdout.strip())
 
 
+def test_fragrance_french_synonyms_and_unparseable_rules():
+    """Fragrance/Parfum + French synonyms; conservative unparseable filters."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = '/workspace';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+module.exports = {
+  lookupCosmeticIngredient,
+  scoreCosmeticProduct,
+  isUnparseableIngredientName,
+  parseCosmeticIngredientList,
+};
+`;
+fs.writeFileSync('/tmp/syn_unparse_helpers.js', block);
+const {
+  lookupCosmeticIngredient,
+  scoreCosmeticProduct,
+  isUnparseableIngredientName,
+  parseCosmeticIngredientList,
+} = require('/tmp/syn_unparse_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// --- Fragrance / perfume -> Parfum ---
+for (const name of ['Fragrance', 'fragrance', 'Perfume', 'perfume']) {
+  const hit = lookupCosmeticIngredient(name);
+  assert(hit && hit.inci === 'Parfum', name + ' -> ' + (hit && hit.inci));
+}
+
+// --- Accented + unaccented French keys ---
+const frenchPairs = [
+  ['eau', 'Aqua'],
+  ['glycérine', 'Glycerin'],
+  ['glycerine', 'Glycerin'],
+  ['phénoxyéthanol', 'Phenoxyethanol'],
+  ['phenoxyethanol', 'Phenoxyethanol'],
+  ['diméthicone', 'Dimethicone'],
+  ['dimethicone', 'Dimethicone'],
+  ['carbomère', 'Carbomer'],
+  ['carbomere', 'Carbomer'],
+  ['tocophérol', 'Tocopherol'],
+  ['vaseline', 'Petrolatum'],
+  ['gomme xanthane', 'Xanthan Gum'],
+  ['cholestérol', 'Cholesterol'],
+  ['hyaluronate de sodium', 'Sodium Hyaluronate'],
+  ['edta disodique', 'Disodium EDTA'],
+  ['céteareth-20', 'Ceteareth-20'],
+  ['ceteareth-20', 'Ceteareth-20'],
+  ['alcool cétéarylique', 'Cetearyl Alcohol'],
+  ['alcool cetearylique', 'Cetearyl Alcohol'],
+  ['alcool cétylique', 'Cetyl Alcohol'],
+  ['alcool cetylique', 'Cetyl Alcohol'],
+  ['éthylhexylglycérine', 'Ethylhexylglycerin'],
+  ['ethylhexylglycerine', 'Ethylhexylglycerin'],
+  ['méthosulfate de béhentrimonium', 'Behentrimonium Methosulfate'],
+  ['methosulfate de behentrimonium', 'Behentrimonium Methosulfate'],
+  ['céramide NP', 'Ceramide NP'],
+  ['ceramide NP', 'Ceramide NP'],
+  ['céramide AP', 'Ceramide AP'],
+  ['ceramide AP', 'Ceramide AP'],
+  ['céramide EOP', 'Ceramide EOP'],
+  ['ceramide EOP', 'Ceramide EOP'],
+  ['triglycérides caprylique', 'Caprylic/Capric Triglyceride'],
+  ['triglycerides caprylique', 'Caprylic/Capric Triglyceride'],
+];
+for (const [common, target] of frenchPairs) {
+  const hit = lookupCosmeticIngredient(common);
+  assert(hit && hit.inci === target, common + ' -> ' + (hit && hit.inci) + ' expected ' + target);
+}
+
+// --- Unparseable rules fire on real diagnostic junk ---
+const junk = [
+  // a) no Latin letters (Arabic passage)
+  'مستحضر تجميلي للبشرة',
+  // b) longer than 70 chars (packaging / address paste)
+  'Registered trademark of ® BURNUS GMBH Casablanca street address line extra padding XX',
+  // c) URL / email markers
+  'www.IRCOSLABORATOIRES.COM',
+  'http://example.org/label',
+  'support@nivea.example',
+  'DISTRIBUÉ PAR NIVEA.COM FRANCE',
+  // d) 4+ consecutive digits (barcode / phone) — not a CI colorant
+  '3014260214399',
+  'Call 0612345678 for info',
+];
+for (const name of junk) {
+  assert(isUnparseableIngredientName(name) === true, 'should be unparseable: ' + name);
+}
+
+// Most important: ordinary ingredients must NOT be caught
+const keep = [
+  'Sodium Acrylate/Sodium Acryloyldimethyl Taurate Copolymer',
+  'CI 77491',
+  'PEG-150 Pentaerythrityl Tetrastearate',
+  'Steareth-100',
+  'Aqua',
+  '1,2-Hexanediol',
+  'Glycerin',
+];
+for (const name of keep) {
+  assert(isUnparseableIngredientName(name) === false, 'must NOT be unparseable: ' + name);
+  assert(name.length <= 70, 'test fixture longer than 70: ' + name + ' len=' + name.length);
+}
+
+// Score path: junk excluded from coverage + unmatched; kept in ingredientList
+{
+  const scored = scoreCosmeticProduct({
+    ingredients_text:
+      'Aqua, Glycerin, www.IRCOSLABORATOIRES.COM, مستحضر تجميلي, Fragrance, 3014260214399',
+  });
+  assert(scored.unparseableCount === 3, 'unparseableCount=' + scored.unparseableCount);
+  assert(scored.coverageTotal === 3, 'coverageTotal should be Aqua+Glycerin+Fragrance, got ' + scored.coverageTotal);
+  assert(scored.coverageMatched === 3, 'all three should match, got ' + scored.coverageMatched);
+  assert(!scored.unmatchedNames.some(n => /www\.|مستحضر|3014260214399/i.test(n)),
+    'unparseable must not enter unmatchedNames: ' + JSON.stringify(scored.unmatchedNames));
+  const listed = scored.ingredientList.filter(r => r.unparseable);
+  assert(listed.length === 3, 'ingredientList must still show unparseable rows');
+  assert(listed.every(r => r.countsTowardScore === false && r.matched === false));
+  const frag = scored.ingredientList.find(r => /fragrance/i.test(r.name));
+  assert(frag && frag.inci === 'Parfum' && frag.matched, 'Fragrance should match Parfum via synonym');
+}
+
+console.log('fragrance/french synonyms + unparseable ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"fragrance/unparseable assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -759,6 +945,7 @@ def main() -> int:
         test_cosmetic_parse_and_classify,
         test_strip_leading_prefix_helper_via_node,
         test_photo_cache_rescore_and_stale_fallback,
+        test_fragrance_french_synonyms_and_unparseable_rules,
     ]
     failed = 0
     for test in tests:
