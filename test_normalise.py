@@ -1382,6 +1382,139 @@ console.log('photo below-gate + quality + upstream recheck ok');
     print(proc.stdout.strip())
 
 
+def test_request_guards_rate_limit_and_vision_cap():
+    """Rate-limit buckets, sweep, bearer parse, and UTC vision daily cap."""
+    script = r"""
+const fs = require('fs');
+const src = fs.readFileSync('/workspace/index.js', 'utf8');
+const start = src.indexOf('// ── Request guards (rate limits + vision bill backstop)');
+const end = src.indexOf('// ── Cosmetic ingredient table');
+if (start < 0 || end < 0 || end <= start) throw new Error('could not locate request guards');
+
+const block = `
+${src.slice(start, end)}
+module.exports = {
+  checkRateLimit,
+  sweepRateLimitBuckets,
+  rateLimitBuckets,
+  getClientIp,
+  parseBearerToken,
+  tryConsumeVisionSlot,
+  utcDayKey,
+  VISION_DAILY_CAP,
+  RATE_LIMIT_PHOTO_PER_UID,
+  RATE_LIMIT_PHOTO_PER_IP,
+  RATE_LIMIT_SCAN_SEARCH_PER_IP,
+  RATE_LIMIT_ADMIN_PER_IP,
+  RATE_LIMIT_WINDOW_MS,
+  // expose counters for day-rollover assertions
+  getVisionState: () => ({ visionDayKey, visionDayCount }),
+  setVisionState: (day, count) => { visionDayKey = day; visionDayCount = count; },
+};
+`;
+fs.writeFileSync('/tmp/request_guards.js', block);
+const g = require('/tmp/request_guards.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+assert(g.VISION_DAILY_CAP === 500, 'VISION_DAILY_CAP must be 500');
+assert(g.RATE_LIMIT_PHOTO_PER_UID === 20);
+assert(g.RATE_LIMIT_PHOTO_PER_IP === 60);
+assert(g.RATE_LIMIT_SCAN_SEARCH_PER_IP === 300);
+assert(g.RATE_LIMIT_ADMIN_PER_IP === 10);
+assert(g.RATE_LIMIT_WINDOW_MS === 60 * 60 * 1000);
+
+// Bearer token parsing — missing/malformed must fail closed.
+assert(g.parseBearerToken(undefined) === null);
+assert(g.parseBearerToken(null) === null);
+assert(g.parseBearerToken('') === null);
+assert(g.parseBearerToken('Basic abc') === null);
+assert(g.parseBearerToken('Bearer') === null);
+assert(g.parseBearerToken('Bearer ') === null);
+assert(g.parseBearerToken('bearer tok.en.here') === 'tok.en.here');
+assert(g.parseBearerToken('Bearer tok.en.here') === 'tok.en.here');
+assert(g.parseBearerToken('Bearer  tok.en.here') === 'tok.en.here', 'extra whitespace still parses');
+assert(g.parseBearerToken('Bearer tok extra') === 'tok', 'takes first token only');
+
+// Client IP prefers first X-Forwarded-For hop.
+assert(g.getClientIp({ headers: { 'x-forwarded-for': '1.2.3.4, 5.6.7.8' }, ip: '9.9.9.9' }) === '1.2.3.4');
+assert(g.getClientIp({ headers: {}, ip: '10.0.0.1' }) === '10.0.0.1');
+assert(g.getClientIp({ headers: {} }) === 'unknown');
+
+// Rate limit: allow up to N, then deny with retryAfter.
+{
+  g.rateLimitBuckets.clear();
+  const now = 1_000_000;
+  const key = 'test:uid:a';
+  for (let i = 0; i < 3; i++) {
+    const r = g.checkRateLimit(key, 3, now, 3600_000);
+    assert(r.allowed === true, 'request ' + i + ' should be allowed');
+  }
+  const denied = g.checkRateLimit(key, 3, now, 3600_000);
+  assert(denied.allowed === false, '4th request must be denied');
+  assert(denied.retryAfter >= 1, 'retryAfter must be >= 1s');
+  // Still denied later in the same window without advancing past reset.
+  const still = g.checkRateLimit(key, 3, now + 1000, 3600_000);
+  assert(still.allowed === false);
+
+  // New window after resetAt.
+  const resetAt = g.rateLimitBuckets.get(key).resetAt;
+  const fresh = g.checkRateLimit(key, 3, resetAt, 3600_000);
+  assert(fresh.allowed === true, 'window rollover must allow again');
+}
+
+// Sweep removes expired buckets and leaves live ones.
+{
+  g.rateLimitBuckets.clear();
+  const now = 2_000_000;
+  g.checkRateLimit('live', 5, now, 60_000);
+  g.rateLimitBuckets.set('stale', { count: 9, resetAt: now - 1 });
+  g.sweepRateLimitBuckets(now);
+  assert(g.rateLimitBuckets.has('live') === true, 'live bucket kept');
+  assert(g.rateLimitBuckets.has('stale') === false, 'expired bucket swept');
+}
+
+// Vision daily cap: exactly VISION_DAILY_CAP allowed, then false; new UTC day resets.
+{
+  const day1 = Date.parse('2026-08-03T12:00:00.000Z');
+  const day2 = Date.parse('2026-08-04T00:00:00.000Z');
+  assert(g.utcDayKey(day1) === '2026-08-03');
+  assert(g.utcDayKey(day2) === '2026-08-04');
+
+  g.setVisionState('', 0);
+  for (let i = 0; i < g.VISION_DAILY_CAP; i++) {
+    assert(g.tryConsumeVisionSlot(day1) === true, 'slot ' + i + ' should consume');
+  }
+  assert(g.tryConsumeVisionSlot(day1) === false, 'over cap must reject');
+  assert(g.tryConsumeVisionSlot(day1) === false, 'still capped');
+  const st = g.getVisionState();
+  assert(st.visionDayKey === '2026-08-03');
+  assert(st.visionDayCount === g.VISION_DAILY_CAP);
+
+  assert(g.tryConsumeVisionSlot(day2) === true, 'new UTC day resets cap');
+  assert(g.getVisionState().visionDayKey === '2026-08-04');
+  assert(g.getVisionState().visionDayCount === 1);
+}
+
+console.log('request guards ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"request guard assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -1398,6 +1531,7 @@ def main() -> int:
         test_slash_joined_multilingual_inci_lookup,
         test_paren_commas_and_drug_facts_truncation,
         test_photo_cache_below_gate_and_quality,
+        test_request_guards_rate_limit_and_vision_cap,
     ]
     failed = 0
     for test in tests:
