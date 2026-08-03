@@ -2266,5 +2266,285 @@ app.get('/admin/prescore', (req, res) => {
   res.json({ status: 'started', limit });
 });
 
+// ---------------------------------------------------------------------------
+// Batch diagnostic: measure cosmetic coverage across popular OBF products.
+// Measurement only — no Anthropic, no productCache, no unmatchedInci /
+// rawObservations writes. Reuses resolveProductType + scoreCosmeticProduct.
+// ---------------------------------------------------------------------------
+const DIAGNOSTIC_COLLECTION = 'diagnosticRuns';
+const DIAGNOSTIC_EXAMPLE_CAP = 50;
+const DIAGNOSTIC_TOP_UNMATCHED_CAP = 200;
+const DIAGNOSTIC_FIRESTORE_MAX_BYTES = 900 * 1024; // headroom under 1MB
+let diagnoseRunning = false;
+
+async function fetchPopularCosmeticBarcodes(limit) {
+  const barcodes = [];
+  const pageSize = 100;
+  let page = 1;
+  while (barcodes.length < limit) {
+    const url = `https://world.openbeautyfacts.org/api/v2/search?sort_by=unique_scans_n&page_size=${pageSize}&page=${page}&fields=code`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
+    });
+    if (!res.ok) {
+      console.log(`[DIAGNOSE] barcode fetch failed on page ${page}, status=${res.status}`);
+      break;
+    }
+    const data = await res.json();
+    const codes = (data.products || []).map(p => p.code).filter(Boolean);
+    if (codes.length === 0) break;
+    barcodes.push(...codes);
+    page++;
+    // Same pacing as runPrescoreJob — stay under OBF/OFF search rate limits.
+    await new Promise(r => setTimeout(r, 7000));
+  }
+  return barcodes.slice(0, limit);
+}
+
+function coverageBucketKey(coverage) {
+  const pct = coverage * 100;
+  if (pct < 20) return '0-20';
+  if (pct < 40) return '20-40';
+  if (pct < 60) return '40-60';
+  if (pct < 80) return '60-80';
+  return '80-100';
+}
+
+function truncateDiagnosticReport(report) {
+  const truncatedFields = [];
+  const shrinkList = (field, minKeep) => {
+    const val = report[field];
+    if (Array.isArray(val) && val.length > minKeep) {
+      report[field] = val.slice(0, Math.max(minKeep, Math.floor(val.length * 0.7)));
+      truncatedFields.push(field);
+      return true;
+    }
+    if (val && Array.isArray(val.examples) && val.examples.length > minKeep) {
+      val.examples = val.examples.slice(0, Math.max(minKeep, Math.floor(val.examples.length * 0.7)));
+      truncatedFields.push(field);
+      return true;
+    }
+    return false;
+  };
+
+  let json = JSON.stringify(report);
+  while (Buffer.byteLength(json, 'utf8') > DIAGNOSTIC_FIRESTORE_MAX_BYTES) {
+    const shrunk =
+      shrinkList('topUnmatched', 20) ||
+      shrinkList('classifiedFood', 5) ||
+      shrinkList('noIngredientData', 5);
+    if (!shrunk) break;
+    json = JSON.stringify(report);
+  }
+  if (truncatedFields.length > 0) {
+    report.truncatedFields = [...new Set(truncatedFields)];
+  }
+  return report;
+}
+
+async function runDiagnoseJob(limit) {
+  diagnoseRunning = true;
+  const startedAt = Date.now();
+  console.log(`[DIAGNOSE] start limit=${limit}`);
+
+  const tallies = {
+    productsAttempted: 0,
+    notFound: 0,
+    classifiedFood: 0,
+    classifiedFoodExamples: [],
+    classifiedCosmetic: 0,
+    noIngredientData: 0,
+    noIngredientDataExamples: [],
+    scored: 0,
+    belowGate: 0,
+    errors: 0,
+    coverageSum: 0,
+    coverageCount: 0,
+    coverageBuckets: { '0-20': 0, '20-40': 0, '40-60': 0, '60-80': 0, '80-100': 0 },
+  };
+  // name(normalized) -> { name, count, exampleBarcode }
+  const unmatchedTally = new Map();
+
+  try {
+    const barcodes = await fetchPopularCosmeticBarcodes(limit);
+    console.log(`[DIAGNOSE] fetched ${barcodes.length} barcodes, beginning measure loop`);
+
+    for (const barcode of barcodes) {
+      tallies.productsAttempted++;
+      try {
+        const { productType, product } = await resolveProductType(barcode);
+
+        if (!product || !productType) {
+          tallies.notFound++;
+        } else if (productType === 'food') {
+          tallies.classifiedFood++;
+          if (tallies.classifiedFoodExamples.length < DIAGNOSTIC_EXAMPLE_CAP) {
+            tallies.classifiedFoodExamples.push(barcode);
+          }
+        } else if (productType === 'cosmetic') {
+          tallies.classifiedCosmetic++;
+          // Pure measurement: score only — no explanations, cache, or side-effect logs.
+          const scored = scoreCosmeticProduct(product);
+
+          if (scored.coverageTotal > 0) {
+            tallies.coverageSum += scored.coverage;
+            tallies.coverageCount++;
+            tallies.coverageBuckets[coverageBucketKey(scored.coverage)]++;
+          }
+
+          if (scored.noIngredientData || scored.coverageTotal === 0) {
+            tallies.noIngredientData++;
+            if (tallies.noIngredientDataExamples.length < DIAGNOSTIC_EXAMPLE_CAP) {
+              tallies.noIngredientDataExamples.push(barcode);
+            }
+          } else if (scored.score === null) {
+            tallies.belowGate++;
+          } else {
+            tallies.scored++;
+          }
+
+          for (const name of scored.unmatchedNames || []) {
+            const key = normalizeInci(name);
+            if (!key) continue;
+            const prev = unmatchedTally.get(key);
+            if (prev) {
+              prev.count++;
+            } else {
+              unmatchedTally.set(key, { name, count: 1, exampleBarcode: barcode });
+            }
+          }
+        }
+      } catch (err) {
+        tallies.errors++;
+        console.log(`[DIAGNOSE] error barcode=${barcode} ${err.message}`);
+      }
+
+      if (tallies.productsAttempted % 25 === 0) {
+        console.log(
+          `[DIAGNOSE] progress n=${tallies.productsAttempted} found=${tallies.classifiedCosmetic + tallies.classifiedFood} scored=${tallies.scored}`
+        );
+      }
+      // Same product-read pacing as runPrescoreJob (resolveProductType hits OFF/OBF).
+      await new Promise(r => setTimeout(r, 4500));
+    }
+
+    const coverageAverage = tallies.coverageCount > 0
+      ? tallies.coverageSum / tallies.coverageCount
+      : null;
+
+    const topUnmatched = [...unmatchedTally.values()]
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+      .slice(0, DIAGNOSTIC_TOP_UNMATCHED_CAP);
+
+    const report = truncateDiagnosticReport({
+      startedAt,
+      finishedAt: Date.now(),
+      limit,
+      tableVersion: COSMETIC_TABLE_VERSION,
+      productsAttempted: tallies.productsAttempted,
+      notFound: tallies.notFound,
+      classifiedFood: {
+        count: tallies.classifiedFood,
+        examples: tallies.classifiedFoodExamples,
+      },
+      classifiedCosmetic: tallies.classifiedCosmetic,
+      noIngredientData: {
+        count: tallies.noIngredientData,
+        examples: tallies.noIngredientDataExamples,
+      },
+      scored: tallies.scored,
+      belowGate: tallies.belowGate,
+      errors: tallies.errors,
+      coverageAverage,
+      coverageBuckets: tallies.coverageBuckets,
+      topUnmatched,
+    });
+
+    try {
+      const docRef = await db.collection(DIAGNOSTIC_COLLECTION).add(report);
+      console.log(
+        `[DIAGNOSE] done attempted=${tallies.productsAttempted} scored=${tallies.scored} avgCoverage=${coverageAverage == null ? 'n/a' : coverageAverage.toFixed(3)} topUnmatched=${topUnmatched.length} doc=${docRef.id}`
+      );
+    } catch (writeErr) {
+      console.log(`[DIAGNOSE] report write failed: ${writeErr.message}`);
+      console.log(
+        `[DIAGNOSE] done attempted=${tallies.productsAttempted} scored=${tallies.scored} avgCoverage=${coverageAverage == null ? 'n/a' : coverageAverage.toFixed(3)} topUnmatched=${topUnmatched.length}`
+      );
+    }
+  } catch (err) {
+    console.log(`[DIAGNOSE] job crashed: ${err.message}`);
+    try {
+      await db.collection(DIAGNOSTIC_COLLECTION).add({
+        startedAt,
+        finishedAt: Date.now(),
+        limit,
+        tableVersion: COSMETIC_TABLE_VERSION,
+        status: 'crashed',
+        error: err.message,
+        productsAttempted: tallies.productsAttempted,
+        notFound: tallies.notFound,
+        classifiedFood: {
+          count: tallies.classifiedFood,
+          examples: tallies.classifiedFoodExamples,
+        },
+        classifiedCosmetic: tallies.classifiedCosmetic,
+        noIngredientData: {
+          count: tallies.noIngredientData,
+          examples: tallies.noIngredientDataExamples,
+        },
+        scored: tallies.scored,
+        belowGate: tallies.belowGate,
+        errors: tallies.errors,
+      });
+    } catch (writeErr) {
+      console.log(`[DIAGNOSE] crash report write failed: ${writeErr.message}`);
+    }
+  } finally {
+    diagnoseRunning = false;
+  }
+}
+
+app.get('/admin/diagnose', (req, res) => {
+  if (req.query.secret !== PRESCORE_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (diagnoseRunning) {
+    return res.json({ status: 'already running' });
+  }
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
+  // Fire-and-forget — progress in Railway logs; report lands in diagnosticRuns.
+  runDiagnoseJob(limit);
+  res.json({ status: 'started', limit });
+});
+
+app.get('/admin/diagnose/report', async (req, res) => {
+  if (req.query.secret !== PRESCORE_SECRET) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const runId = (req.query.runId || '').toString().trim();
+    if (runId) {
+      const doc = await db.collection(DIAGNOSTIC_COLLECTION).doc(runId).get();
+      if (!doc.exists) {
+        return res.status(404).json({ error: 'Report not found' });
+      }
+      return res.json({ id: doc.id, ...doc.data() });
+    }
+
+    const snap = await db.collection(DIAGNOSTIC_COLLECTION)
+      .orderBy('startedAt', 'desc')
+      .limit(1)
+      .get();
+    if (snap.empty) {
+      return res.status(404).json({ error: 'No diagnostic runs yet' });
+    }
+    const doc = snap.docs[0];
+    return res.json({ id: doc.id, ...doc.data() });
+  } catch (err) {
+    console.log(`[DIAGNOSE] report read failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));
