@@ -1400,16 +1400,22 @@ module.exports = {
   getClientIp,
   parseBearerToken,
   tryConsumeVisionSlot,
+  getVisionCallsToday,
   utcDayKey,
   VISION_DAILY_CAP,
+  VISION_CAP_WARNING_RATIO,
   RATE_LIMIT_PHOTO_PER_UID,
   RATE_LIMIT_PHOTO_PER_IP,
   RATE_LIMIT_SCAN_SEARCH_PER_IP,
   RATE_LIMIT_ADMIN_PER_IP,
   RATE_LIMIT_WINDOW_MS,
   // expose counters for day-rollover assertions
-  getVisionState: () => ({ visionDayKey, visionDayCount }),
-  setVisionState: (day, count) => { visionDayKey = day; visionDayCount = count; },
+  getVisionState: () => ({ visionDayKey, visionDayCount, visionCapWarningLoggedForDay }),
+  setVisionState: (day, count, warningDay = '') => {
+    visionDayKey = day;
+    visionDayCount = count;
+    visionCapWarningLoggedForDay = warningDay;
+  },
 };
 `;
 fs.writeFileSync('/tmp/request_guards.js', block);
@@ -1420,6 +1426,7 @@ function assert(cond, msg) {
 }
 
 assert(g.VISION_DAILY_CAP === 500, 'VISION_DAILY_CAP must be 500');
+assert(g.VISION_CAP_WARNING_RATIO === 0.8);
 assert(g.RATE_LIMIT_PHOTO_PER_UID === 20);
 assert(g.RATE_LIMIT_PHOTO_PER_IP === 60);
 assert(g.RATE_LIMIT_SCAN_SEARCH_PER_IP === 300);
@@ -1483,19 +1490,53 @@ assert(g.getClientIp({ headers: {} }) === 'unknown');
   assert(g.utcDayKey(day1) === '2026-08-03');
   assert(g.utcDayKey(day2) === '2026-08-04');
 
-  g.setVisionState('', 0);
+  g.setVisionState('', 0, '');
+  const warnAt = Math.ceil(g.VISION_DAILY_CAP * g.VISION_CAP_WARNING_RATIO);
+  assert(warnAt === 400, '80% of 500 is 400');
+
+  // Capture console.log for the once-per-day warning.
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => { logs.push(args.join(' ')); };
+
   for (let i = 0; i < g.VISION_DAILY_CAP; i++) {
     assert(g.tryConsumeVisionSlot(day1) === true, 'slot ' + i + ' should consume');
   }
+  console.log = originalLog;
+
+  const warnings = logs.filter(l => l.includes('[VISION CAP WARNING]'));
+  assert(warnings.length === 1, 'warning must log exactly once, got ' + warnings.length);
+  assert(warnings[0].includes('used=' + warnAt), 'warning at first cross of 80%: ' + warnings[0]);
+  assert(warnings[0].includes('cap=' + g.VISION_DAILY_CAP));
+  assert(g.getVisionState().visionCapWarningLoggedForDay === '2026-08-03');
+
+  // Further consumes past 80% (already at cap) must not warn again.
+  const logs2 = [];
+  console.log = (...args) => { logs2.push(args.join(' ')); };
   assert(g.tryConsumeVisionSlot(day1) === false, 'over cap must reject');
   assert(g.tryConsumeVisionSlot(day1) === false, 'still capped');
+  console.log = originalLog;
+  assert(logs2.filter(l => l.includes('[VISION CAP WARNING]')).length === 0);
+
   const st = g.getVisionState();
   assert(st.visionDayKey === '2026-08-03');
   assert(st.visionDayCount === g.VISION_DAILY_CAP);
+  assert(g.getVisionCallsToday(day1) === g.VISION_DAILY_CAP);
+  assert(g.getVisionCallsToday(day2) === 0, 'other UTC day reads as 0 until a consume');
 
   assert(g.tryConsumeVisionSlot(day2) === true, 'new UTC day resets cap');
   assert(g.getVisionState().visionDayKey === '2026-08-04');
   assert(g.getVisionState().visionDayCount === 1);
+  assert(g.getVisionCallsToday(day2) === 1);
+
+  // New day can warn again when crossing 80%.
+  g.setVisionState('2026-08-04', warnAt - 1, '');
+  const logs3 = [];
+  console.log = (...args) => { logs3.push(args.join(' ')); };
+  assert(g.tryConsumeVisionSlot(day2) === true);
+  console.log = originalLog;
+  assert(logs3.filter(l => l.includes('[VISION CAP WARNING]')).length === 1,
+    'new UTC day may warn once again');
 }
 
 console.log('request guards ok');
@@ -1598,7 +1639,7 @@ assert(g.shouldWriteProductImage({ bytes: 10, data: 'abc' }) === false, 'keep ex
 // Mid-scan cap: ingredients took the last slot → front read must be dropped.
 {
   const day = Date.parse('2026-08-03T12:00:00.000Z');
-  g.setVisionState('2026-08-03', g.VISION_DAILY_CAP - 1);
+  g.setVisionState('2026-08-03', g.VISION_DAILY_CAP - 1, '2026-08-03');
   assert(g.tryConsumeVisionSlot(day) === true, 'ingredients gets last slot');
   assert(g.tryConsumeVisionSlot(day) === false, 'front read dropped when capped');
 }

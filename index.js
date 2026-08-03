@@ -44,10 +44,12 @@ const RATE_LIMIT_SCAN_SEARCH_PER_IP = 300;
 const RATE_LIMIT_ADMIN_PER_IP = 10;
 // Hard daily ceiling on Anthropic vision calls across the whole service (UTC day).
 const VISION_DAILY_CAP = 500;
+const VISION_CAP_WARNING_RATIO = 0.8; // log once when used first crosses this fraction
 
 const rateLimitBuckets = new Map(); // key -> { count, resetAt }
 let visionDayKey = ''; // YYYY-MM-DD UTC
 let visionDayCount = 0;
+let visionCapWarningLoggedForDay = ''; // UTC day we already logged the 80% warning
 
 function getClientIp(req) {
   const xff = req.headers && req.headers['x-forwarded-for'];
@@ -107,7 +109,19 @@ function tryConsumeVisionSlot(now = Date.now()) {
     return false;
   }
   visionDayCount += 1;
+  const warnAt = Math.ceil(VISION_DAILY_CAP * VISION_CAP_WARNING_RATIO);
+  if (visionDayCount >= warnAt && visionCapWarningLoggedForDay !== day) {
+    visionCapWarningLoggedForDay = day;
+    console.log(`[VISION CAP WARNING] used=${visionDayCount} cap=${VISION_DAILY_CAP}`);
+  }
   return true;
+}
+
+// Current UTC day's vision call count (0 if no calls yet today on this instance).
+function getVisionCallsToday(now = Date.now()) {
+  const day = utcDayKey(now);
+  if (day !== visionDayKey) return 0;
+  return visionDayCount;
 }
 
 function sendRateLimited(res, route, key, retryAfter) {
@@ -3287,13 +3301,14 @@ app.get('/admin/diagnose/report', async (req, res) => {
     return res.status(403).json({ error: 'Forbidden' });
   }
   try {
+    const visionCallsToday = getVisionCallsToday();
     const runId = (req.query.runId || '').toString().trim();
     if (runId) {
       const doc = await db.collection(DIAGNOSTIC_COLLECTION).doc(runId).get();
       if (!doc.exists) {
         return res.status(404).json({ error: 'Report not found' });
       }
-      return res.json({ id: doc.id, ...doc.data() });
+      return res.json({ id: doc.id, ...doc.data(), visionCallsToday });
     }
 
     const snap = await db.collection(DIAGNOSTIC_COLLECTION)
@@ -3304,7 +3319,7 @@ app.get('/admin/diagnose/report', async (req, res) => {
       return res.status(404).json({ error: 'No diagnostic runs yet' });
     }
     const doc = snap.docs[0];
-    return res.json({ id: doc.id, ...doc.data() });
+    return res.json({ id: doc.id, ...doc.data(), visionCallsToday });
   } catch (err) {
     console.log(`[DIAGNOSE] report read failed: ${err.message}`);
     res.status(500).json({ error: err.message });
