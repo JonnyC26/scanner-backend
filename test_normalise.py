@@ -1409,6 +1409,7 @@ module.exports = {
   RATE_LIMIT_SCAN_SEARCH_PER_IP,
   RATE_LIMIT_ADMIN_PER_IP,
   RATE_LIMIT_IMAGE_PER_IP,
+  RATE_LIMIT_IMAGE_REPORT_PER_UID,
   RATE_LIMIT_WINDOW_MS,
   // expose counters for day-rollover assertions
   getVisionState: () => ({ visionDayKey, visionDayCount, visionCapWarningLoggedForDay }),
@@ -1433,6 +1434,7 @@ assert(g.RATE_LIMIT_PHOTO_PER_IP === 60);
 assert(g.RATE_LIMIT_SCAN_SEARCH_PER_IP === 300);
 assert(g.RATE_LIMIT_ADMIN_PER_IP === 10);
 assert(g.RATE_LIMIT_IMAGE_PER_IP === 600);
+assert(g.RATE_LIMIT_IMAGE_REPORT_PER_UID === 10);
 assert(g.RATE_LIMIT_WINDOW_MS === 60 * 60 * 1000);
 
 // Bearer token parsing — missing/malformed must fail closed.
@@ -1570,17 +1572,20 @@ if (start < 0 || end < 0 || end <= start) throw new Error('could not locate help
 const block = `
 const PRODUCT_IMAGE_MAX_BYTES = 200 * 1024;
 const FAILED_WRITES_PAYLOAD_MAX_BYTES = 800 * 1024;
+const IMAGE_SUPPRESS_REPORT_THRESHOLD = 2;
 ${src.slice(start, end)}
 module.exports = {
   normalizeBarcode,
   isValidBarcode,
   composeFrontProductName,
   shouldWriteProductImage,
+  isFrontProductPackaging,
   stripDataUrlBase64,
   resolvePublicBaseUrl,
   capFailedWritePayload,
   PRODUCT_IMAGE_MAX_BYTES,
   FAILED_WRITES_PAYLOAD_MAX_BYTES,
+  IMAGE_SUPPRESS_REPORT_THRESHOLD,
   tryConsumeVisionSlot,
   VISION_DAILY_CAP,
   setVisionState: (day, count, warningDay = '') => {
@@ -1625,22 +1630,32 @@ assert(g.isValidBarcode('nope') === false);
 assert(g.stripDataUrlBase64('data:image/jpeg;base64,abc') === 'abc');
 assert(g.stripDataUrlBase64('abc') === 'abc');
 
-// Name compose: brand + productName; either alone; null when unreadable.
+// Name compose: brand + productName; requires isProductPackaging === true.
 assert(g.composeFrontProductName(null) === null);
-assert(g.composeFrontProductName({ readable: false, brand: 'X', productName: 'Y' }) === null);
-assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: 'Serum' }) === 'Acme Serum');
-assert(g.composeFrontProductName({ readable: true, brand: null, productName: 'Serum' }) === 'Serum');
-assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: null }) === 'Acme');
-assert(g.composeFrontProductName({ readable: true, brand: '  ', productName: '  ' }) === null);
-assert(g.composeFrontProductName({ readable: true, brand: null, productName: null }) === null);
+assert(g.composeFrontProductName({ readable: false, brand: 'X', productName: 'Y', isProductPackaging: true }) === null);
+assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: 'Serum', isProductPackaging: true }) === 'Acme Serum');
+assert(g.composeFrontProductName({ readable: true, brand: null, productName: 'Serum', isProductPackaging: true }) === 'Serum');
+assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: null, isProductPackaging: true }) === 'Acme');
+assert(g.composeFrontProductName({ readable: true, brand: '  ', productName: '  ', isProductPackaging: true }) === null);
+assert(g.composeFrontProductName({ readable: true, brand: null, productName: null, isProductPackaging: true }) === null);
+assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: 'Serum', isProductPackaging: false }) === null,
+  'non-packaging names must be ignored');
+assert(g.composeFrontProductName({ readable: true, brand: 'Acme', productName: 'Serum' }) === null,
+  'missing isProductPackaging must not name');
+assert(g.isFrontProductPackaging({ isProductPackaging: true }) === true);
+assert(g.isFrontProductPackaging({ isProductPackaging: false }) === false);
+assert(g.isFrontProductPackaging(null) === false);
 
-// Never overwrite a non-empty productImages doc.
+// Write when missing/empty OR suppressed (so a troll image can be replaced).
 assert(g.shouldWriteProductImage(null) === true);
 assert(g.shouldWriteProductImage(undefined) === true);
 assert(g.shouldWriteProductImage({ bytes: 0, data: '' }) === true);
 assert(g.shouldWriteProductImage({ bytes: 0, data: 'x' }) === true);
 assert(g.shouldWriteProductImage({ bytes: 10, data: null }) === true);
 assert(g.shouldWriteProductImage({ bytes: 10, data: 'abc' }) === false, 'keep existing');
+assert(g.shouldWriteProductImage({ bytes: 10, data: 'abc', suppressed: true }) === true,
+  'suppressed image must be replaceable');
+assert(g.IMAGE_SUPPRESS_REPORT_THRESHOLD === 2);
 
 // PUBLIC_BASE_URL env wins; else host from request.
 {
