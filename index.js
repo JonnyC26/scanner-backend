@@ -4,11 +4,20 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const app = express();
-// Keep the default 100kb JSON limit globally. /scan/photo attaches its own
-// 8mb parser — skip the global one there so large photos are not rejected early.
+// Keep the default 100kb JSON limit globally. /scan/photo and POST /image/:barcode
+// attach their own 8mb parser — skip the global one there so large photos are not
+// rejected early.
 app.use((req, res, next) => {
-  if (req.method === 'POST' && (req.path === '/scan/photo' || req.url.startsWith('/scan/photo'))) {
-    return next();
+  if (req.method === 'POST') {
+    const pathOnly = (req.path || '').split('?')[0];
+    const urlPath = (req.url || '').split('?')[0];
+    if (
+      pathOnly === '/scan/photo' || urlPath === '/scan/photo' ||
+      urlPath.startsWith('/scan/photo') ||
+      pathOnly.startsWith('/image/') || urlPath.startsWith('/image/')
+    ) {
+      return next();
+    }
   }
   return express.json()(req, res, next);
 });
@@ -203,6 +212,18 @@ function shouldWriteProductImage(existing) {
 
 function isFrontProductPackaging(front) {
   return !!(front && front.isProductPackaging === true);
+}
+
+// Placeholder / missing cache names that a front-of-pack read may repair.
+function isRepairableProductName(name) {
+  if (name == null) return true;
+  const trimmed = String(name).trim();
+  if (!trimmed) return true;
+  return (
+    trimmed === 'null' ||
+    trimmed === 'Scanned label' ||
+    trimmed === 'Unknown Product'
+  );
 }
 
 function sleep(ms) {
@@ -3044,6 +3065,123 @@ app.get('/image/:barcode', async (req, res) => {
   }
 });
 
+// Front-image-only path for barcodes that already have a photo-rescued cache entry
+// but no productImages doc (user skipped the front at scan time). Does not re-parse
+// or re-score ingredients. Shares /scan/photo rate-limit buckets.
+app.post('/image/:barcode', photoJsonParser, async (req, res) => {
+  const started = Date.now();
+
+  // IP limit first — same bucket as /scan/photo so this cannot bypass that limit.
+  if (!enforceIpRateLimit(req, res, '/scan/photo', RATE_LIMIT_PHOTO_PER_IP)) return;
+
+  let uid;
+  try {
+    const token = parseBearerToken(req.headers['authorization'] || '');
+    if (!token) {
+      return res.status(401).json({ error: 'Sign in required' });
+    }
+    const decoded = await admin.auth().verifyIdToken(token);
+    if (!decoded || !decoded.uid) {
+      return res.status(401).json({ error: 'Sign in required' });
+    }
+    uid = decoded.uid;
+  } catch (authErr) {
+    console.log(`[FRONT IMAGE] auth failed: ${authErr.message}`);
+    return res.status(401).json({ error: 'Sign in required' });
+  }
+
+  const uidLimit = checkRateLimit(
+    `/scan/photo:uid:${uid}`,
+    RATE_LIMIT_PHOTO_PER_UID
+  );
+  if (!uidLimit.allowed) {
+    return sendRateLimited(res, '/scan/photo', `uid:${uid}`, uidLimit.retryAfter);
+  }
+
+  const barcode = normalizeBarcode(req.params.barcode);
+  if (!barcode) {
+    return res.status(400).json({ error: 'Invalid barcode' });
+  }
+
+  const { frontImageBase64, frontMediaType } = req.body || {};
+  if (!frontImageBase64 || typeof frontImageBase64 !== 'string') {
+    return res.status(400).json({ error: 'Missing frontImageBase64' });
+  }
+  if (frontMediaType !== 'image/jpeg' && frontMediaType !== 'image/png') {
+    return res.status(400).json({ error: 'frontMediaType must be image/jpeg or image/png' });
+  }
+
+  const rawBase64 = stripDataUrlBase64(frontImageBase64);
+  const frontBytes = Buffer.byteLength(rawBase64, 'utf8');
+  if (frontBytes > PRODUCT_IMAGE_MAX_BYTES) {
+    console.log(`[PRODUCT IMAGE TOO LARGE] barcode=${barcode} bytes=${frontBytes} cap=${PRODUCT_IMAGE_MAX_BYTES}`);
+    return res.status(413).json({ error: 'Front image too large' });
+  }
+  if (frontBytes <= 0) {
+    return res.status(400).json({ error: 'Missing frontImageBase64' });
+  }
+
+  try {
+    // Short-circuit before spending vision when an acceptable image already exists.
+    const existingImageDoc = await db.collection(PRODUCT_IMAGES_COLLECTION).doc(barcode).get();
+    const existingImage = existingImageDoc.exists ? existingImageDoc.data() : null;
+    if (!shouldWriteProductImage(existingImage)) {
+      console.log(
+        `[FRONT IMAGE] barcode=${barcode} stored=no packaging=no named=no ms=${Date.now() - started}`
+      );
+      return res.status(200).json({ ok: true, stored: false });
+    }
+
+    if (!tryConsumeVisionSlot()) {
+      console.log(`[VISION CAP REACHED] cap=${VISION_DAILY_CAP} day=${visionDayKey}`);
+      return res.status(503).json({ error: 'Photo scanning temporarily unavailable' });
+    }
+
+    const frontVision = await readFrontOfPackFromPhoto(frontImageBase64, frontMediaType);
+
+    if (!isFrontProductPackaging(frontVision)) {
+      console.log(
+        `[FRONT IMAGE] barcode=${barcode} stored=no packaging=no named=no ms=${Date.now() - started}`
+      );
+      return res.status(422).json({ error: 'Not product packaging' });
+    }
+
+    const imageResult = await storeProductFrontImage({
+      barcode,
+      frontImageBase64,
+      frontMediaType,
+      capturedBy: uid,
+    });
+    const stored = !!(imageResult && imageResult.stored && imageResult.skipReason == null);
+
+    const productName = composeFrontProductName(frontVision);
+    let named = false;
+    if (productName) {
+      try {
+        const cacheRef = db.collection(CACHE_COLLECTION).doc(barcode);
+        const cacheDoc = await cacheRef.get();
+        if (cacheDoc.exists) {
+          const cacheData = cacheDoc.data() || {};
+          if (isRepairableProductName(cacheData.productName)) {
+            await cacheRef.update({ productName });
+            named = true;
+          }
+        }
+      } catch (nameErr) {
+        console.log(`[FRONT IMAGE NAME REPAIR ERROR] barcode=${barcode} ${nameErr.message}`);
+      }
+    }
+
+    console.log(
+      `[FRONT IMAGE] barcode=${barcode} stored=${stored ? 'yes' : 'no'} packaging=yes named=${named ? 'yes' : 'no'} ms=${Date.now() - started}`
+    );
+    return res.status(200).json({ ok: true, stored, productName: productName || null });
+  } catch (err) {
+    console.log(`[FRONT IMAGE ERROR] barcode=${barcode} ${err.message}`);
+    return res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
 // Report a bad product image. Same success body whether or not an image exists
 // (cannot probe). Auth required. One report per uid per barcode.
 app.post('/report/image', async (req, res) => {
@@ -3802,4 +3940,8 @@ app.get('/admin/diagnose/report', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 startRateLimitSweeper();
-app.listen(PORT, () => console.log(`Running on port ${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Running on port ${PORT}`));
+}
+
+module.exports = app;

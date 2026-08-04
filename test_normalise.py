@@ -1696,6 +1696,336 @@ console.log('front pack helpers ok');
     print(proc.stdout.strip())
 
 
+def test_front_image_endpoint():
+    """POST /image/:barcode — validation, short-circuit, packaging gate, name repair."""
+    script = r"""
+const http = require('http');
+const path = require('path');
+const Module = require('module');
+
+const productImages = new Map();
+const productCache = new Map();
+const imageWrites = [];
+const cacheUpdates = [];
+let fetchCalls = 0;
+let visionResponse = {
+  isProductPackaging: true,
+  readable: true,
+  brand: 'Acme',
+  productName: 'Serum',
+};
+
+function docSnap(data) {
+  return {
+    exists: data !== undefined,
+    data: () => (data === undefined ? undefined : data),
+  };
+}
+
+function makeDoc(collectionName, id) {
+  const store = collectionName === 'productImages' ? productImages : productCache;
+  return {
+    async get() {
+      return docSnap(store.get(id));
+    },
+    async set(data) {
+      imageWrites.push({ id, data: { ...data } });
+      store.set(id, { ...(store.get(id) || {}), ...data });
+    },
+    async update(data) {
+      cacheUpdates.push({ id, data: { ...data } });
+      const prev = store.get(id) || {};
+      store.set(id, { ...prev, ...data });
+    },
+  };
+}
+
+const mockFirestore = {
+  collection(name) {
+    return {
+      doc(id) {
+        return makeDoc(name, String(id));
+      },
+      async add() {
+        return { id: 'audit' };
+      },
+    };
+  },
+};
+mockFirestore.FieldValue = {
+  serverTimestamp: () => 'SERVER_TS',
+};
+
+const mockAdmin = {
+  initializeApp() {},
+  credential: { cert() { return {}; } },
+  auth() {
+    return {
+      async verifyIdToken(token) {
+        if (!token || token === 'bad') throw new Error('invalid token');
+        return { uid: 'uid-front-test' };
+      },
+    };
+  },
+  firestore() {
+    return mockFirestore;
+  },
+};
+mockAdmin.firestore.FieldValue = mockFirestore.FieldValue;
+
+const origRequire = Module.prototype.require;
+Module.prototype.require = function (id) {
+  if (id === 'firebase-admin') return mockAdmin;
+  return origRequire.apply(this, arguments);
+};
+
+process.env.FIREBASE_SERVICE_ACCOUNT = JSON.stringify({
+  project_id: 'demo',
+  client_email: 'demo@demo.iam.gserviceaccount.com',
+  private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg==\n-----END PRIVATE KEY-----\n',
+});
+process.env.ANTHROPIC_API_KEY = 'test-key';
+
+global.fetch = async function mockFetch() {
+  fetchCalls += 1;
+  return {
+    ok: true,
+    async json() {
+      return {
+        content: [{ text: JSON.stringify(visionResponse) }],
+      };
+    },
+  };
+};
+
+const appPath = path.join(process.cwd(), 'index.js');
+delete require.cache[appPath];
+const app = require(appPath);
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+function request(method, urlPath, { body, headers } = {}) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      const payload = body === undefined ? null : JSON.stringify(body);
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: urlPath,
+          method,
+          headers: {
+            Authorization: 'Bearer good-token',
+            ...(payload
+              ? {
+                  'Content-Type': 'application/json',
+                  'Content-Length': Buffer.byteLength(payload),
+                }
+              : {}),
+            ...(headers || {}),
+          },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            server.close();
+            const text = Buffer.concat(chunks).toString('utf8');
+            let json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch (_) {
+              json = text;
+            }
+            resolve({ status: res.statusCode, json });
+          });
+        }
+      );
+      req.on('error', (err) => {
+        server.close();
+        reject(err);
+      });
+      if (payload) req.write(payload);
+      req.end();
+    });
+  });
+}
+
+function resetState() {
+  productImages.clear();
+  productCache.clear();
+  imageWrites.length = 0;
+  cacheUpdates.length = 0;
+  fetchCalls = 0;
+  visionResponse = {
+    isProductPackaging: true,
+    readable: true,
+    brand: 'Acme',
+    productName: 'Serum',
+  };
+}
+
+(async () => {
+  // 1. Missing or malformed frontImageBase64 → 400
+  {
+    resetState();
+    let res = await request('POST', '/image/3017620422003', {
+      body: { frontMediaType: 'image/jpeg' },
+    });
+    assert(res.status === 400, 'missing frontImageBase64 → 400, got ' + res.status);
+    res = await request('POST', '/image/3017620422003', {
+      body: { frontImageBase64: '', frontMediaType: 'image/jpeg' },
+    });
+    assert(res.status === 400, 'empty frontImageBase64 → 400, got ' + res.status);
+    res = await request('POST', '/image/3017620422003', {
+      body: { frontImageBase64: 12345, frontMediaType: 'image/jpeg' },
+    });
+    assert(res.status === 400, 'non-string frontImageBase64 → 400, got ' + res.status);
+    assert(fetchCalls === 0, 'validation must not call vision');
+  }
+
+  // 2. Bad frontMediaType → 400
+  {
+    resetState();
+    const res = await request('POST', '/image/3017620422003', {
+      body: { frontImageBase64: 'abc123', frontMediaType: 'image/gif' },
+    });
+    assert(res.status === 400, 'bad frontMediaType → 400, got ' + res.status);
+    assert(fetchCalls === 0, 'bad media type must not call vision');
+  }
+
+  // 3. Oversized front image → 413
+  {
+    resetState();
+    const oversized = 'x'.repeat(200 * 1024 + 1);
+    const res = await request('POST', '/image/3017620422003', {
+      body: { frontImageBase64: oversized, frontMediaType: 'image/jpeg' },
+    });
+    assert(res.status === 413, 'oversized front → 413, got ' + res.status);
+    assert(fetchCalls === 0, 'oversized must not call vision');
+    assert(imageWrites.length === 0, 'oversized must not write');
+  }
+
+  // 4. Existing image bytes → stored:false, vision NOT called
+  {
+    resetState();
+    productImages.set('3017620422003', {
+      data: 'existingbase64',
+      bytes: 14,
+      mediaType: 'image/jpeg',
+      suppressed: false,
+    });
+    const res = await request('POST', '/image/3017620422003', {
+      body: { frontImageBase64: 'abc123', frontMediaType: 'image/jpeg' },
+    });
+    assert(res.status === 200, 'existing image → 200, got ' + res.status);
+    assert(res.json && res.json.ok === true && res.json.stored === false,
+      'existing image must return stored:false: ' + JSON.stringify(res.json));
+    assert(fetchCalls === 0, 'existing image must NOT call readFrontOfPackFromPhoto/fetch');
+    assert(imageWrites.length === 0, 'existing image must not rewrite');
+  }
+
+  // 5. isProductPackaging:false → 422, nothing written
+  {
+    resetState();
+    visionResponse = {
+      isProductPackaging: false,
+      readable: false,
+      brand: 'Fake',
+      productName: 'Name',
+    };
+    const res = await request('POST', '/image/3017620422003', {
+      body: { frontImageBase64: 'abc123', frontMediaType: 'image/png' },
+    });
+    assert(res.status === 422, 'non-packaging → 422, got ' + res.status);
+    assert(res.json && res.json.error === 'Not product packaging');
+    assert(fetchCalls === 1, 'packaging reject still spends one vision call');
+    assert(imageWrites.length === 0, 'non-packaging must store nothing');
+    assert(cacheUpdates.length === 0, 'non-packaging must not repair name');
+  }
+
+  // 6. Name repair for placeholders / missing; not for a real name
+  {
+    const cases = [
+      { productName: 'Scanned label', expectRepair: true },
+      { productName: 'Unknown Product', expectRepair: true },
+      { productName: '', expectRepair: true },
+      { productName: 'null', expectRepair: true },
+      { productName: null, expectRepair: true },
+      { productName: undefined, expectRepair: true },
+      { productName: 'CeraVe Hydrating Cleanser', expectRepair: false },
+    ];
+    for (const c of cases) {
+      resetState();
+      visionResponse = {
+        isProductPackaging: true,
+        readable: true,
+        brand: 'Acme',
+        productName: 'Serum',
+      };
+      const cacheDoc = { ingredients: 'Aqua', source: 'photo' };
+      if (c.productName !== undefined) cacheDoc.productName = c.productName;
+      productCache.set('3017620422003', cacheDoc);
+
+      const res = await request('POST', '/image/3017620422003', {
+        body: { frontImageBase64: 'abc123', frontMediaType: 'image/jpeg' },
+      });
+      assert(res.status === 200, 'store path → 200 for ' + JSON.stringify(c.productName));
+      assert(res.json && res.json.ok === true && res.json.stored === true,
+        'must store image: ' + JSON.stringify(res.json));
+      assert(res.json.productName === 'Acme Serum',
+        'response productName: ' + res.json.productName);
+      assert(imageWrites.length === 1, 'must write productImages once');
+      assert(fetchCalls === 1, 'must call vision once');
+
+      if (c.expectRepair) {
+        assert(cacheUpdates.length === 1,
+          'name repair must fire for ' + JSON.stringify(c.productName));
+        assert(cacheUpdates[0].data.productName === 'Acme Serum');
+        assert(Object.keys(cacheUpdates[0].data).length === 1,
+          'name repair must only touch productName');
+        assert(productCache.get('3017620422003').productName === 'Acme Serum');
+      } else {
+        assert(cacheUpdates.length === 0,
+          'real name must NOT be repaired, got ' + JSON.stringify(cacheUpdates));
+        assert(productCache.get('3017620422003').productName === 'CeraVe Hydrating Cleanser');
+      }
+    }
+
+    // Cache doc missing entirely → do not create / repair
+    resetState();
+    const resNoCache = await request('POST', '/image/3017620422003', {
+      body: { frontImageBase64: 'abc123', frontMediaType: 'image/jpeg' },
+    });
+    assert(resNoCache.status === 200 && resNoCache.json.stored === true);
+    assert(cacheUpdates.length === 0, 'no cache doc → no name repair');
+    assert(!productCache.has('3017620422003'), 'must not create cache doc');
+  }
+
+  console.log('front image endpoint ok');
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"front image endpoint assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def test_ingredients_text_preference_rejoin_and_u201a():
     """Prefer ingredients_text over OFF array; rejoin comma-split INCIs; U+201A → comma."""
     script = r"""
@@ -1871,6 +2201,7 @@ def main() -> int:
         test_photo_cache_below_gate_and_quality,
         test_request_guards_rate_limit_and_vision_cap,
         test_front_pack_name_and_image_helpers,
+        test_front_image_endpoint,
         test_ingredients_text_preference_rejoin_and_u201a,
     ]
     failed = 0
