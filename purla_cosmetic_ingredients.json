@@ -1,9 +1,9 @@
 {
   "_meta": {
     "name": "Purla cosmetic ingredient hazard table",
-    "version": "0.4-draft",
-    "generated": "2026-07-31",
-    "entry_count": 371,
+    "version": "0.5-draft",
+    "generated": "2026-08-04",
+    "entry_count": 595,
     "risk_scale": [
       "none",
       "low",
@@ -142,7 +142,10 @@
       "dose_dependent": false,
       "disputed": false,
       "dispute_note": null,
-      "confidence": "high"
+      "confidence": "high",
+      "covers_inci": [
+        "C10-30 Alkyl Acrylate Crosspolymer"
+      ]
     },
     {
       "inci": "Adenosine",
@@ -907,7 +910,10 @@
       "dose_dependent": true,
       "disputed": false,
       "dispute_note": null,
-      "confidence": "high"
+      "confidence": "high",
+      "covers_inci": [
+        "Avobenzone"
+      ]
     },
     {
       "inci": "Butylene Glycol",
@@ -1107,7 +1113,10 @@
       "dose_dependent": false,
       "disputed": false,
       "dispute_note": null,
-      "confidence": "high"
+      "confidence": "high",
+      "covers_inci": [
+        "Capric Triglyceride"
+      ]
     },
     {
       "inci": "Caprylyl Glycol",
@@ -1252,7 +1261,10 @@
       "dose_dependent": false,
       "disputed": false,
       "dispute_note": null,
-      "confidence": "high"
+      "confidence": "high",
+      "covers_inci": [
+        "Ceramide 6 II"
+      ]
     },
     {
       "inci": "Ceramide EOP",
@@ -1268,7 +1280,10 @@
       "dose_dependent": false,
       "disputed": false,
       "dispute_note": null,
-      "confidence": "high"
+      "confidence": "high",
+      "covers_inci": [
+        "Ceramide 1"
+      ]
     },
     {
       "inci": "Ceramide NP",
@@ -1284,7 +1299,10 @@
       "dose_dependent": false,
       "disputed": false,
       "dispute_note": null,
-      "confidence": "high"
+      "confidence": "high",
+      "covers_inci": [
+        "Ceramide 3"
+      ]
     },
     {
       "inci": "Ceteareth-20",
@@ -4083,7 +4101,10 @@
       "dose_dependent": false,
       "disputed": true,
       "dispute_note": "Regulators treat cosmetic-grade mineral oil as inert and safe. NGO campaigns (BUND, Stiftung Warentest) flag MOAH/MOSH aromatic-hydrocarbon contamination, which is a purity-control question rather than an inherent property of the ingredient.",
-      "confidence": "high"
+      "confidence": "high",
+      "covers_inci": [
+        "Mineral Oil"
+      ]
     },
     {
       "inci": "Parfum",
@@ -6929,6 +6950,3652 @@
       ],
       "max_concentration": "0.02% (products other than oral)",
       "corrigendum": "OJ 2025/90876 corrected 'Rose ketone 4 (Damascone)' to 'Rose ketone 4 (Damascenone)'. The 2023 text has the wrong name."
+    },
+    {
+      "inci": "Sesamum Indicum Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sesame oil; well-tolerated emollient with long use history.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Carthamus Tinctorius Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Safflower oil; high-linoleic emollient, low irritancy.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Glycine Soja Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Soybean oil; emollient, relevant only to soy-allergic users.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Brassica Campestris Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Rapeseed oil; conventional emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Limnanthes Alba Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Meadowfoam oil; stable, low-irritancy emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Oenothera Biennis Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Evening primrose oil; GLA-rich emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Borago Officinalis Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Borage oil; GLA-rich emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Rubus Idaeus Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Raspberry seed oil; antioxidant-rich emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hippophae Rhamnoides Fruit Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sea buckthorn oil; carotenoid-rich, may stain fabric.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Nigella Sativa Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Black cumin oil; emollient with occasional contact reports.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Cannabis Sativa Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Hemp seed oil; THC-free seed pressing, conventional emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted as seed oil",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Corylus Avellana Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Hazelnut oil; tree-nut derived, matters only for nut-allergic users.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Juglans Regia Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Walnut oil; tree-nut derived emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Prunus Armeniaca Kernel Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Apricot kernel oil; light, well-tolerated emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Prunus Persica Kernel Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Peach kernel oil; light emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Elaeis Guineensis Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Palm oil; conventional emollient and soap base.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": true,
+      "dispute_note": "No dermal hazard is claimed by any regulator. Objections to palm oil are sourcing and deforestation issues, which Purla does not grade.",
+      "confidence": "high"
+    },
+    {
+      "inci": "Orbignya Oleifera Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Babassu oil; solid-at-room-temperature emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Astrocaryum Murumuru Seed Butter",
+      "function": "emollient / plant butter",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Murumuru butter; occlusive plant butter.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Theobroma Grandiflorum Seed Butter",
+      "function": "emollient / plant butter",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Cupuacu butter; occlusive plant butter.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Mangifera Indica Seed Butter",
+      "function": "emollient / plant butter",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Mango butter; occlusive plant butter.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Garcinia Indica Seed Butter",
+      "function": "emollient / plant butter",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Kokum butter; hard, stable plant butter.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sclerocarya Birrea Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Marula oil; oleic-rich emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Adansonia Digitata Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Baobab oil; stable emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Plukenetia Volubilis Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sacha inchi oil; omega-rich emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Salvia Hispanica Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Chia seed oil; omega-3-rich emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Linum Usitatissimum Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Linseed oil; polyunsaturated emollient, oxidises readily.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Cucurbita Pepo Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Pumpkin seed oil; conventional emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Triticum Vulgare Germ Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Wheat germ oil; vitamin E rich, wheat-derived.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Oryza Sativa Bran Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Rice bran oil; stable emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Avena Sativa Kernel Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Oat oil; soothing emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Opuntia Ficus-Indica Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Prickly pear seed oil; linoleic-rich emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Punica Granatum Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Pomegranate seed oil; punicic-acid-rich emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Camellia Oleifera Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Tea seed oil; light oleic emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Camellia Japonica Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Camellia oil; light emollient used in hair and skin care.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Prunus Domestica Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Plum kernel oil; light emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Bertholletia Excelsa Seed Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Brazil nut oil; tree-nut derived emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hydrogenated Vegetable Oil",
+      "function": "emollient / structuring agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Hardened plant oil used to structure balms and sticks.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Hydrogenated Jojoba Oil",
+      "function": "emollient / structuring agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Hardened jojoba wax ester; inert structurant.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Butyrospermum Parkii Oil",
+      "function": "emollient / plant oil",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Liquid shea fraction; emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Helianthus Annuus Seed Wax",
+      "function": "structuring wax",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sunflower wax; plant-derived structurant.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Oryza Sativa Bran Wax",
+      "function": "structuring wax",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Rice bran wax; plant-derived structurant.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Aloe Barbadensis Leaf Extract",
+      "function": "soothing agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Aloe extract; hydrating botanical, anthraquinones controlled in cosmetic grades.",
+      "basis": [
+        "CIR (safe when anthraquinone levels are limited)"
+      ],
+      "eu": "unrestricted at cosmetic grades",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Aloe Barbadensis Leaf Juice Powder",
+      "function": "soothing agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Dried aloe juice; same material as the liquid juice.",
+      "basis": [
+        "CIR (safe when anthraquinone levels are limited)"
+      ],
+      "eu": "unrestricted at cosmetic grades",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Anthemis Nobilis Flower Extract",
+      "function": "soothing agent",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Roman chamomile; Asteraceae cross-reactivity for ragweed-sensitised users.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Achillea Millefolium Extract",
+      "function": "soothing agent",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Yarrow; Asteraceae botanical with sesquiterpene lactone sensitisers.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Calendula Officinalis Flower Oil",
+      "function": "soothing agent",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Calendula-infused oil; Asteraceae cross-reactivity risk.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Helianthus Annuus Seed Oil Unsaponifiables",
+      "function": "emollient / skin conditioning",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sunflower sterol fraction; barrier-supportive lipid.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Aesculus Hippocastanum Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Horse chestnut; used for its escin content in leg and eye products.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Althaea Officinalis Root Extract",
+      "function": "soothing agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Marshmallow root; mucilage-rich soothing botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Arctium Lappa Root Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Burdock root; traditional scalp and skin botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Bambusa Vulgaris Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Bamboo extract; silica-rich botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Beta Vulgaris Root Extract",
+      "function": "botanical extract / colorant source",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Beetroot extract; pigment and humectant source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Betula Alba Bark Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Birch bark; betulin-containing botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Carica Papaya Fruit Extract",
+      "function": "botanical extract",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Papaya extract; papain enzyme can irritate at exfoliating levels.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Centaurea Cyanus Flower Water",
+      "function": "botanical water",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Cornflower water; Asteraceae botanical, mostly water.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Chrysanthellum Indicum Extract",
+      "function": "soothing agent",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Asteraceae botanical used for redness; cross-reactivity risk.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Cichorium Intybus Root Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Chicory root; inulin-rich hydrating extract.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Citrus Aurantium Dulcis Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Orange fruit extract; not the peel oil and not phototoxic.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Citrus Limon Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Lemon fruit extract; distinct from the phototoxic peel oil.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Citrus Paradisi Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Grapefruit fruit extract; distinct from the peel oil.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Citrus Paradisi Peel Oil",
+      "function": "fragrance / plant oil",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Grapefruit peel oil; limonene-rich and mildly phototoxic at high levels.",
+      "basis": [
+        "IFRA standards",
+        "EU Annex III entry 358 (furocoumarins)"
+      ],
+      "eu": "restricted via the furocoumarin limit; normal content in natural essences is exempt",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Coffea Arabica Seed Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Coffee extract; caffeine and polyphenol source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Crithmum Maritimum Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sea fennel; coastal botanical used in brightening claims.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "low"
+    },
+    {
+      "inci": "Daucus Carota Sativa Root Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Carrot root extract; carotenoid source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Echinacea Purpurea Extract",
+      "function": "botanical extract",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Asteraceae botanical; cross-reactivity risk for ragweed-sensitised users.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Equisetum Arvense Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Horsetail; silica-rich botanical used in hair products.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Fucus Vesiculosus Extract",
+      "function": "marine extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Bladderwrack seaweed; mineral- and iodine-containing extract.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Laminaria Digitata Extract",
+      "function": "marine extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Kelp extract; polysaccharide and mineral source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Chondrus Crispus Extract",
+      "function": "marine extract / thickener",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Irish moss; polysaccharide-rich hydrating extract.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Ulva Lactuca Extract",
+      "function": "marine extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sea lettuce extract; polysaccharide source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "low"
+    },
+    {
+      "inci": "Ganoderma Lucidum Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Reishi mushroom; beta-glucan source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "low"
+    },
+    {
+      "inci": "Ginkgo Biloba Leaf Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Ginkgo leaf; flavonoid antioxidant extract.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hedera Helix Leaf/Stem Extract",
+      "function": "botanical extract",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Ivy extract; falcarinol-type sensitisers are documented in the plant.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Helichrysum Italicum Extract",
+      "function": "botanical extract",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Immortelle; Asteraceae botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hibiscus Sabdariffa Flower Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Hibiscus extract; mild acid and anthocyanin source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Humulus Lupulus Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Hops extract; polyphenol source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Lonicera Japonica Flower Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Honeysuckle extract; used as a botanical preservative booster.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": true,
+      "dispute_note": "Marketed as a natural preservative; its activity comes largely from naturally present parabens, which some naturals brands do not disclose.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Malva Sylvestris Extract",
+      "function": "soothing agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Mallow extract; mucilage-rich soothing botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Melissa Officinalis Leaf Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Lemon balm extract; polyphenol source, milder than the essential oil.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Mentha Piperita Leaf Extract",
+      "function": "botanical extract",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Peppermint leaf extract; menthol content can sting sensitive skin.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Morus Alba Root Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Mulberry root; used in brightening formulas.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Nelumbo Nucifera Flower Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Lotus flower extract; flavonoid source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "low"
+    },
+    {
+      "inci": "Ocimum Basilicum Leaf Extract",
+      "function": "botanical extract",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Basil extract; estragole and methyl eugenol are controlled in the essential oil.",
+      "basis": [
+        "CIR",
+        "EU Annex II (methyl eugenol, with natural-essence allowances)"
+      ],
+      "eu": "unrestricted as extract; the related essential oil is subject to methyl eugenol limits",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "low"
+    },
+    {
+      "inci": "Opuntia Ficus-Indica Stem Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Prickly pear cladode extract; hydrating polysaccharides.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Passiflora Incarnata Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Passionfruit extract; conventional botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Persea Gratissima Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Avocado fruit extract; conditioning botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Pisum Sativum Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Pea extract; peptide and protein source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Plantago Lanceolata Leaf Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Ribwort plantain; traditional soothing botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "low"
+    },
+    {
+      "inci": "Prunus Persica Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Peach fruit extract; conventional botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Pyrus Malus Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Apple fruit extract; mild acid and sugar source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Rosa Damascena Flower Water",
+      "function": "botanical water",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Rose hydrosol; distillation water, not the essential oil.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Chamomilla Recutita Flower Water",
+      "function": "botanical water",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Chamomile hydrosol; Asteraceae cross-reactivity risk, mostly water.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Lavandula Angustifolia Flower Water",
+      "function": "botanical water",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Lavender hydrosol; trace terpene content, not the essential oil.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hamamelis Virginiana Water",
+      "function": "botanical water / astringent",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Witch hazel distillate; alcohol-preserved grades can be drying.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Cucumis Sativus Fruit Water",
+      "function": "botanical water",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Cucumber water; mild hydrating botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Rosmarinus Officinalis Leaf Oil",
+      "function": "fragrance / plant oil",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Rosemary oil; camphor and terpene content can irritate at high levels.",
+      "basis": [
+        "IFRA standards",
+        "CIR"
+      ],
+      "eu": "not individually declarable; contributes limonene and linalool declarations",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Salvia Officinalis Leaf Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sage extract; thujone concerns apply to the essential oil, not the extract.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted as extract",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sambucus Nigra Flower Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Elderflower extract; flavonoid source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Saccharum Officinarum Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sugar cane extract; natural glycolic acid source at low levels.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Solanum Lycopersicum Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Tomato extract; lycopene antioxidant source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Spirulina Platensis Extract",
+      "function": "marine extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Blue-green algae extract; protein and pigment source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Symphytum Officinale Leaf Extract",
+      "function": "soothing agent",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Comfrey; pyrrolizidine alkaloid content must be controlled in cosmetic grades.",
+      "basis": [
+        "CIR (safe when PA-free grades are used)"
+      ],
+      "eu": "unrestricted; PA content controlled by specification",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Thymus Vulgaris Extract",
+      "function": "botanical extract",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Thyme extract; thymol content can irritate sensitive skin.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Tilia Cordata Flower Extract",
+      "function": "soothing agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Linden flower extract; mild soothing botanical.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Urtica Dioica Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Nettle extract; traditional scalp botanical, non-stinging once processed.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Vaccinium Myrtillus Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Bilberry extract; anthocyanin and mild fruit acid source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Zingiber Officinale Root Extract",
+      "function": "botanical extract",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Ginger root extract; gingerols are mildly irritant on compromised skin.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Vitis Vinifera Seed Extract",
+      "function": "antioxidant / botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Grape seed extract; proanthocyanidin antioxidant.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Olea Europaea Leaf Extract",
+      "function": "antioxidant / botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Olive leaf extract; oleuropein antioxidant source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Olea Europaea Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Olive fruit extract; polyphenol source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Cocos Nucifera Fruit Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Coconut fruit extract; not the comedogenic fixed oil.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hordeum Vulgare Extract",
+      "function": "botanical extract",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Barley extract; polysaccharide and protein source.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "low"
+    },
+    {
+      "inci": "Avena Sativa Kernel Flour",
+      "function": "soothing agent / absorbent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Colloidal oatmeal; established soothing agent for dry, itchy skin.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Chloride",
+      "function": "viscosity modifier / salt",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Table salt; thickens surfactant systems, inert on skin.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Potassium Chloride",
+      "function": "viscosity modifier / salt",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Inorganic salt used to adjust viscosity and tonicity.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Calcium Chloride",
+      "function": "salt / buffering agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Mineral salt used for texture and mineral supply.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Magnesium Chloride",
+      "function": "salt / viscosity modifier",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Mineral salt, inert at cosmetic levels.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Magnesium Sulfate",
+      "function": "salt / viscosity modifier",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Epsom salt; inert mineral salt.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Sulfate",
+      "function": "salt / bulking agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Inert mineral salt used as a filler and viscosity aid.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Ammonium Chloride",
+      "function": "salt / viscosity modifier",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt used to build viscosity in surfactant systems.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sodium Bicarbonate",
+      "function": "buffering agent / mild abrasive",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Baking soda; buffer and gentle polishing agent in oral care.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Carbonate",
+      "function": "pH adjuster",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Strongly alkaline pH adjuster; irritant if the finished pH is high.",
+      "basis": [
+        "CIR (safe as used in the final pH range)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Potassium Phosphate",
+      "function": "buffering agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Phosphate buffer salt, inert.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Dipotassium Phosphate",
+      "function": "buffering agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Phosphate buffer salt, inert.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Disodium Phosphate",
+      "function": "buffering agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Phosphate buffer salt, inert.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Phosphate",
+      "function": "buffering agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Phosphate buffer salt, inert.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Trisodium Phosphate",
+      "function": "buffering agent",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Alkaline phosphate salt; irritant if the finished pH is high.",
+      "basis": [
+        "CIR (safe as used in the final pH range)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Tetrasodium Pyrophosphate",
+      "function": "tartar control agent / chelator",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Anti-calculus phosphate used in toothpaste.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Tetrapotassium Pyrophosphate",
+      "function": "tartar control agent / chelator",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Anti-calculus phosphate used in toothpaste.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Pentasodium Triphosphate",
+      "function": "tartar control agent / chelator",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Anti-calculus phosphate used in toothpaste.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sodium Metaphosphate",
+      "function": "tartar control agent / abrasive",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Polishing and anti-calculus phosphate in oral care.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sodium Lactate",
+      "function": "humectant / buffering agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Natural moisturising factor component and pH buffer.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Acetate",
+      "function": "buffering agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Buffer salt, inert.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Acetic Acid",
+      "function": "pH adjuster",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Acidifier; irritant at high concentration, benign at formulation levels.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Tetrasodium Glutamate Diacetate",
+      "function": "chelator",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Readily biodegradable chelator used in place of EDTA.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Calcium Carbonate",
+      "function": "abrasive / bulking agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Chalk; inert polishing agent and filler.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Aluminum Hydroxide",
+      "function": "opacifier / pigment coating",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Inert mineral used to coat pigments; not an antiperspirant active.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Hydrated Silica",
+      "function": "abrasive / thickener",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Amorphous silica abrasive; the standard toothpaste polishing agent.",
+      "basis": [
+        "CIR (safe as used)",
+        "EU Annex II (crystalline forms)"
+      ],
+      "eu": "amorphous permitted; crystalline forms prohibited",
+      "eu_annex": [
+        "II"
+      ],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Fluoride",
+      "function": "anticaries active",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Caries protection with EU limits on fluoride content and a child warning.",
+      "basis": [
+        "EU Annex III (fluoride compounds, max 0.15% as F in oral products)",
+        "SCCS opinions on fluoride in oral care",
+        "CIR"
+      ],
+      "eu": "restricted — max 0.15% as fluoride in oral products; warning required above 0.1%",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": true,
+      "dispute_note": "Dental and public-health bodies regard fluoride toothpaste as one of the best-evidenced preventive measures. Objections concern total fluoride intake and swallowing by young children, which is why the EU requires a dosing warning rather than a ban.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sodium Monofluorophosphate",
+      "function": "anticaries active",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Fluoride source under the same EU oral-care limits.",
+      "basis": [
+        "EU Annex III (fluoride compounds, max 0.15% as F in oral products)",
+        "CIR"
+      ],
+      "eu": "restricted — max 0.15% as fluoride in oral products; warning required above 0.1%",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": true,
+      "dispute_note": "Same fluoride dispute as sodium fluoride.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Stannous Fluoride",
+      "function": "anticaries active / antimicrobial",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Fluoride source with added antimicrobial action; can stain teeth over time.",
+      "basis": [
+        "EU Annex III (fluoride compounds, max 0.15% as F in oral products)",
+        "CIR"
+      ],
+      "eu": "restricted — max 0.15% as fluoride in oral products; warning required above 0.1%",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": true,
+      "dispute_note": "Same fluoride dispute as sodium fluoride; extrinsic staining is a cosmetic side effect, not a safety finding.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sodium Saccharin",
+      "function": "sweetener",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Non-nutritive sweetener used to make toothpaste palatable.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted in cosmetics",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": true,
+      "dispute_note": "Rat bladder tumours in 1970s feeding studies drove decades of concern; the mechanism was later shown not to apply to humans and saccharin was removed from the US NTP carcinogen list in 2000. Some consumer guides still grade it on the older finding.",
+      "confidence": "high"
+    },
+    {
+      "inci": "Sucralose",
+      "function": "sweetener",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Non-nutritive sweetener used for taste in oral care.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted in cosmetics",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Xylitol",
+      "function": "humectant / sweetener",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sugar alcohol; sweetener and humectant with anti-caries claims.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Thymol",
+      "function": "antimicrobial / flavour",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Thyme-derived antiseptic; irritant to mucous membranes at higher levels.",
+      "basis": [
+        "CIR",
+        "IFRA standards"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Eucalyptol",
+      "function": "flavour / fragrance",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "1,8-Cineole; mouthwash flavour component, mildly irritant to mucosa.",
+      "basis": [
+        "CIR",
+        "IFRA standards"
+      ],
+      "eu": "unrestricted; not individually declarable under the 2023 allergen list",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Methyl Salicylate",
+      "function": "flavour / counterirritant",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "Wintergreen flavour; restricted in the EU with specific limits for children's products.",
+      "basis": [
+        "EU Annex III entry 324",
+        "SCCS/1591/17"
+      ],
+      "eu": "restricted — concentration limits by product type; not permitted in products for children under 6 except toothpaste",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sodium Salicylate",
+      "function": "preservative / exfoliant salt",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Salicylate salt; same EU restrictions as salicylic acid, including the under-3s rule.",
+      "basis": [
+        "EU Annex III entry 98",
+        "EU Annex V entry 3",
+        "CIR"
+      ],
+      "eu": "restricted — salts of salicylic acid share its concentration caps and child restrictions",
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Zinc Citrate",
+      "function": "tartar control / odour control",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Zinc salt used against plaque and oral malodour.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted at oral-care levels",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Zinc Ricinoleate",
+      "function": "odour absorber",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Castor-derived zinc soap that binds odour molecules; not an antiperspirant.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Aluminum Sesquichlorohydrate",
+      "function": "antiperspirant active",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted antiperspirant active under the EU aluminium limit.",
+      "basis": [
+        "SCCS/1613/19",
+        "EU Annex III entry 315"
+      ],
+      "eu": "restricted — max 6.25% as aluminium in antiperspirants",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": true,
+      "dispute_note": "Same aluminium dispute as aluminum chlorohydrate: SCCS found current use levels safe; campaign groups still score aluminium salts elevated on hypotheses the SCCS reviewed and did not sustain.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Aluminum Chloride",
+      "function": "antiperspirant active",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Stronger, more acidic antiperspirant salt; more irritating than chlorohydrate forms.",
+      "basis": [
+        "SCCS/1613/19",
+        "EU Annex III entry 315",
+        "CIR"
+      ],
+      "eu": "restricted — max 6.25% as aluminium in antiperspirants",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": true,
+      "dispute_note": "Same aluminium dispute as aluminum chlorohydrate.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Aluminum Chlorohydrex PG",
+      "function": "antiperspirant active",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Propylene glycol complex of aluminium chlorohydrate; same EU limit.",
+      "basis": [
+        "SCCS/1613/19",
+        "EU Annex III entry 315"
+      ],
+      "eu": "restricted — max 6.25% as aluminium in antiperspirants",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": true,
+      "dispute_note": "Same aluminium dispute as aluminum chlorohydrate.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Aluminum Zirconium Octachlorohydrex GLY",
+      "function": "antiperspirant active",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Glycine-complexed aluminium zirconium salt; a distinct material from the tetra- and tri- forms.",
+      "basis": [
+        "SCCS/1613/19",
+        "EU Annex III entry 315"
+      ],
+      "eu": "restricted — max 10.60% as anhydrous aluminium zirconium chloride hydroxide",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": true,
+      "dispute_note": "Same aluminium dispute as aluminum chlorohydrate.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Aluminum Zirconium Trichlorohydrex GLY",
+      "function": "antiperspirant active",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Glycine-complexed aluminium zirconium salt; a distinct material from the tetra- and octa- forms.",
+      "basis": [
+        "SCCS/1613/19",
+        "EU Annex III entry 315"
+      ],
+      "eu": "restricted — max 10.60% as anhydrous aluminium zirconium chloride hydroxide",
+      "eu_annex": [
+        "III"
+      ],
+      "dose_dependent": true,
+      "disputed": true,
+      "dispute_note": "Same aluminium dispute as aluminum chlorohydrate.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Aluminum Starch Octenylsuccinate",
+      "function": "absorbent / texture agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Modified starch used to absorb oil and improve feel; not an antiperspirant active.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Dicaprylyl Ether",
+      "function": "emollient",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Light, fast-spreading emollient common in deodorants.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Dicaprylyl Carbonate",
+      "function": "emollient",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Light silicone-alternative emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "PPG-14 Butyl Ether",
+      "function": "emollient / solvent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Propoxylated emollient; PPGs do not carry the ethoxylate dioxane caveat.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "PPG-3 Myristyl Ether",
+      "function": "emollient / solvent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Propoxylated emollient used in antiperspirant sticks.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "PPG-15 Stearyl Ether",
+      "function": "emollient / solvent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Propoxylated emollient with a dry skin feel.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Octyldodecanol",
+      "function": "emollient / fatty alcohol",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Branched fatty alcohol emollient, well tolerated.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Cetyl Ethylhexanoate",
+      "function": "emollient / ester",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Light ester emollient with a dry finish.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Butyloctyl Salicylate",
+      "function": "emollient / UV filter solubiliser",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Ester used to dissolve UV filters and boost SPF; not a source of free salicylic acid.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hydrogenated Castor Oil",
+      "function": "structuring agent / emollient",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Hardened castor oil used to structure sticks and balms.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Hydrogenated Coco-Glycerides",
+      "function": "emollient / structuring agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Hardened coconut glycerides used for texture.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Caprylic/Capric Glycerides",
+      "function": "emollient",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Coconut-derived mono- and diglyceride emollient.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Capric Glycerides",
+      "function": "emollient",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Capric acid glycerides; emollient and solubiliser.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Glyceryl Oleate",
+      "function": "emollient / emulsifier",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Oleic glyceride emulsifier, well tolerated.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Glycol Distearate",
+      "function": "opacifier / pearlising agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Gives shampoos their pearly look; inert wax ester.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Glycol Stearate",
+      "function": "opacifier / emulsifier",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Pearlising and emulsifying wax ester.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Ceresin",
+      "function": "structuring wax",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Refined mineral wax used to harden sticks and balms.",
+      "basis": [
+        "CIR (safe as used)",
+        "EU Annex II entry 906 restricts unrefined mineral hydrocarbons"
+      ],
+      "eu": "cosmetic-grade permitted; unrefined mineral hydrocarbon feedstocks prohibited",
+      "eu_annex": [
+        "II"
+      ],
+      "dose_dependent": false,
+      "disputed": true,
+      "dispute_note": "Same shape as the mineral oil dispute: regulators treat refined grades as inert, while NGO campaigns focus on MOAH/MOSH contamination, which is a purity-control question.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Arachidic Acid",
+      "function": "fatty acid / structuring agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Saturated fatty acid used for texture and as a soap base.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Triethyl Citrate",
+      "function": "solvent / deodorant agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Citrate ester; slows odour-causing bacterial enzymes in deodorants.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Ascorbyl Palmitate",
+      "function": "antioxidant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Oil-soluble vitamin C ester used mainly to protect the formula.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Methylpropanediol",
+      "function": "solvent / humectant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Glycol solvent that boosts preservative efficacy; well tolerated.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Pantolactone",
+      "function": "skin conditioning agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Panthenol-related conditioning agent.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hydroxyacetophenone",
+      "function": "antioxidant / preservative booster",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Stabiliser used alongside preservatives; not itself a preservative.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Caprylhydroxamic Acid",
+      "function": "chelator / preservative booster",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Iron chelator that extends preservative performance at skin pH.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Capryloyl Glycine",
+      "function": "amino acid derivative / sebum regulator",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Fatty acid–amino acid conjugate used against odour and excess sebum.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium",
+      "covers_inci": [
+        "Caprylic Glycine"
+      ]
+    },
+    {
+      "inci": "Sodium Stearate",
+      "function": "gellant / soap base",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Stearic acid soap; the gelling agent that makes stick deodorants solid.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Lauroyl Lactylate",
+      "function": "emulsifier / mild surfactant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Lactylate emulsifier with good skin tolerance.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Stearoyl Lactylate",
+      "function": "emulsifier",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Lactylate emulsifier, well tolerated.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Cetearyl Sulfate",
+      "function": "anionic surfactant / emulsifier",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Fatty alcohol sulfate emulsifier; milder than lauryl sulfate but still an irritant class.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sodium C12-13 Pareth Sulfate",
+      "function": "anionic surfactant",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Ethoxylated sulfate cleanser; carries the ethoxylate 1,4-dioxane impurity caveat.",
+      "basis": [
+        "CIR (safe in rinse-off)",
+        "EU purity requirements"
+      ],
+      "eu": "unrestricted (impurity limits apply)",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": true,
+      "dispute_note": "CIR judges ethoxylated sulfates safe in rinse-off when residual 1,4-dioxane is controlled; NGOs score the whole ethoxylate class elevated because impurity control is not visible on the label.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "C11-15 Pareth-7",
+      "function": "nonionic surfactant / solubiliser",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Ethoxylated surfactant with the same class impurity caveat.",
+      "basis": [
+        "CIR (safe as used)",
+        "EU purity requirements"
+      ],
+      "eu": "unrestricted (impurity limits apply)",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": true,
+      "dispute_note": "Same ethoxylate impurity dispute as the PEG entries.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Steareth-100",
+      "function": "nonionic emulsifier",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Ethoxylated emulsifier with the same class caveats.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted (impurity limits apply)",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": true,
+      "dispute_note": "Same ethoxylate impurity dispute as the PEG entries.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Steareth-2",
+      "function": "nonionic emulsifier",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Ethoxylated emulsifier with the same class caveats.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted (impurity limits apply)",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": true,
+      "dispute_note": "Same ethoxylate impurity dispute as the PEG entries.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Steareth-21",
+      "function": "nonionic emulsifier",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Ethoxylated emulsifier with the same class caveats.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "unrestricted (impurity limits apply)",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": true,
+      "dispute_note": "Same ethoxylate impurity dispute as the PEG entries.",
+      "confidence": "medium"
+    },
+    {
+      "inci": "Distearyldimonium Chloride",
+      "function": "conditioning quat",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Dialkyl conditioning quat; irritant potential in leave-on use.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Sodium Cocoyl Glutamate",
+      "function": "amino acid surfactant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Gentle glutamate-based cleanser, low irritancy.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Disodium Cocoyl Glutamate",
+      "function": "amino acid surfactant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Gentle glutamate-based cleanser, low irritancy.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Acrylates Copolymer",
+      "function": "film former / thickener",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Inert film-forming polymer, too large to penetrate skin.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Tapioca Starch",
+      "function": "absorbent / texture agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Cassava starch used to absorb oil and mattify.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Zea Mays Starch",
+      "function": "absorbent / texture agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Corn starch used as a talc alternative in powders and deodorants.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Glyceryl Glucoside",
+      "function": "humectant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sugar-glycerol humectant marketed for aquaporin support.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hydrolyzed Hyaluronic Acid",
+      "function": "humectant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Low molecular weight hyaluronic acid fragment; humectant.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Alanine",
+      "function": "amino acid / skin conditioning",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Amino acid; natural moisturising factor component.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Arginine",
+      "function": "amino acid / pH adjuster",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Basic amino acid used to neutralise acids and condition skin.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Arginine HCl",
+      "function": "amino acid / skin conditioning",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Arginine salt; humectant and conditioning agent.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Carnitine",
+      "function": "skin conditioning agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Amino acid derivative used in sebum-control and slimming claims.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Citrulline",
+      "function": "amino acid / skin conditioning",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Amino acid; humectant and conditioning agent.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Glutamic Acid",
+      "function": "amino acid / humectant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Amino acid; natural moisturising factor component.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Glycine",
+      "function": "amino acid / buffering agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Simplest amino acid; humectant and buffer.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Glycogen",
+      "function": "humectant / skin conditioning",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Polysaccharide humectant.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Histidine HCl",
+      "function": "amino acid / skin conditioning",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Histidine salt; humectant and conditioning agent.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Lysine HCl",
+      "function": "amino acid / skin conditioning",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Lysine salt; humectant and conditioning agent.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Proline",
+      "function": "amino acid / humectant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Amino acid; natural moisturising factor component.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Serine",
+      "function": "amino acid / humectant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Amino acid; natural moisturising factor component.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Threonine",
+      "function": "amino acid / humectant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Amino acid; humectant and conditioning agent.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Taurine",
+      "function": "amino acid derivative / conditioning agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Amino sulfonic acid used as a conditioning and osmolyte agent.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "PCA",
+      "function": "humectant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Pyrrolidone carboxylic acid; natural moisturising factor component. Distinct from its sodium salt.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Mannitol",
+      "function": "humectant / sugar alcohol",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sugar alcohol humectant, inert.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sucrose",
+      "function": "humectant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sugar; humectant and mild abrasive in scrubs.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Biotin",
+      "function": "vitamin / conditioning agent",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Vitamin B7; topical hair and skin claims are weak but the ingredient is benign.",
+      "basis": [
+        "CIR (safe as used)"
+      ],
+      "eu": "unrestricted",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "high"
+    },
+    {
+      "inci": "Butane",
+      "function": "propellant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Aerosol propellant; purity specification limits 1,3-butadiene.",
+      "basis": [
+        "CIR (safe as used with purity control)"
+      ],
+      "eu": "permitted; 1,3-butadiene content controlled by specification",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Isobutane",
+      "function": "propellant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Aerosol propellant; purity specification limits 1,3-butadiene.",
+      "basis": [
+        "CIR (safe as used with purity control)"
+      ],
+      "eu": "permitted; 1,3-butadiene content controlled by specification",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Propane",
+      "function": "propellant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Aerosol propellant; purity specification limits 1,3-butadiene.",
+      "basis": [
+        "CIR (safe as used with purity control)"
+      ],
+      "eu": "permitted; 1,3-butadiene content controlled by specification",
+      "eu_annex": [],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "CI 17200",
+      "function": "colorant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "D&C Red 33; permitted cosmetic colorant with use-area restrictions.",
+      "basis": [
+        "EU Annex IV"
+      ],
+      "eu": "permitted colorant with product-type restrictions",
+      "eu_annex": [
+        "IV"
+      ],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "CI 42051",
+      "function": "colorant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Patent Blue V; permitted cosmetic colorant.",
+      "basis": [
+        "EU Annex IV"
+      ],
+      "eu": "permitted colorant",
+      "eu_annex": [
+        "IV"
+      ],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "CI 45100",
+      "function": "colorant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Acid Red 52; permitted cosmetic colorant.",
+      "basis": [
+        "EU Annex IV"
+      ],
+      "eu": "permitted colorant",
+      "eu_annex": [
+        "IV"
+      ],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "CI 47005",
+      "function": "colorant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Quinoline Yellow; permitted cosmetic colorant with use-area restrictions.",
+      "basis": [
+        "EU Annex IV"
+      ],
+      "eu": "permitted colorant with product-type restrictions",
+      "eu_annex": [
+        "IV"
+      ],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "CI 77947",
+      "function": "colorant",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Zinc oxide used as a white pigment; the same substance graded here as a colorant.",
+      "basis": [
+        "EU Annex IV"
+      ],
+      "eu": "permitted colorant",
+      "eu_annex": [
+        "IV"
+      ],
+      "dose_dependent": false,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Potassium Nitrate",
+      "function": "desensitising agent",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Used against dentine sensitivity in toothpaste; oral use levels are specified rather than open.",
+      "basis": [
+        "CIR"
+      ],
+      "eu": "permitted in oral care at specified levels",
+      "eu_annex": [],
+      "dose_dependent": true,
+      "disputed": false,
+      "dispute_note": null,
+      "confidence": "low"
     }
   ]
 }
