@@ -1696,6 +1696,163 @@ console.log('front pack helpers ok');
     print(proc.stdout.strip())
 
 
+def test_ingredients_text_preference_rejoin_and_u201a():
+    """Prefer ingredients_text over OFF array; rejoin comma-split INCIs; U+201A → comma."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = process.cwd();
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+module.exports = {
+  parseCosmeticIngredientList,
+  scoreCosmeticProduct,
+  normalizeInci,
+  lookupCosmeticIngredient,
+  rejoinAdjacentUnmatchedFragments,
+};
+`;
+fs.writeFileSync('/tmp/parser_rejoin_helpers.js', block);
+const {
+  parseCosmeticIngredientList: parseCosmeticIngredientListRaw,
+  scoreCosmeticProduct,
+  normalizeInci,
+  lookupCosmeticIngredient,
+} = require('/tmp/parser_rejoin_helpers.js');
+
+function parseCosmeticIngredientList(product) {
+  const result = parseCosmeticIngredientListRaw(product);
+  return result.items || result;
+}
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// 1. BOTH ingredients_text and structured array → parse from text (0792850110991 shape).
+{
+  const product = {
+    ingredients_text:
+      'Beeswax, cocos nucifera (COconut) oil, helianthus annuus (sunflower) seed oil',
+    ingredients: [
+      { text: 'Beeswax' },
+      { text: 'cocos nucifera' },
+      { text: 'oil' },
+      { text: 'helianthus annuus' },
+      { text: 'seed oil' },
+      { text: 'oll' },
+    ],
+  };
+  const names = parseCosmeticIngredientList(product).map(p => p.name);
+  const joined = names.join('|').toLowerCase();
+  assert(
+    names.some(n => /^helianthus annuus seed oil$/i.test(n)),
+    'helianthus annuus seed oil must be one row from text, got ' + JSON.stringify(names)
+  );
+  assert(
+    !names.some(n => /^helianthus annuus$/i.test(n)) &&
+      !names.some(n => /^seed oil$/i.test(n)),
+    'must not emit split botanical halves from OFF array: ' + JSON.stringify(names)
+  );
+  assert(joined.includes('cocos nucifera oil'), 'botanical oil from text: ' + JSON.stringify(names));
+}
+
+// 2. Array with NO ingredients_text still parses from the array.
+{
+  const product = {
+    ingredients: [
+      { text: 'Aqua' },
+      { text: 'Glycerin' },
+      { id: 'en:phenoxyethanol' },
+    ],
+  };
+  const names = parseCosmeticIngredientList(product).map(p => p.name);
+  assert(names.join('|') === 'Aqua|Glycerin|phenoxyethanol',
+    'array-only fallback: ' + JSON.stringify(names));
+}
+
+// 3. SODIUM, COCOYL GLYCINATE → one row resolving to Sodium Cocoyl Glycinate.
+{
+  const scored = scoreCosmeticProduct({
+    ingredients_text: 'SODIUM, COCOYL GLYCINATE',
+  });
+  assert(scored.ingredientList.length === 1,
+    'expected one merged row, got ' + JSON.stringify(scored.ingredientList));
+  assert(scored.ingredientList[0].matched === true, 'merged row must match');
+  assert(scored.ingredientList[0].inci === 'Sodium Cocoyl Glycinate',
+    'expected Sodium Cocoyl Glycinate, got ' + scored.ingredientList[0].inci);
+}
+
+// 4. AQUA, GLYCERIN does NOT merge — both already match (condition 1).
+{
+  const scored = scoreCosmeticProduct({ ingredients_text: 'AQUA, GLYCERIN' });
+  assert(scored.ingredientList.length === 2,
+    'Aqua/Glycerin must stay two rows: ' + JSON.stringify(scored.ingredientList));
+  assert(scored.ingredientList[0].inci === 'Aqua');
+  assert(scored.ingredientList[1].inci === 'Glycerin');
+}
+
+// 5. Two adjacent genuine unknowns whose join is also unknown stay as two rows.
+{
+  const scored = scoreCosmeticProduct({
+    ingredients_text: 'CompletelyFakeInciAlpha, CompletelyFakeInciBeta',
+  });
+  assert(scored.ingredientList.length === 2,
+    'unknown+unknown must stay two rows: ' + JSON.stringify(scored.ingredientList));
+  assert(scored.coverageMatched === 0);
+  assert(scored.coverageTotal === 2);
+}
+
+// 6. U+201A normalises to the same key as a real comma.
+{
+  const withLow9 = normalizeInci('1\u201A2-hexanediol');
+  const withComma = normalizeInci('1,2-hexanediol');
+  assert(withLow9 === withComma, 'U+201A key mismatch: ' + withLow9 + ' vs ' + withComma);
+  assert(withLow9 === '1,2-hexanediol', 'expected 1,2-hexanediol, got ' + withLow9);
+  const hit = lookupCosmeticIngredient('1\u201A2-Hexanediol');
+  assert(hit && hit.inci === '1,2-Hexanediol', 'U+201A must resolve via lookup');
+}
+
+// 7. A merged pair reduces the coverage denominator by exactly one.
+{
+  const before = parseCosmeticIngredientList({
+    ingredients_text: 'SODIUM, COCOYL GLYCINATE',
+  });
+  assert(before.length === 2, 'pre-rejoin parse must yield two fragments');
+  const scored = scoreCosmeticProduct({
+    ingredients_text: 'SODIUM, COCOYL GLYCINATE',
+  });
+  assert(scored.coverageTotal === before.length - 1,
+    'merged pair must shrink denom by 1: parse=' + before.length +
+    ' coverageTotal=' + scored.coverageTotal);
+  assert(scored.coverageMatched === 1, 'merged pair must match');
+}
+
+console.log('ingredients_text preference + rejoin + U+201A ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"parser rejoin/text-preference assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -1714,6 +1871,7 @@ def main() -> int:
         test_photo_cache_below_gate_and_quality,
         test_request_guards_rate_limit_and_vision_cap,
         test_front_pack_name_and_image_helpers,
+        test_ingredients_text_preference_rejoin_and_u201a,
     ]
     failed = 0
     for test in tests:
