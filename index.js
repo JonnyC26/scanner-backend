@@ -283,6 +283,7 @@ function normalizeInci(name) {
     .toLowerCase()
     .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-') // unicode dashes → hyphen
     .replace(/[\u2044\u2215\uFF0F]/g, '/') // unicode slashes → /
+    .replace(/\u201A/g, ',') // single low-9 quotation mark → comma (OCR)
     .replace(/\s*-\s*/g, '-')
     .replace(/\s*\/\s*/g, '/')
     .replace(/\s+/g, ' ')
@@ -569,9 +570,14 @@ function isUnparseableIngredientName(name) {
 // are kept in ingredientList for display but excluded from coverage, scoring,
 // and the unmatchedInci tally.
 //
+// Prefer ingredients_text whenever it is present and non-empty. OFF's structured
+// ingredients array is built by a food taxonomy and often splits botanical
+// binomials ("cocos nucifera" / "oil"); the free-text path runs through
+// splitCosmeticIngredientText which keeps those intact.
+//
 // Intentional: may-contain / +/- / ± splitting applies only to ingredients_text.
-// The structured product.ingredients array path returns early with mayContain:false
-// on every row — OFF/OBF parsed arrays are already tokenised and do not carry the
+// The structured product.ingredients array fallback returns mayContain:false on
+// every row — OFF/OBF parsed arrays are already tokenised and do not carry the
 // free-text "May Contain (+/-):" marker, so marker-based splitting does not apply.
 //
 // Also returns { items, drugFactsMarker } so callers can log truncation.
@@ -589,6 +595,28 @@ function parseCosmeticIngredientList(product) {
     });
   };
 
+  // Prefer free-text when usable — structured array is a fallback only.
+  const hasIngredientsText = !!(product.ingredients_text && String(product.ingredients_text).trim());
+  if (hasIngredientsText) {
+    // Prefer the Ingredients:/INCI: section when warning copy precedes it, then
+    // drop Drug Facts / warning panels that follow the list.
+    let text = extractFromIngredientLabel(product.ingredients_text || '');
+    const truncated = truncateDrugFactsAndWarnings(text);
+    text = stripLeadingIngredientLabelPrefix(truncated.text);
+    const { main, conditional } = splitMayContainSections(text);
+
+    for (const part of splitCosmeticIngredientText(main)) {
+      push(cleanParsedIngredientFragment(part), false);
+    }
+    if (conditional) {
+      for (const part of splitCosmeticIngredientText(conditional)) {
+        push(cleanParsedIngredientFragment(part), true);
+      }
+    }
+
+    return { items: parsed, drugFactsMarker: truncated.marker };
+  }
+
   if (Array.isArray(product.ingredients) && product.ingredients.length > 0) {
     for (const item of product.ingredients) {
       const raw = (item.text || item.id || item.ingredient_id || '').toString();
@@ -599,23 +627,41 @@ function parseCosmeticIngredientList(product) {
     return { items: parsed, drugFactsMarker: null };
   }
 
-  // Prefer the Ingredients:/INCI: section when warning copy precedes it, then
-  // drop Drug Facts / warning panels that follow the list.
-  let text = extractFromIngredientLabel(product.ingredients_text || '');
-  const truncated = truncateDrugFactsAndWarnings(text);
-  text = stripLeadingIngredientLabelPrefix(truncated.text);
-  const { main, conditional } = splitMayContainSections(text);
+  return { items: parsed, drugFactsMarker: null };
+}
 
-  for (const part of splitCosmeticIngredientText(main)) {
-    push(cleanParsedIngredientFragment(part), false);
-  }
-  if (conditional) {
-    for (const part of splitCosmeticIngredientText(conditional)) {
-      push(cleanParsedIngredientFragment(part), true);
+// Post-parse pass: some source labels insert commas inside a single INCI name
+// ("SODIUM, COCOYL GLYCINATE"). Merge adjacent unmatched pairs when the joined
+// name resolves against the hazard table. Only pairwise — no three-way joins.
+function rejoinAdjacentUnmatchedFragments(items) {
+  const result = [];
+  let i = 0;
+  while (i < items.length) {
+    const a = items[i];
+    const b = items[i + 1];
+    if (
+      b &&
+      !a.unparseable &&
+      !b.unparseable &&
+      !!a.mayContain === !!b.mayContain &&
+      !lookupCosmeticIngredient(a.name) &&
+      !lookupCosmeticIngredient(b.name)
+    ) {
+      const joinedName = `${a.name} ${b.name}`;
+      if (lookupCosmeticIngredient(joinedName)) {
+        result.push({
+          name: joinedName,
+          mayContain: !!a.mayContain,
+          unparseable: isUnparseableIngredientName(joinedName),
+        });
+        i += 2;
+        continue;
+      }
     }
+    result.push(a);
+    i += 1;
   }
-
-  return { items: parsed, drugFactsMarker: truncated.marker };
+  return result;
 }
 
 function isFragranceAllergen(entry) {
@@ -635,7 +681,9 @@ function cosmeticPenaltyForRisk(risk) {
 }
 
 function scoreCosmeticProduct(product) {
-  const { items: parsedItems, drugFactsMarker } = parseCosmeticIngredientList(product);
+  const { items: rawParsedItems, drugFactsMarker } = parseCosmeticIngredientList(product);
+  // Rejoin comma-split INCI fragments before coverage is counted.
+  const parsedItems = rejoinAdjacentUnmatchedFragments(rawParsedItems);
   // may-contain / +/- and unparseable packaging junk are listed for display
   // but do not inflate coverage or participate in scoring.
   const coverageItems = parsedItems.filter(item => !item.mayContain && !item.unparseable);
