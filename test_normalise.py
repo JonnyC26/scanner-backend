@@ -2183,6 +2183,191 @@ console.log('ingredients_text preference + rejoin + U+201A ok');
     print(proc.stdout.strip())
 
 
+# ---------------------------------------------------------------------------
+# CosIng recognised-names layer (COSING_NAMES_SPEC)
+# ---------------------------------------------------------------------------
+
+
+def test_cosing_recognised_names_layer():
+    """Recognised-only CosIng map: lookup order, coverage, penalty, degrade, unmatched."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('function stringifyIngredientListForCache');
+if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = process.cwd();
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+module.exports = {
+  lookupCosmeticIngredient,
+  lookupRecognisedName,
+  normalizeInci,
+  scoreCosmeticProduct,
+  cosingNamesMap,
+  loadCosingNamesFromFile,
+  COSING_NAMES_VERSION,
+  COSMETIC_TABLE_VERSION,
+  unmatchedNameLabel,
+  unmatchedNameRecognised,
+};
+`;
+fs.writeFileSync('/tmp/cosing_layer_helpers.js', block);
+// Fresh require
+delete require.cache[require.resolve('/tmp/cosing_layer_helpers.js')];
+const g = require('/tmp/cosing_layer_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg);
+}
+
+// 1. Recognised-only name → recognised:true, assessed:false, risk:null
+const recognisedOnly = g.lookupCosmeticIngredient('Gossypium Hirsutum Seed Extract');
+assert(recognisedOnly, 'recognised-only lookup miss');
+assert(recognisedOnly.recognised === true, 'expected recognised:true');
+assert(recognisedOnly.assessed === false, 'expected assessed:false');
+assert(recognisedOnly.risk === null, 'expected risk:null, got ' + recognisedOnly.risk);
+assert(recognisedOnly.inci === 'Gossypium Hirsutum Seed Extract', 'display name');
+assert(Array.isArray(recognisedOnly.functions), 'functions array');
+assert(recognisedOnly.penalty === 0, 'penalty 0');
+
+// 2. Name in BOTH hazard + recognised → hazard wins (inject into map)
+const aquaKey = g.normalizeInci('Aqua');
+g.cosingNamesMap.set(aquaKey, { name: 'Fake Recognised Aqua', fn: ['solvent'] });
+const aquaHit = g.lookupCosmeticIngredient('Aqua');
+assert(aquaHit && aquaHit.inci === 'Aqua', 'hazard Aqua must win, got ' + JSON.stringify(aquaHit));
+assert(!aquaHit.recognised, 'recognised must not shadow hazard');
+assert(aquaHit.risk != null || aquaHit.risk === 'none' || aquaHit.risk_type, 'hazard entry shape');
+g.cosingNamesMap.delete(aquaKey);
+
+// 3. Synonym target still beats the recognised map
+const fragKey = g.normalizeInci('fragrance');
+g.cosingNamesMap.set(fragKey, { name: 'Fake Recognised Fragrance', fn: ['masking'] });
+const fragHit = g.lookupCosmeticIngredient('fragrance');
+assert(fragHit && fragHit.inci === 'Parfum', 'synonym must beat recognised, got ' + JSON.stringify(fragHit));
+assert(!fragHit.recognised, 'synonym hit must not be recognised-only');
+g.cosingNamesMap.delete(fragKey);
+
+// 4. Coverage: 2 assessed + 8 recognised = 2/10, NOT 10/10
+const eightRecognised = [
+  'Gossypium Hirsutum Seed Extract',
+  'Isooctanoyl Tetrapeptide-25',
+  'Nonapeptide-11',
+  '1,10-Decanediol',
+  'Aluminum Behenate',
+  'Aluminum Benzoate',
+  'Alumina',
+  'Xylitylglucoside',
+];
+// Confirm each is recognised-only (not hazard)
+for (const n of eightRecognised) {
+  const h = g.lookupCosmeticIngredient(n);
+  assert(h && h.recognised === true, 'fixture must be recognised-only: ' + n + ' -> ' + JSON.stringify(h));
+}
+const mix = g.scoreCosmeticProduct({
+  ingredients_text: ['Aqua', 'Glycerin', ...eightRecognised].join(', '),
+});
+assert(mix.assessedCount === 2, 'assessedCount expected 2, got ' + mix.assessedCount);
+assert(mix.recognisedCount === 8, 'recognisedCount expected 8, got ' + mix.recognisedCount);
+assert(mix.totalCount === 10, 'totalCount expected 10, got ' + mix.totalCount);
+assert(mix.coverageMatched === 2, 'coverageMatched expected 2, got ' + mix.coverageMatched);
+assert(mix.coverageTotal === 10, 'coverageTotal expected 10, got ' + mix.coverageTotal);
+assert(mix.coverage === 0.2, 'coverage must be exactly 2/10=0.2, got ' + mix.coverage);
+
+// 5. Recognised-only row contributes 0 to the penalty sum
+const onlyRecognised = g.scoreCosmeticProduct({
+  ingredients_text: eightRecognised.slice(0, 5).join(', '),
+});
+// Below gate (0 assessed / 5) — score null, but if we force enough assessed...
+const withAssessed = g.scoreCosmeticProduct({
+  ingredients_text: ['Aqua', 'Glycerin', 'Xanthan Gum', 'Tocopherol', 'Citric Acid', ...eightRecognised.slice(0, 5)].join(', '),
+});
+assert(withAssessed.recognisedCount === 5, 'expected 5 recognised');
+assert(withAssessed.score !== null, 'should clear coverage gate, score=' + withAssessed.score);
+const penaltyIncis = (withAssessed.scoreBreakdown.penalties || []).map(p => p.inci);
+for (const n of eightRecognised.slice(0, 5)) {
+  assert(!penaltyIncis.includes(n), 'recognised must not enter penalty sum: ' + n);
+}
+for (const row of withAssessed.ingredientList) {
+  if (row.recognised) {
+    assert(row.penalty === 0, 'recognised row penalty must be 0');
+    assert(row.assessed === false, 'recognised row assessed false');
+    assert(row.risk === null, 'recognised row risk null');
+  }
+  if (row.matched) {
+    assert(row.assessed === true, 'assessed row must have assessed:true');
+  }
+}
+
+// 6. Missing or corrupt purla_cosing_names.json → empty map, no throw
+const missing = g.loadCosingNamesFromFile(path.join(os.tmpdir(), 'no-such-cosing-names-purla.json'));
+assert(missing.map instanceof Map && missing.map.size === 0, 'missing file → empty map');
+assert(missing.version === 'none', 'missing file version none');
+
+const corruptPath = path.join(os.tmpdir(), 'corrupt-cosing-names-purla.json');
+fs.writeFileSync(corruptPath, '{not valid json!!!');
+const corrupt = g.loadCosingNamesFromFile(corruptPath);
+assert(corrupt.map instanceof Map && corrupt.map.size === 0, 'corrupt file → empty map');
+assert(corrupt.version === 'none', 'corrupt file version none');
+
+// Empty map must not throw on lookup
+const saved = g.cosingNamesMap;
+// Replace contents
+g.cosingNamesMap.clear();
+assert(g.lookupRecognisedName('Gossypium Hirsutum Seed Extract') === null, 'empty map miss');
+// Restore from disk for remaining asserts
+const reloaded = g.loadCosingNamesFromFile(path.join(process.cwd(), 'purla_cosing_names.json'));
+for (const [k, v] of reloaded.map) g.cosingNamesMap.set(k, v);
+
+// 7. Recognised-only name still written to unmatchedInci list, flagged recognised:true
+const scoredUnmatched = g.scoreCosmeticProduct({
+  ingredients_text: 'Aqua, Gossypium Hirsutum Seed Extract, Totally Fake Ingredient Xyzzy',
+});
+const flagged = scoredUnmatched.unmatchedNames.filter(
+  (item) => item && typeof item === 'object' && item.recognised === true
+);
+assert(flagged.length === 1, 'expected one recognised unmatched, got ' + JSON.stringify(scoredUnmatched.unmatchedNames));
+assert(/gossypium hirsutum seed extract/i.test(flagged[0].name), 'recognised unmatched name');
+assert(g.unmatchedNameRecognised(flagged[0]) === true, 'helper recognises flag');
+const trueMiss = scoredUnmatched.unmatchedNames.filter(
+  (item) => typeof item === 'string' || (item && !item.recognised)
+);
+assert(trueMiss.some(item => /xyzzy/i.test(g.unmatchedNameLabel(item))), 'true miss still present');
+
+// Table version folds CosIng version so caches refresh once
+assert(
+  String(g.COSMETIC_TABLE_VERSION).includes('cosing:'),
+  'COSMETIC_TABLE_VERSION must fold cosing version, got ' + g.COSMETIC_TABLE_VERSION
+);
+
+console.log('cosing recognised-names layer ok', {
+  coverage: mix.coverage,
+  assessedCount: mix.assessedCount,
+  recognisedCount: mix.recognisedCount,
+  tableVersion: g.COSMETIC_TABLE_VERSION,
+  cosingVersion: g.COSING_NAMES_VERSION,
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"cosing recognised-names assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -2203,6 +2388,7 @@ def main() -> int:
         test_front_pack_name_and_image_helpers,
         test_front_image_endpoint,
         test_ingredients_text_preference_rejoin_and_u201a,
+        test_cosing_recognised_names_layer,
     ]
     failed = 0
     for test in tests:
