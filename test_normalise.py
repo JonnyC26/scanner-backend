@@ -2121,7 +2121,7 @@ function assert(cond, msg) {
     'expected Sodium Cocoyl Glycinate, got ' + scored.ingredientList[0].inci);
 }
 
-// 4. AQUA, GLYCERIN does NOT merge — both already match (condition 1).
+// 4. AQUA, GLYCERIN does NOT merge — both are ASSESSED hazard-table hits.
 {
   const scored = scoreCosmeticProduct({ ingredients_text: 'AQUA, GLYCERIN' });
   assert(scored.ingredientList.length === 2,
@@ -2130,7 +2130,23 @@ function assert(cond, msg) {
   assert(scored.ingredientList[1].inci === 'Glycerin');
 }
 
-// 5. Two adjacent genuine unknowns whose join is also unknown stay as two rows.
+// 5. DISODIUM, EDTA merges — EDTA alone is recognised-only (CosIng), which
+// must NOT count as assessed and therefore must not block the rejoin.
+{
+  const edtaAlone = lookupCosmeticIngredient('EDTA');
+  assert(edtaAlone && edtaAlone.recognised === true,
+    'fixture: EDTA must be recognised-only, got ' + JSON.stringify(edtaAlone));
+  assert(!lookupCosmeticIngredient('DISODIUM'), 'fixture: DISODIUM must miss');
+  const scored = scoreCosmeticProduct({ ingredients_text: 'DISODIUM, EDTA' });
+  assert(scored.ingredientList.length === 1,
+    'DISODIUM+EDTA must merge to one row: ' + JSON.stringify(scored.ingredientList));
+  assert(scored.ingredientList[0].inci === 'Disodium EDTA',
+    'expected Disodium EDTA, got ' + scored.ingredientList[0].inci);
+  assert(scored.ingredientList[0].matched === true, 'merged Disodium EDTA must be assessed');
+  assert(scored.ingredientList[0].recognised === false, 'Disodium EDTA is hazard, not recognised-only');
+}
+
+// 6. Two adjacent genuine unknowns whose join is also unknown stay as two rows.
 {
   const scored = scoreCosmeticProduct({
     ingredients_text: 'CompletelyFakeInciAlpha, CompletelyFakeInciBeta',
@@ -2141,7 +2157,7 @@ function assert(cond, msg) {
   assert(scored.coverageTotal === 2);
 }
 
-// 6. U+201A normalises to the same key as a real comma.
+// 7. U+201A normalises to the same key as a real comma.
 {
   const withLow9 = normalizeInci('1\u201A2-hexanediol');
   const withComma = normalizeInci('1,2-hexanediol');
@@ -2151,7 +2167,7 @@ function assert(cond, msg) {
   assert(hit && hit.inci === '1,2-Hexanediol', 'U+201A must resolve via lookup');
 }
 
-// 7. A merged pair reduces the coverage denominator by exactly one.
+// 8. A merged pair reduces the coverage denominator by exactly one.
 {
   const before = parseCosmeticIngredientList({
     ingredients_text: 'SODIUM, COCOYL GLYCINATE',
@@ -2164,6 +2180,27 @@ function assert(cond, msg) {
     'merged pair must shrink denom by 1: parse=' + before.length +
     ' coverageTotal=' + scored.coverageTotal);
   assert(scored.coverageMatched === 1, 'merged pair must match');
+}
+
+// 9. Join that resolves only to a recognised CosIng name is still a valid merge.
+{
+  const joined = lookupCosmeticIngredient('Isooctanoyl Tetrapeptide-25');
+  assert(joined && joined.recognised === true,
+    'fixture: Isooctanoyl Tetrapeptide-25 must be recognised-only');
+  const left = lookupCosmeticIngredient('Isooctanoyl');
+  const right = lookupCosmeticIngredient('Tetrapeptide-25');
+  assert(!left || left.recognised === true, 'fixture: left half must not be assessed');
+  assert(!right || right.recognised === true, 'fixture: right half must not be assessed');
+  const scored = scoreCosmeticProduct({
+    ingredients_text: 'Isooctanoyl, Tetrapeptide-25',
+  });
+  assert(scored.ingredientList.length === 1,
+    'recognised-only join must merge: ' + JSON.stringify(scored.ingredientList));
+  assert(scored.ingredientList[0].recognised === true,
+    'merged row must be recognised-only');
+  assert(scored.ingredientList[0].inci === 'Isooctanoyl Tetrapeptide-25',
+    'expected Isooctanoyl Tetrapeptide-25, got ' + scored.ingredientList[0].inci);
+  assert(scored.ingredientList[0].assessed === false, 'recognised-only merge is not assessed');
 }
 
 console.log('ingredients_text preference + rejoin + U+201A ok');

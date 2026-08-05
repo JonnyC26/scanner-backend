@@ -700,9 +700,16 @@ function parseCosmeticIngredientList(product) {
   return { items: parsed, drugFactsMarker: null };
 }
 
+// True when lookup hit a real hazard-table entry (scorable). Recognised-only
+// CosIng hits are NOT assessed — they must not block comma-split rejoins.
+function isAssessedCosmeticHit(entry) {
+  return !!(entry && !entry.recognised);
+}
+
 // Post-parse pass: some source labels insert commas inside a single INCI name
-// ("SODIUM, COCOYL GLYCINATE"). Merge adjacent unmatched pairs when the joined
-// name resolves against the hazard table. Only pairwise — no three-way joins.
+// ("SODIUM, COCOYL GLYCINATE", "DISODIUM, EDTA"). Merge adjacent pairs when
+// neither half is ASSESSED and the joined name resolves (hazard table OR
+// recognised-only CosIng). Only pairwise — no three-way joins.
 function rejoinAdjacentUnmatchedFragments(items) {
   const result = [];
   let i = 0;
@@ -714,10 +721,11 @@ function rejoinAdjacentUnmatchedFragments(items) {
       !a.unparseable &&
       !b.unparseable &&
       !!a.mayContain === !!b.mayContain &&
-      !lookupCosmeticIngredient(a.name) &&
-      !lookupCosmeticIngredient(b.name)
+      !isAssessedCosmeticHit(lookupCosmeticIngredient(a.name)) &&
+      !isAssessedCosmeticHit(lookupCosmeticIngredient(b.name))
     ) {
       const joinedName = `${a.name} ${b.name}`;
+      // Any resolve counts — including a recognised-only CosIng name.
       if (lookupCosmeticIngredient(joinedName)) {
         result.push({
           name: joinedName,
