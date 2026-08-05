@@ -296,8 +296,36 @@ async function writeProductCacheWithRetry(docRef, cachePayload, { barcode, captu
 const cosmeticTable = JSON.parse(
   fs.readFileSync(path.join(__dirname, 'purla_cosmetic_ingredients.json'), 'utf8')
 );
-const COSMETIC_TABLE_VERSION = cosmeticTable._meta.version;
 const cosmeticIngredients = cosmeticTable.ingredients;
+
+// Recognised-only CosIng names — display + functions, NO risk grade.
+// Must never count toward the coverage numerator. Guard: missing/corrupt
+// file degrades to an empty map so this layer cannot take the scanner down.
+function loadCosingNamesFromFile(filePath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const version =
+      parsed._meta && parsed._meta.version != null
+        ? String(parsed._meta.version)
+        : 'none';
+    const map = new Map();
+    for (const [key, val] of Object.entries(parsed.names || {})) {
+      map.set(key, val);
+    }
+    return { map, version };
+  } catch (err) {
+    console.log(`[COSING NAMES] load failed — continuing with empty map: ${err.message}`);
+    return { map: new Map(), version: 'none' };
+  }
+}
+
+const _cosingLoaded = loadCosingNamesFromFile(
+  path.join(__dirname, 'purla_cosing_names.json')
+);
+let cosingNamesMap = _cosingLoaded.map;
+const COSING_NAMES_VERSION = _cosingLoaded.version;
+// Fold into table version so cached rows refresh once when this layer ships.
+const COSMETIC_TABLE_VERSION = `${cosmeticTable._meta.version}+cosing:${COSING_NAMES_VERSION}`;
 
 function normalizeInci(name) {
   return String(name || '')
@@ -312,7 +340,7 @@ function normalizeInci(name) {
 }
 
 // Indexes for matching. Order at lookup time: declare_as → inci → covers_inci
-// → synonym map (last resort for common English label names).
+// → synonym → recognised (CosIng names with no grade — never shadows a hazard hit).
 // For declare_as collisions, prefer the parent (no member_of) so grouped labels
 // resolve to the scorable entry rather than an alias.
 const cosmeticByInci = new Map();
@@ -362,6 +390,8 @@ function resolveCosmeticEntry(entry) {
 
 // declare_as → inci → covers_inci → synonym. No slash splitting — used as the
 // inner step so multilingual "Aqua/Water/Eau" segments do not recurse.
+// Recognised CosIng names are intentionally NOT here — they run after every
+// assessing lookup (including slash-segment consensus) has already missed.
 function lookupCosmeticIngredientDirect(rawName) {
   const key = normalizeInci(rawName);
   if (!key) return null;
@@ -374,6 +404,21 @@ function lookupCosmeticIngredientDirect(rawName) {
   return resolveCosmeticEntry(hit);
 }
 
+function lookupRecognisedName(rawName) {
+  const key = normalizeInci(rawName);
+  if (!key) return null;
+  const hit = cosingNamesMap.get(key);
+  if (!hit) return null;
+  return {
+    inci: hit.name,
+    recognised: true,
+    assessed: false,
+    risk: null,
+    functions: Array.isArray(hit.fn) ? hit.fn.slice() : [],
+    penalty: 0,
+  };
+}
+
 function lookupCosmeticIngredient(rawName) {
   // Always try the whole name first — many legitimate INCIs contain slashes
   // (Caprylic/Capric Triglyceride, Flower/Leaf/Stem extracts, etc.).
@@ -381,25 +426,29 @@ function lookupCosmeticIngredient(rawName) {
   if (whole) return whole;
 
   const key = normalizeInci(rawName);
-  if (!key || !key.includes('/')) return null;
-
-  // Last resort: EU multilingual labels join aliases with "/". Try each segment
-  // through the same lookup order; require unanimous agreement if several hit.
-  const segments = key.split('/').map(s => s.trim()).filter(s => s.length >= 3);
-  const resolved = [];
-  for (const segment of segments) {
-    const hit = lookupCosmeticIngredientDirect(segment);
-    if (hit) resolved.push(hit);
+  if (key && key.includes('/')) {
+    // Last resort for assessing: EU multilingual labels join aliases with "/".
+    // Try each segment through the assessing lookup order; require unanimous
+    // agreement if several hit.
+    const segments = key.split('/').map(s => s.trim()).filter(s => s.length >= 3);
+    const resolved = [];
+    for (const segment of segments) {
+      const hit = lookupCosmeticIngredientDirect(segment);
+      if (hit) resolved.push(hit);
+    }
+    if (resolved.length > 0) {
+      const firstKey = normalizeInci(resolved[0].inci);
+      const ambiguous = resolved.some(entry => normalizeInci(entry.inci) !== firstKey);
+      if (ambiguous) {
+        console.log(`[SLASH AMBIGUOUS] name=${String(rawName || '').trim()}`);
+        return null;
+      }
+      return resolved[0];
+    }
   }
-  if (resolved.length === 0) return null;
 
-  const firstKey = normalizeInci(resolved[0].inci);
-  const ambiguous = resolved.some(entry => normalizeInci(entry.inci) !== firstKey);
-  if (ambiguous) {
-    console.log(`[SLASH AMBIGUOUS] name=${String(rawName || '').trim()}`);
-    return null;
-  }
-  return resolved[0];
+  // LAST: recognised-only CosIng name. Never shadows a hazard / synonym hit.
+  return lookupRecognisedName(rawName);
 }
 
 function stripCosmeticAnnotations(fragment) {
@@ -715,10 +764,12 @@ function scoreCosmeticProduct(product) {
   const ingredientList = [];
   const scoredEntries = []; // unique parents that contribute to the score
   const seenInci = new Set();
-  // INCI names that did not hit the hazard table — used for table-gap logging only.
+  // INCI names that did not hit the hazard table — used for table-gap logging.
+  // Recognised-only names are included (flagged) so the research signal stays alive.
   // Unparseable rows are excluded so packaging junk does not pollute the tally.
   const unmatchedNames = [];
   const seenUnmatched = new Set();
+  let recognisedCount = 0;
 
   parsedItems.forEach((item, index) => {
     const displayName = item.name;
@@ -739,6 +790,8 @@ function scoreCosmeticProduct(product) {
         countsTowardScore: false,
         mayContain,
         unparseable: true,
+        assessed: false,
+        recognised: false,
       });
       return;
     }
@@ -746,17 +799,52 @@ function scoreCosmeticProduct(product) {
     const entry = lookupCosmeticIngredient(displayName);
 
     if (mayContain) {
+      const isRecognised = !!(entry && entry.recognised);
       ingredientList.push({
         name: displayName,
         position,
-        matched: !!entry,
+        matched: !!(entry && !isRecognised),
         inci: entry ? entry.inci : null,
-        risk: entry ? (entry.risk ?? null) : null,
-        riskType: entry ? (entry.risk_type || 'health') : null,
-        reason: entry ? (entry.reason || null) : null,
-        disputed: entry ? !!entry.disputed : false,
+        risk: entry && !isRecognised ? (entry.risk ?? null) : null,
+        riskType: entry && !isRecognised ? (entry.risk_type || 'health') : null,
+        reason: entry && !isRecognised ? (entry.reason || null) : null,
+        disputed: entry && !isRecognised ? !!entry.disputed : false,
         countsTowardScore: false,
         mayContain: true,
+        unparseable: false,
+        assessed: !!(entry && !isRecognised),
+        recognised: isRecognised,
+        ...(isRecognised
+          ? { functions: entry.functions || [], penalty: 0 }
+          : {}),
+      });
+      return;
+    }
+
+    // Recognised-only: known name, no grade. Not assessed — does not enter
+    // findings / coverage numerator / penalty sum. Still logged to unmatchedInci.
+    if (entry && entry.recognised) {
+      const missKey = normalizeInci(displayName);
+      if (missKey && !seenUnmatched.has(missKey)) {
+        seenUnmatched.add(missKey);
+        unmatchedNames.push({ name: displayName, recognised: true });
+      }
+      recognisedCount++;
+      ingredientList.push({
+        name: displayName,
+        position,
+        matched: false,
+        inci: entry.inci,
+        recognised: true,
+        assessed: false,
+        risk: null,
+        functions: entry.functions || [],
+        penalty: 0,
+        riskType: null,
+        reason: null,
+        disputed: false,
+        countsTowardScore: false,
+        mayContain: false,
         unparseable: false,
       });
       return;
@@ -780,6 +868,8 @@ function scoreCosmeticProduct(product) {
         countsTowardScore: false,
         mayContain: false,
         unparseable: false,
+        assessed: false,
+        recognised: false,
       });
       return;
     }
@@ -794,6 +884,8 @@ function scoreCosmeticProduct(product) {
       disputed: !!entry.disputed,
       disputeNote: entry.dispute_note || null,
       position,
+      assessed: true,
+      recognised: false,
     };
     findings.push(finding);
 
@@ -821,11 +913,17 @@ function scoreCosmeticProduct(product) {
       countsTowardScore,
       mayContain: false,
       unparseable: false,
+      assessed: true,
+      recognised: false,
     });
   });
 
-  const coverageMatched = findings.length;
-  const coverage = coverageTotal > 0 ? coverageMatched / coverageTotal : 0;
+  // assessedCount is the coverage numerator — recognised-only names must NOT
+  // inflate it. coverageTotal is every parsed coverage row (totalCount).
+  const assessedCount = findings.length;
+  const coverageMatched = assessedCount;
+  const totalCount = coverageTotal;
+  const coverage = coverageTotal > 0 ? assessedCount / totalCount : 0;
 
   if (coverageTotal === 0 || coverage < 0.40) {
     return {
@@ -834,6 +932,9 @@ function scoreCosmeticProduct(product) {
       scoreColor: '#9E9E9E',
       coverageMatched,
       coverageTotal,
+      assessedCount,
+      recognisedCount,
+      totalCount,
       coverage,
       noIngredientData: coverageTotal === 0,
       unparseableCount,
@@ -852,6 +953,9 @@ function scoreCosmeticProduct(product) {
         finalScore: null,
         coverageMatched,
         coverageTotal,
+        assessedCount,
+        recognisedCount,
+        totalCount,
         coverage,
       },
     };
@@ -934,6 +1038,9 @@ function scoreCosmeticProduct(product) {
     scoreColor,
     coverageMatched,
     coverageTotal,
+    assessedCount,
+    recognisedCount,
+    totalCount,
     coverage,
     noIngredientData: false,
     unparseableCount,
@@ -953,9 +1060,20 @@ function scoreCosmeticProduct(product) {
       finalScore,
       coverageMatched,
       coverageTotal,
+      assessedCount,
+      recognisedCount,
+      totalCount,
       coverage,
     },
   };
+}
+
+function unmatchedNameLabel(item) {
+  return typeof item === 'string' ? item : (item && item.name) || '';
+}
+
+function unmatchedNameRecognised(item) {
+  return !!(item && typeof item === 'object' && item.recognised);
 }
 
 // Firestore docs are size-capped; keep full ingredientList in the HTTP
@@ -981,6 +1099,8 @@ function unmatchedInciDocId(name) {
 }
 
 // Fire-and-forget tally of unmatched INCI names for table expansion.
+// Recognised-only names are included with recognised: true so the research
+// signal stays alive (tranche queue) without polluting the true miss queue.
 // Never awaited on the request path; failures are swallowed.
 function recordUnmatchedInci(barcode, unmatchedNames) {
   if (!unmatchedNames || unmatchedNames.length === 0) return;
@@ -990,7 +1110,8 @@ function recordUnmatchedInci(barcode, unmatchedNames) {
   (async () => {
     try {
       const col = db.collection('unmatchedInci');
-      for (const name of unmatchedNames) {
+      for (const item of unmatchedNames) {
+        const name = unmatchedNameLabel(item);
         const docId = unmatchedInciDocId(name);
         if (!docId) continue;
         const payload = {
@@ -999,6 +1120,7 @@ function recordUnmatchedInci(barcode, unmatchedNames) {
           lastSeen: admin.firestore.FieldValue.serverTimestamp(),
           tableVersion: COSMETIC_TABLE_VERSION,
         };
+        if (unmatchedNameRecognised(item)) payload.recognised = true;
         // Only record a real barcode — never a sentinel like "photo".
         if (barcode) payload.sampleBarcode = barcode;
         await col.doc(docId).set(payload, { merge: true });
@@ -1914,7 +2036,7 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
   }
 
   const unmatchedNames = scored.unmatchedNames || [];
-  const namesJoined = unmatchedNames.join('|');
+  const namesJoined = unmatchedNames.map(unmatchedNameLabel).join('|');
   const namesTruncated = namesJoined.length > 200
     ? namesJoined.slice(0, 200) + '...'
     : namesJoined;
@@ -1947,6 +2069,9 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
     scoreLabel: scored.scoreLabel,
     coverageMatched: scored.coverageMatched,
     coverageTotal: scored.coverageTotal,
+    assessedCount: scored.assessedCount,
+    recognisedCount: scored.recognisedCount,
+    totalCount: scored.totalCount,
     noIngredientData: !!scored.noIngredientData,
     ingredientFindings: JSON.stringify(scored.ingredientFindings),
     ingredientList: JSON.stringify(scored.ingredientList || []),
@@ -2126,6 +2251,9 @@ function rescorePhotoCachedDocument(cached) {
     scoreLabel: scored.scoreLabel,
     coverageMatched: scored.coverageMatched,
     coverageTotal: scored.coverageTotal,
+    assessedCount: scored.assessedCount,
+    recognisedCount: scored.recognisedCount,
+    totalCount: scored.totalCount,
     noIngredientData: !!scored.noIngredientData,
     ingredientFindings: JSON.stringify(scored.ingredientFindings),
     ingredientList: JSON.stringify(scored.ingredientList || []),
@@ -2323,7 +2451,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
               console.log(`[DRUG FACTS TRUNCATED] barcode=${barcode} marker=${rescored.scored.drugFactsMarker}`);
             }
             const unmatchedNames = rescored.unmatchedNames;
-            const namesJoined = unmatchedNames.join('|');
+            const namesJoined = unmatchedNames.map(unmatchedNameLabel).join('|');
             const namesTruncated = namesJoined.length > 200
               ? namesJoined.slice(0, 200) + '...'
               : namesJoined;
@@ -2840,7 +2968,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     }
 
     const unmatchedNames = scored.unmatchedNames || [];
-    const namesJoined = unmatchedNames.join('|');
+    const namesJoined = unmatchedNames.map(unmatchedNameLabel).join('|');
     const namesTruncated = namesJoined.length > 200
       ? namesJoined.slice(0, 200) + '...'
       : namesJoined;
@@ -2955,6 +3083,9 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       scoreLabel: scored.scoreLabel,
       coverageMatched: scored.coverageMatched,
       coverageTotal: scored.coverageTotal,
+      assessedCount: scored.assessedCount,
+      recognisedCount: scored.recognisedCount,
+      totalCount: scored.totalCount,
       noIngredientData: !!scored.noIngredientData,
       ingredientFindings: JSON.stringify(scored.ingredientFindings),
       ingredientList: JSON.stringify(scored.ingredientList || []),
@@ -3700,6 +3831,7 @@ function truncateDiagnosticReport(report) {
   while (Buffer.byteLength(json, 'utf8') > DIAGNOSTIC_FIRESTORE_MAX_BYTES) {
     const shrunk =
       shrinkList('topUnmatched', 20) ||
+      shrinkList('topRecognisedOnly', 20) ||
       shrinkList('rawSamples', 3) ||
       shrinkList('classifiedFood', 5) ||
       shrinkList('noIngredientData', 5);
@@ -3732,11 +3864,13 @@ async function runDiagnoseJob(limit, countries) {
     unparseableTotal: 0,
     coverageSum: 0,
     coverageCount: 0,
+    recognisedSum: 0,
     coverageBuckets: { '0-20': 0, '20-40': 0, '40-60': 0, '60-80': 0, '80-100': 0 },
     rawSamples: [],
   };
   // name(normalized) -> { name, count, exampleBarcode }
   const unmatchedTally = new Map();
+  const recognisedOnlyTally = new Map();
 
   try {
     const barcodes = await fetchPopularCosmeticBarcodes(limit, countriesFilter);
@@ -3766,6 +3900,7 @@ async function runDiagnoseJob(limit, countries) {
           if (scored.coverageTotal > 0) {
             tallies.coverageSum += scored.coverage;
             tallies.coverageCount++;
+            tallies.recognisedSum += (scored.recognisedCount || 0) / scored.coverageTotal;
             tallies.coverageBuckets[coverageBucketKey(scored.coverage)]++;
           }
 
@@ -3788,14 +3923,16 @@ async function runDiagnoseJob(limit, countries) {
             tallies.scored++;
           }
 
-          for (const name of scored.unmatchedNames || []) {
+          for (const item of scored.unmatchedNames || []) {
+            const name = unmatchedNameLabel(item);
             const key = normalizeInci(name);
             if (!key) continue;
-            const prev = unmatchedTally.get(key);
+            const tallyMap = unmatchedNameRecognised(item) ? recognisedOnlyTally : unmatchedTally;
+            const prev = tallyMap.get(key);
             if (prev) {
               prev.count++;
             } else {
-              unmatchedTally.set(key, { name, count: 1, exampleBarcode: barcode });
+              tallyMap.set(key, { name, count: 1, exampleBarcode: barcode });
             }
           }
         }
@@ -3816,8 +3953,15 @@ async function runDiagnoseJob(limit, countries) {
     const coverageAverage = tallies.coverageCount > 0
       ? tallies.coverageSum / tallies.coverageCount
       : null;
+    const recognisedAverage = tallies.coverageCount > 0
+      ? tallies.recognisedSum / tallies.coverageCount
+      : null;
 
     const topUnmatched = [...unmatchedTally.values()]
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+      .slice(0, DIAGNOSTIC_TOP_UNMATCHED_CAP);
+
+    const topRecognisedOnly = [...recognisedOnlyTally.values()]
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
       .slice(0, DIAGNOSTIC_TOP_UNMATCHED_CAP);
 
@@ -3827,6 +3971,7 @@ async function runDiagnoseJob(limit, countries) {
       limit,
       countries: countriesFilter,
       tableVersion: COSMETIC_TABLE_VERSION,
+      cosingNamesVersion: COSING_NAMES_VERSION,
       productsAttempted: tallies.productsAttempted,
       notFound: tallies.notFound,
       classifiedFood: {
@@ -3843,20 +3988,22 @@ async function runDiagnoseJob(limit, countries) {
       errors: tallies.errors,
       unparseableTotal: tallies.unparseableTotal,
       coverageAverage,
+      recognisedAverage,
       coverageBuckets: tallies.coverageBuckets,
       topUnmatched,
+      topRecognisedOnly,
       rawSamples: tallies.rawSamples,
     });
 
     try {
       const docRef = await db.collection(DIAGNOSTIC_COLLECTION).add(report);
       console.log(
-        `[DIAGNOSE] done attempted=${tallies.productsAttempted} scored=${tallies.scored} avgCoverage=${coverageAverage == null ? 'n/a' : coverageAverage.toFixed(3)} topUnmatched=${topUnmatched.length} doc=${docRef.id}`
+        `[DIAGNOSE] done attempted=${tallies.productsAttempted} scored=${tallies.scored} avgCoverage=${coverageAverage == null ? 'n/a' : coverageAverage.toFixed(3)} avgRecognised=${recognisedAverage == null ? 'n/a' : recognisedAverage.toFixed(3)} topUnmatched=${topUnmatched.length} topRecognisedOnly=${topRecognisedOnly.length} doc=${docRef.id}`
       );
     } catch (writeErr) {
       console.log(`[DIAGNOSE] report write failed: ${writeErr.message}`);
       console.log(
-        `[DIAGNOSE] done attempted=${tallies.productsAttempted} scored=${tallies.scored} avgCoverage=${coverageAverage == null ? 'n/a' : coverageAverage.toFixed(3)} topUnmatched=${topUnmatched.length}`
+        `[DIAGNOSE] done attempted=${tallies.productsAttempted} scored=${tallies.scored} avgCoverage=${coverageAverage == null ? 'n/a' : coverageAverage.toFixed(3)} avgRecognised=${recognisedAverage == null ? 'n/a' : recognisedAverage.toFixed(3)} topUnmatched=${topUnmatched.length} topRecognisedOnly=${topRecognisedOnly.length}`
       );
     }
   } catch (err) {
