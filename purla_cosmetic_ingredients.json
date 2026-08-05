@@ -1,9 +1,9 @@
 {
   "_meta": {
     "name": "Purla cosmetic ingredient hazard table",
-    "version": "0.5-draft",
+    "version": "0.6-draft",
     "generated": "2026-08-04",
-    "entry_count": 595,
+    "entry_count": 712,
     "risk_scale": [
       "none",
       "low",
@@ -10596,6 +10596,2721 @@
       "disputed": false,
       "dispute_note": null,
       "confidence": "low"
+    },
+    {
+      "inci": "Ammonium Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Butyl Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Calcium Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Ethyl Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Isobutyl Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Isopropyl Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Magnesium Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "MEA-Benzoate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type; ethanolamine salt, restricted under Annex III (must not be used with nitrosating agents).",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))",
+        "EU Annex III entry 61"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium",
+      "also_annex_iii_ref": [
+        "61"
+      ]
+    },
+    {
+      "inci": "Methyl Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Phenyl Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Potassium Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Propyl Benzoate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Salt or ester of benzoic acid; permitted preservative with limits by product type.",
+      "basis": [
+        "EU Annex V entry 1a (max 0.5% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "1a",
+      "max_concentration": "0.5% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Propionic Acid",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Propionic acid salt; food-grade preservative permitted at 2%.",
+      "basis": [
+        "EU Annex V entry 2 (max 2% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "2",
+      "max_concentration": "2% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Ammonium Propionate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Propionic acid salt; food-grade preservative permitted at 2%.",
+      "basis": [
+        "EU Annex V entry 2 (max 2% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "2",
+      "max_concentration": "2% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Calcium Propionate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Propionic acid salt; food-grade preservative permitted at 2%.",
+      "basis": [
+        "EU Annex V entry 2 (max 2% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "2",
+      "max_concentration": "2% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Magnesium Propionate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Propionic acid salt; food-grade preservative permitted at 2%.",
+      "basis": [
+        "EU Annex V entry 2 (max 2% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "2",
+      "max_concentration": "2% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Potassium Propionate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Propionic acid salt; food-grade preservative permitted at 2%.",
+      "basis": [
+        "EU Annex V entry 2 (max 2% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "2",
+      "max_concentration": "2% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Propionate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Propionic acid salt; food-grade preservative permitted at 2%.",
+      "basis": [
+        "EU Annex V entry 2 (max 2% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "2",
+      "max_concentration": "2% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Calcium Salicylate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Salicylate salt; capped and not permitted in products for children under three except shampoo.",
+      "basis": [
+        "EU Annex V entry 3 (max Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid))",
+        "EU Annex III entry 98"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "3",
+      "max_concentration": "Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid)",
+      "product_scope": null,
+      "warning_wording": "Salicylic acid:Not to be used for children under 3 years of age****Solely for products which might be used for children under 3 years of age.Salicylic acid salts:Not to be used for children under 3 years of age******Solely for products which might be used for children under 3 years of age and which remain in prolonged contact with the skin.",
+      "other_conditions": "Salicylic acid:Not to be used in products for children under 3 years of age.Not to be used in oral products.Not to be used in applications that may lead to exposure of the end-user’s lungs by inhalation.Salicylic acid salts:Not to be used in products for children under 3 years of age, except for shampoos.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "98"
+      ]
+    },
+    {
+      "inci": "Magnesium Salicylate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Salicylate salt; capped and not permitted in products for children under three except shampoo.",
+      "basis": [
+        "EU Annex V entry 3 (max Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid))",
+        "EU Annex III entry 98"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "3",
+      "max_concentration": "Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid)",
+      "product_scope": null,
+      "warning_wording": "Salicylic acid:Not to be used for children under 3 years of age****Solely for products which might be used for children under 3 years of age.Salicylic acid salts:Not to be used for children under 3 years of age******Solely for products which might be used for children under 3 years of age and which remain in prolonged contact with the skin.",
+      "other_conditions": "Salicylic acid:Not to be used in products for children under 3 years of age.Not to be used in oral products.Not to be used in applications that may lead to exposure of the end-user’s lungs by inhalation.Salicylic acid salts:Not to be used in products for children under 3 years of age, except for shampoos.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "98"
+      ]
+    },
+    {
+      "inci": "MEA-Salicylate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Salicylate salt; capped and not permitted in products for children under three except shampoo.",
+      "basis": [
+        "EU Annex V entry 3 (max Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid))",
+        "EU Annex III entry 61"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "3",
+      "max_concentration": "Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid)",
+      "product_scope": null,
+      "warning_wording": "Salicylic acid:Not to be used for children under 3 years of age****Solely for products which might be used for children under 3 years of age.Salicylic acid salts:Not to be used for children under 3 years of age******Solely for products which might be used for children under 3 years of age and which remain in prolonged contact with the skin.",
+      "other_conditions": "Salicylic acid:Not to be used in products for children under 3 years of age.Not to be used in oral products.Not to be used in applications that may lead to exposure of the end-user’s lungs by inhalation.Salicylic acid salts:Not to be used in products for children under 3 years of age, except for shampoos.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "61"
+      ]
+    },
+    {
+      "inci": "Potassium Salicylate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Salicylate salt; capped and not permitted in products for children under three except shampoo.",
+      "basis": [
+        "EU Annex V entry 3 (max Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid))",
+        "EU Annex III entry 98"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "3",
+      "max_concentration": "Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid)",
+      "product_scope": null,
+      "warning_wording": "Salicylic acid:Not to be used for children under 3 years of age****Solely for products which might be used for children under 3 years of age.Salicylic acid salts:Not to be used for children under 3 years of age******Solely for products which might be used for children under 3 years of age and which remain in prolonged contact with the skin.",
+      "other_conditions": "Salicylic acid:Not to be used in products for children under 3 years of age.Not to be used in oral products.Not to be used in applications that may lead to exposure of the end-user’s lungs by inhalation.Salicylic acid salts:Not to be used in products for children under 3 years of age, except for shampoos.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "98"
+      ]
+    },
+    {
+      "inci": "TEA-Salicylate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Salicylate salt; capped and not permitted in products for children under three except shampoo.",
+      "basis": [
+        "EU Annex V entry 3 (max Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid))",
+        "EU Annex III entry 62"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "3",
+      "max_concentration": "Salicylic acid: 0,5 % (acid)Salicylic acid salts: 0,5 % (acid)",
+      "product_scope": null,
+      "warning_wording": "Salicylic acid:Not to be used for children under 3 years of age****Solely for products which might be used for children under 3 years of age.Salicylic acid salts:Not to be used for children under 3 years of age******Solely for products which might be used for children under 3 years of age and which remain in prolonged contact with the skin.",
+      "other_conditions": "Salicylic acid:Not to be used in products for children under 3 years of age.Not to be used in oral products.Not to be used in applications that may lead to exposure of the end-user’s lungs by inhalation.Salicylic acid salts:Not to be used in products for children under 3 years of age, except for shampoos.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "62"
+      ]
+    },
+    {
+      "inci": "Calcium Sorbate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sorbic acid salt; food-grade preservative permitted at 0.6%.",
+      "basis": [
+        "EU Annex V entry 4 (max 0.6% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "4",
+      "max_concentration": "0.6% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Sorbate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Sorbic acid salt; food-grade preservative permitted at 0.6%.",
+      "basis": [
+        "EU Annex V entry 4 (max 0.6% (acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "4",
+      "max_concentration": "0.6% (acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "o-Phenylphenol",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative with product-specific caps; skin and eye irritant.",
+      "basis": [
+        "EU Annex V entry 7 (max (a) 0,2 % (as phenol(b) 0,15 % (as phenol))",
+        "EU Annex III entry 61"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "7",
+      "max_concentration": "(a) 0,2 % (as phenol(b) 0,15 % (as phenol)",
+      "product_scope": "(a) Rinse-off products(b) Leave-on products",
+      "warning_wording": "Avoid contact with eyes.",
+      "other_conditions": "When o-Phenylphenol and Sodium o-Phenylphenate are used together, the combined concentration (as phenol) shall not exceed 0,2 % in rinse-off and 0,15 % in leave-on products.Not to be used in applications that may lead to exposure of the end-user’s lungs by inhalation. Not to be used in oral products.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "covers_inci": [
+        "MEA O-PHENYLPHENATE",
+        "POTASSIUM O-PHENYLPHENATE"
+      ],
+      "also_annex_iii_ref": [
+        "61"
+      ]
+    },
+    {
+      "inci": "Sodium o-Phenylphenate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative with product-specific caps; skin and eye irritant.",
+      "basis": [
+        "EU Annex V entry 7 (max (a) 0,2 % (as phenol(b) 0,15 % (as phenol))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "7",
+      "max_concentration": "(a) 0,2 % (as phenol(b) 0,15 % (as phenol)",
+      "product_scope": "(a) Rinse-off products(b) Leave-on products",
+      "warning_wording": "Avoid contact with eyes.",
+      "other_conditions": "When o-Phenylphenol and Sodium o-Phenylphenate are used together, the combined concentration (as phenol) shall not exceed 0,2 % in rinse-off and 0,15 % in leave-on products.Not to be used in applications that may lead to exposure of the end-user’s lungs by inhalation. Not to be used in oral products.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Sulfite",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Sulfite preservative capped at 0.2% free SO2; can trigger reactions in sulfite-sensitive people.",
+      "basis": [
+        "EU Annex V entry 9 (max 0.2% (as free SO2))",
+        "EU Annex III entry 99"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "9",
+      "max_concentration": "0.2% (as free SO2)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "99"
+      ]
+    },
+    {
+      "inci": "Ammonium Bisulfite",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Sulfite preservative capped at 0.2% free SO2; can trigger reactions in sulfite-sensitive people.",
+      "basis": [
+        "EU Annex V entry 9 (max 0.2% (as free SO2))",
+        "EU Annex III entry 99"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "9",
+      "max_concentration": "0.2% (as free SO2)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "99"
+      ]
+    },
+    {
+      "inci": "Ammonium Sulfite",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Sulfite preservative capped at 0.2% free SO2; can trigger reactions in sulfite-sensitive people.",
+      "basis": [
+        "EU Annex V entry 9 (max 0.2% (as free SO2))",
+        "EU Annex III entry 99"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "9",
+      "max_concentration": "0.2% (as free SO2)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "99"
+      ]
+    },
+    {
+      "inci": "Potassium Sulfite",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Sulfite preservative capped at 0.2% free SO2; can trigger reactions in sulfite-sensitive people.",
+      "basis": [
+        "EU Annex V entry 9 (max 0.2% (as free SO2))",
+        "EU Annex III entry 99"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "9",
+      "max_concentration": "0.2% (as free SO2)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "99"
+      ]
+    },
+    {
+      "inci": "POTASSIUM hydrogen SULFITE",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Sulfite preservative capped at 0.2% free SO2; can trigger reactions in sulfite-sensitive people.",
+      "basis": [
+        "EU Annex V entry 9 (max 0.2% (as free SO2))",
+        "EU Annex III entry 99"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "9",
+      "max_concentration": "0.2% (as free SO2)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "99"
+      ]
+    },
+    {
+      "inci": "Sodium Bisulfite",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Sulfite preservative capped at 0.2% free SO2; can trigger reactions in sulfite-sensitive people.",
+      "basis": [
+        "EU Annex V entry 9 (max 0.2% (as free SO2))",
+        "EU Annex III entry 99"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "9",
+      "max_concentration": "0.2% (as free SO2)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "99"
+      ]
+    },
+    {
+      "inci": "Sodium Metabisulfite",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Sulfite preservative capped at 0.2% free SO2; can trigger reactions in sulfite-sensitive people.",
+      "basis": [
+        "EU Annex V entry 9 (max 0.2% (as free SO2))",
+        "EU Annex III entry 99"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "9",
+      "max_concentration": "0.2% (as free SO2)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "99"
+      ]
+    },
+    {
+      "inci": "Potassium Metabisulfite",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Sulfite preservative capped at 0.2% free SO2; can trigger reactions in sulfite-sensitive people.",
+      "basis": [
+        "EU Annex V entry 9 (max 0.2% (as free SO2))",
+        "EU Annex III entry 99"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "9",
+      "max_concentration": "0.2% (as free SO2)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "99"
+      ]
+    },
+    {
+      "inci": "Chlorobutanol",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.5%; not for aerosols.",
+      "basis": [
+        "EU Annex V entry 11 (max 0.5%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "11",
+      "max_concentration": "0.5%",
+      "product_scope": null,
+      "warning_wording": "Contains Chlorobutanol",
+      "other_conditions": "Not to be used in aerosol dispensers (sprays)",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Propoylparaben",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "Butyl/propyl paraben group; highest oestrogenic potency of the permitted parabens and capped far lower.",
+      "basis": [
+        "EU Annex V entry 12 a (max - 0,14% (as acid) for the sum of the individual concentrations- 0,8% (as acid) for mixtures of substances mentioned in entry 12 and 12a, here the sum of the individual concentrations of butyl and propylparaben and their salts does not exceed 0,14%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12 a",
+      "max_concentration": "- 0,14% (as acid) for the sum of the individual concentrations- 0,8% (as acid) for mixtures of substances mentioned in entry 12 and 12a, here the sum of the individual concentrations of butyl and propylparaben and their salts does not exceed 0,14%",
+      "product_scope": null,
+      "warning_wording": "For leave-on products designed for children under three years of age: \"Do not use on the nappy area\"",
+      "other_conditions": "Not to be used in leave-on products designed for application on the nappy area of children under three years of age.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium",
+      "covers_inci": [
+        "SODIUM PROPYLPARABEN"
+      ]
+    },
+    {
+      "inci": "Sodium Butylparaben",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "Butyl/propyl paraben group; highest oestrogenic potency of the permitted parabens and capped far lower.",
+      "basis": [
+        "EU Annex V entry 12 a (max - 0,14% (as acid) for the sum of the individual concentrations- 0,8% (as acid) for mixtures of substances mentioned in entry 12 and 12a, here the sum of the individual concentrations of butyl and propylparaben and their salts does not exceed 0,14%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12 a",
+      "max_concentration": "- 0,14% (as acid) for the sum of the individual concentrations- 0,8% (as acid) for mixtures of substances mentioned in entry 12 and 12a, here the sum of the individual concentrations of butyl and propylparaben and their salts does not exceed 0,14%",
+      "product_scope": null,
+      "warning_wording": "For leave-on products designed for children under three years of age: \"Do not use on the nappy area\"",
+      "other_conditions": "Not to be used in leave-on products designed for application on the nappy area of children under three years of age.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Potassium Butylparaben",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "Butyl/propyl paraben group; highest oestrogenic potency of the permitted parabens and capped far lower.",
+      "basis": [
+        "EU Annex V entry 12 a (max - 0,14% (as acid) for the sum of the individual concentrations- 0,8% (as acid) for mixtures of substances mentioned in entry 12 and 12a, here the sum of the individual concentrations of butyl and propylparaben and their salts does not exceed 0,14%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12 a",
+      "max_concentration": "- 0,14% (as acid) for the sum of the individual concentrations- 0,8% (as acid) for mixtures of substances mentioned in entry 12 and 12a, here the sum of the individual concentrations of butyl and propylparaben and their salts does not exceed 0,14%",
+      "product_scope": null,
+      "warning_wording": "For leave-on products designed for children under three years of age: \"Do not use on the nappy area\"",
+      "other_conditions": "Not to be used in leave-on products designed for application on the nappy area of children under three years of age.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Potassium Propylparaben",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "Butyl/propyl paraben group; highest oestrogenic potency of the permitted parabens and capped far lower.",
+      "basis": [
+        "EU Annex V entry 12 a (max - 0,14% (as acid) for the sum of the individual concentrations- 0,8% (as acid) for mixtures of substances mentioned in entry 12 and 12a, here the sum of the individual concentrations of butyl and propylparaben and their salts does not exceed 0,14%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12 a",
+      "max_concentration": "- 0,14% (as acid) for the sum of the individual concentrations- 0,8% (as acid) for mixtures of substances mentioned in entry 12 and 12a, here the sum of the individual concentrations of butyl and propylparaben and their salts does not exceed 0,14%",
+      "product_scope": null,
+      "warning_wording": "For leave-on products designed for children under three years of age: \"Do not use on the nappy area\"",
+      "other_conditions": "Not to be used in leave-on products designed for application on the nappy area of children under three years of age.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "4-Hydroxybenzoic Acid",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Methyl/ethyl paraben salt; the short-chain parabens carry no concentration concern at permitted levels.",
+      "basis": [
+        "EU Annex V entry 12 (max 0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12",
+      "max_concentration": "0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Potassium Ethylparaben",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Methyl/ethyl paraben salt; the short-chain parabens carry no concentration concern at permitted levels.",
+      "basis": [
+        "EU Annex V entry 12 (max 0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12",
+      "max_concentration": "0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Potassium Paraben",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Methyl/ethyl paraben salt; the short-chain parabens carry no concentration concern at permitted levels.",
+      "basis": [
+        "EU Annex V entry 12 (max 0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12",
+      "max_concentration": "0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Methylparaben",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Methyl/ethyl paraben salt; the short-chain parabens carry no concentration concern at permitted levels.",
+      "basis": [
+        "EU Annex V entry 12 (max 0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12",
+      "max_concentration": "0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Ethylparaben",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Methyl/ethyl paraben salt; the short-chain parabens carry no concentration concern at permitted levels.",
+      "basis": [
+        "EU Annex V entry 12 (max 0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12",
+      "max_concentration": "0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Paraben",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Methyl/ethyl paraben salt; the short-chain parabens carry no concentration concern at permitted levels.",
+      "basis": [
+        "EU Annex V entry 12 (max 0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12",
+      "max_concentration": "0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Potassium Methylparaben",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Methyl/ethyl paraben salt; the short-chain parabens carry no concentration concern at permitted levels.",
+      "basis": [
+        "EU Annex V entry 12 (max 0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12",
+      "max_concentration": "0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Calcium Paraben",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Methyl/ethyl paraben salt; the short-chain parabens carry no concentration concern at permitted levels.",
+      "basis": [
+        "EU Annex V entry 12 (max 0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "12",
+      "max_concentration": "0,4% (as acid) for single ester0,8% (as acid) for mixtures of esters",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Dehydroacetate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.6%; not for aerosols.",
+      "basis": [
+        "EU Annex V entry 13 (max 0.6% (as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "13",
+      "max_concentration": "0.6% (as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "Not to be used in aerosol dispensers (sprays)",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Formic Acid",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative; irritant to skin and eyes at higher levels.",
+      "basis": [
+        "EU Annex V entry 14 (max 0.5% (as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "14",
+      "max_concentration": "0.5% (as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Formate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative; irritant to skin and eyes at higher levels.",
+      "basis": [
+        "EU Annex V entry 14 (max 0.5% (as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "14",
+      "max_concentration": "0.5% (as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Dibromohexamidine isethionate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative at 0.1%.",
+      "basis": [
+        "EU Annex V entry 15 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "15",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Thimerosal",
+      "function": "preservative",
+      "risk": "high",
+      "risk_type": "health",
+      "reason": "ORGANOMERCURY compound; permitted only in eye products and being phased out.",
+      "basis": [
+        "EU Annex V entry 16 (max 0.007% (of Hg)If mixed with other mercurial compounds authorized by this Regulation, the maximum concentration of Hg remains fixed at 0.007%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "16",
+      "max_concentration": "0.007% (of Hg)If mixed with other mercurial compounds authorized by this Regulation, the maximum concentration of Hg remains fixed at 0.007%",
+      "product_scope": "Eye products",
+      "warning_wording": "Contains Thiomersal",
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Phenyl Mercuric Acetate",
+      "function": "preservative",
+      "risk": "high",
+      "risk_type": "health",
+      "reason": "ORGANOMERCURY compound; permitted only in eye products and being phased out.",
+      "basis": [
+        "EU Annex V entry 17 (max 0.007% (of Hg) If mixed with other mercurial compounds authorized by this Directive, the maximum concentration of Hg remains fixed at 0.007%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "II",
+        "V"
+      ],
+      "eu_annex_ref": "17",
+      "max_concentration": "0.007% (of Hg) If mixed with other mercurial compounds authorized by this Directive, the maximum concentration of Hg remains fixed at 0.007%",
+      "product_scope": "Eye products",
+      "warning_wording": "Contains Phenylmercuric compounds",
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "low",
+      "covers_inci": [
+        "PHENYL MERCURIC BORATE",
+        "PHENYL MERCURIC BROMIDE",
+        "PHENYL MERCURIC CHLORIDE"
+      ],
+      "_conditional": "Also on ANNEX II (PHENYL MERCURIC BORATE → entry 1396) — banned in some use or above a threshold. GRADE MUST REFLECT BOTH."
+    },
+    {
+      "inci": "Phenyl Mercuric Benzoate",
+      "function": "preservative",
+      "risk": "high",
+      "risk_type": "health",
+      "reason": "ORGANOMERCURY compound; permitted only in eye products and being phased out.",
+      "basis": [
+        "EU Annex V entry 17 (max 0.007% (of Hg) If mixed with other mercurial compounds authorized by this Directive, the maximum concentration of Hg remains fixed at 0.007%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "17",
+      "max_concentration": "0.007% (of Hg) If mixed with other mercurial compounds authorized by this Directive, the maximum concentration of Hg remains fixed at 0.007%",
+      "product_scope": "Eye products",
+      "warning_wording": "Contains Phenylmercuric compounds",
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Undecylenic Acid",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Undecylenic acid salt; antifungal preservative with no notable hazard at permitted levels.",
+      "basis": [
+        "EU Annex V entry 18 (max 0.2% (as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "18",
+      "max_concentration": "0.2% (as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Potassium Undecylenate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Undecylenic acid salt; antifungal preservative with no notable hazard at permitted levels.",
+      "basis": [
+        "EU Annex V entry 18 (max 0.2% (as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "18",
+      "max_concentration": "0.2% (as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Sodium Undecylenate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Undecylenic acid salt; antifungal preservative with no notable hazard at permitted levels.",
+      "basis": [
+        "EU Annex V entry 18 (max 0.2% (as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "18",
+      "max_concentration": "0.2% (as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Calcium Undecylenate",
+      "function": "preservative",
+      "risk": "none",
+      "risk_type": "health",
+      "reason": "Undecylenic acid salt; antifungal preservative with no notable hazard at permitted levels.",
+      "basis": [
+        "EU Annex V entry 18 (max 0.2% (as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "18",
+      "max_concentration": "0.2% (as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "MEA-Undecylenate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Undecylenic acid salt; antifungal preservative with no notable hazard at permitted levels; ethanolamine salt, restricted under Annex III (must not be used with nitrosating agents).",
+      "basis": [
+        "EU Annex V entry 18 (max 0.2% (as acid))",
+        "EU Annex III entry 61"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "18",
+      "max_concentration": "0.2% (as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium",
+      "also_annex_iii_ref": [
+        "61"
+      ]
+    },
+    {
+      "inci": "TEA-Undecylenate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Undecylenic acid salt; antifungal preservative with no notable hazard at permitted levels; ethanolamine salt, restricted under Annex III (must not be used with nitrosating agents).",
+      "basis": [
+        "EU Annex V entry 18 (max 0.2% (as acid))",
+        "EU Annex III entry 62"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "18",
+      "max_concentration": "0.2% (as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium",
+      "also_annex_iii_ref": [
+        "62"
+      ]
+    },
+    {
+      "inci": "Hexetidine",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.1%.",
+      "basis": [
+        "EU Annex V entry 19 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "19",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "5-Bromo-5-Nitro-1,3-Dioxane",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "FORMALDEHYDE RELEASER; permitted rinse-off only.",
+      "basis": [
+        "EU Annex V entry 20 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "20",
+      "max_concentration": "0.1%",
+      "product_scope": "Rinse-off products",
+      "warning_wording": null,
+      "other_conditions": "Avoid formation of nitrosamines",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "2-Bromo-2-Nitropropane-1,3-Diol",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "Bronopol; FORMALDEHYDE RELEASER with nitrosamine formation potential.",
+      "basis": [
+        "EU Annex V entry 21 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "21",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "Avoid formation of nitrosamines",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Dichlorobenzyl Alcohol",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.15%.",
+      "basis": [
+        "EU Annex V entry 22 (max 0.15%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "22",
+      "max_concentration": "0.15%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "p-Chloro-m-Cresol",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative; documented contact allergen, not for mucous membranes.",
+      "basis": [
+        "EU Annex V entry 24 (max 0.2%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "24",
+      "max_concentration": "0.2%",
+      "product_scope": "Not to be used in products applied on mucous membranes",
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Chloroxylenol",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.5%; documented contact allergen.",
+      "basis": [
+        "EU Annex V entry 26 (max 0.5%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "26",
+      "max_concentration": "0.5%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Polyaminopropyl Biguanide",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "PHMB; SCCS-restricted, banned in sprayable products, capped at 0.1%.",
+      "basis": [
+        "EU Annex V entry 28 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "28",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "Not to be used in applications that may lead to exposure of the end-user's lungs by inhalation",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Methenamine",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "FORMALDEHYDE RELEASER; permitted at 0.15%.",
+      "basis": [
+        "EU Annex V entry 30 (max 0.15%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "30",
+      "max_concentration": "0.15%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "1-Hydroxy-4-methyl-6-(2,4,4-trimethylpentyl)-2 pyridon",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Piroctone-type preservative with rinse-off and leave-on caps.",
+      "basis": [
+        "EU Annex V entry 35 (max a) 1.0% b) 0.5%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "35",
+      "max_concentration": "a) 1.0% b) 0.5%",
+      "product_scope": "a) Rinse-off productsb) Other products",
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium",
+      "covers_inci": [
+        "Piroctone"
+      ]
+    },
+    {
+      "inci": "Bromochlorophene",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.1%.",
+      "basis": [
+        "EU Annex V entry 37 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "37",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "o-Cymen-5-Ol",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative with product-specific caps.",
+      "basis": [
+        "EU Annex V entry 38 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "38",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "covers_inci": [
+        "ISOPROPYL CRESOLS"
+      ]
+    },
+    {
+      "inci": "Methylchloroisothiazolinone And Methylisothiazolinone",
+      "function": "preservative",
+      "risk": "high",
+      "risk_type": "health",
+      "reason": "MCI/MI; a leading cause of the contact-allergy epidemic. Rinse-off only at 0.0015%.",
+      "basis": [
+        "EU Annex V entry 39 (max 0.0015% (of a mixture in the ratio 3:1 of 5-Chloro-2-methyl-isothiazol-3(2H)-one and 2-Methylisothiazol-3(2H)-one)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "39",
+      "max_concentration": "0.0015% (of a mixture in the ratio 3:1 of 5-Chloro-2-methyl-isothiazol-3(2H)-one and 2-Methylisothiazol-3(2H)-one",
+      "product_scope": "Rinse-off",
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Chlorhexidine",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Chlorhexidine antiseptic; permitted at 0.3%, rare anaphylaxis reports.",
+      "basis": [
+        "EU Annex V entry 42 (max 0.3% (as chlorhexidine))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "42",
+      "max_concentration": "0.3% (as chlorhexidine)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Chlorhexidine Diacetate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Chlorhexidine antiseptic; permitted at 0.3%, rare anaphylaxis reports.",
+      "basis": [
+        "EU Annex V entry 42 (max 0.3% (as chlorhexidine))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "42",
+      "max_concentration": "0.3% (as chlorhexidine)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Chlorhexidine Dihydrochloride",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Chlorhexidine antiseptic; permitted at 0.3%, rare anaphylaxis reports.",
+      "basis": [
+        "EU Annex V entry 42 (max 0.3% (as chlorhexidine))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "42",
+      "max_concentration": "0.3% (as chlorhexidine)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Phenoxyisopropanol",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative; rinse-off and product-specific caps.",
+      "basis": [
+        "EU Annex V entry 43 (max 1.0%)",
+        "EU Annex III entry 54"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "43",
+      "max_concentration": "1.0%",
+      "product_scope": "Only for rinse-off products",
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "54"
+      ]
+    },
+    {
+      "inci": "Cetrimonium Bromide",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Quaternary ammonium preservative; irritant to eyes and mucous membranes.",
+      "basis": [
+        "EU Annex V entry 44 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "44",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Laurtrimonium Bromide",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Quaternary ammonium preservative; irritant to eyes and mucous membranes.",
+      "basis": [
+        "EU Annex V entry 44 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "44",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Laurtrimonium Chloride",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Quaternary ammonium preservative; irritant to eyes and mucous membranes.",
+      "basis": [
+        "EU Annex V entry 44 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "44",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Steartrimonium Bromide",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Quaternary ammonium preservative; irritant to eyes and mucous membranes.",
+      "basis": [
+        "EU Annex V entry 44 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "44",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Steartrimonium Chloride",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Quaternary ammonium preservative; irritant to eyes and mucous membranes.",
+      "basis": [
+        "EU Annex V entry 44 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "44",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Dimethyl Oxazolidine",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "FORMALDEHYDE RELEASER; permitted at 0.1%, rinse-off restrictions.",
+      "basis": [
+        "EU Annex V entry 45 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "45",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "pH > 6",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Hexamidine",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.1%.",
+      "basis": [
+        "EU Annex V entry 47 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "47",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Hexamidine Diisethionate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.1%.",
+      "basis": [
+        "EU Annex V entry 47 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "47",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Hexamidine Diparaben",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.1%.",
+      "basis": [
+        "EU Annex V entry 47 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "47",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Hexamidine Paraben",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.1%.",
+      "basis": [
+        "EU Annex V entry 47 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "47",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Glutaral",
+      "function": "preservative",
+      "risk": "high",
+      "risk_type": "health",
+      "reason": "Glutaraldehyde; strong sensitiser, banned in aerosols and requires a warning label.",
+      "basis": [
+        "EU Annex V entry 48 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "48",
+      "max_concentration": "0.1%",
+      "product_scope": null,
+      "warning_wording": "Contains glutaral (9)",
+      "other_conditions": "Not to be used in aerosols (sprays)",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "7-Ethylbicyclooxazolidine",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "FORMALDEHYDE RELEASER; permitted rinse-off only at 0.3%.",
+      "basis": [
+        "EU Annex V entry 49 (max 0.3%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "49",
+      "max_concentration": "0.3%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "Not to be used in oral products and in products applied on mucous membranes",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Silver Chloride",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Silver-based preservative with a concentration cap.",
+      "basis": [
+        "EU Annex V entry 52 (max 0.004% (as AgCl))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "52",
+      "max_concentration": "0.004% (as AgCl)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "20% AgCl (w/w) on TiO2.Not to be used in products for children under 3 years of age, in oral products and in eye and lip products",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Benzethonium Chloride",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Quaternary ammonium preservative; rinse-off restrictions.",
+      "basis": [
+        "EU Annex V entry 53 (max 0.1%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "53",
+      "max_concentration": "0.1%",
+      "product_scope": "a) Rinse-off productsb) Leave-on products other than oral products",
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Benzalkonium Chloride",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Quaternary ammonium preservative; irritant to eyes and mucous membranes.",
+      "basis": [
+        "EU Annex V entry 54 (max 0.1% (as benzalkonium chloride))",
+        "EU Annex III entry 65"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "54",
+      "max_concentration": "0.1% (as benzalkonium chloride)",
+      "product_scope": null,
+      "warning_wording": "Avoid contact with eyes",
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "covers_inci": [
+        "CETALKONIUM CHLORIDE",
+        "CETEARALKONIUM BROMIDE",
+        "COCOALKONIUM CHLORIDE",
+        "HYDROGENATED TALLOWALKONIUM CHLORIDE",
+        "LAURALKONIUM BROMIDE",
+        "LAURALKONIUM CHLORIDE",
+        "MYRISTALKONIUM CHLORIDE",
+        "MYRISTALKONIUM SACCHARINATE",
+        "TALLOWALKONIUM CHLORIDE"
+      ],
+      "also_annex_iii_ref": [
+        "65"
+      ]
+    },
+    {
+      "inci": "Benzalkonium Bromide",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Quaternary ammonium preservative; irritant to eyes and mucous membranes.",
+      "basis": [
+        "EU Annex V entry 54 (max 0.1% (as benzalkonium chloride))",
+        "EU Annex III entry 65"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "54",
+      "max_concentration": "0.1% (as benzalkonium chloride)",
+      "product_scope": null,
+      "warning_wording": "Avoid contact with eyes",
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "65"
+      ]
+    },
+    {
+      "inci": "Benzalkonium Saccharinate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Quaternary ammonium preservative; irritant to eyes and mucous membranes.",
+      "basis": [
+        "EU Annex V entry 54 (max 0.1% (as benzalkonium chloride))",
+        "EU Annex III entry 65"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "III",
+        "V"
+      ],
+      "eu_annex_ref": "54",
+      "max_concentration": "0.1% (as benzalkonium chloride)",
+      "product_scope": null,
+      "warning_wording": "Avoid contact with eyes",
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high",
+      "also_annex_iii_ref": [
+        "65"
+      ]
+    },
+    {
+      "inci": "Benzylhemiformal",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "FORMALDEHYDE RELEASER; permitted rinse-off only at 0.15%.",
+      "basis": [
+        "EU Annex V entry 55 (max 0.15%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "55",
+      "max_concentration": "0.15%",
+      "product_scope": "Rinse-off products",
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Citric Acid (And) Silver Citrate",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Silver citrate preservative system with a concentration cap.",
+      "basis": [
+        "EU Annex V entry 59 (max 0,2% corresponding to 0,0024% of silver)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "59",
+      "max_concentration": "0,2% corresponding to 0,0024% of silver",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "Not to be used in oral producrs and eye products",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium",
+      "covers_inci": [
+        "SILVER CITRATE"
+      ]
+    },
+    {
+      "inci": "HydroxyethoxyPhenyl Butanone",
+      "function": "preservative",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted preservative capped at 0.7%.",
+      "basis": [
+        "EU Annex V entry 60 (max 0.7 %)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "V"
+      ],
+      "eu_annex_ref": "60",
+      "max_concentration": "0.7 %",
+      "product_scope": "Allowed for use as a preservative in rinse off, oral care and leave-on cosmetic products at a maximum concentration of 0,7 % in ready for use preparation.",
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Ammonium Silver Zinc Aluminium Silicate",
+      "function": "preservative",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "Silver-based preservative that ALSO appears on Annex II — permitted only within the Annex V conditions.",
+      "basis": [
+        "EU Annex V entry 61 (max (a) and (b) 1 %)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "II",
+        "V"
+      ],
+      "eu_annex_ref": "61",
+      "max_concentration": "(a) and (b) 1 %",
+      "product_scope": "(a) Deodorant spray(b) Powder foundation",
+      "warning_wording": null,
+      "other_conditions": "For (a) and (b) the silver content in Ammonium Silver Zinc Aluminium Silicate must not exceed 2,5 %.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "low",
+      "_conditional": "Also on ANNEX II (Ammonium Silver Zinc Aluminium Silicate → entry 1597) — banned in some use or above a threshold. GRADE MUST REFLECT BOTH."
+    },
+    {
+      "inci": "Camphor benzalkonium methosulfate",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted UV filter capped at 6%.",
+      "basis": [
+        "EU Annex VI entry 2 (max 6%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "2",
+      "max_concentration": "6%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Terephthalylidene Dicamphor Sulfonic Acid",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Mexoryl SX; photostable UVA filter, minimal absorption.",
+      "basis": [
+        "EU Annex VI entry 7 (max 10%(as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "7",
+      "max_concentration": "10%(as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Benzylidene Camphor Sulfonic Acid",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Camphor-derived UV filter capped at 6%.",
+      "basis": [
+        "EU Annex VI entry 9 (max 6%(as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "9",
+      "max_concentration": "6%(as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Polyacrylamidomethyl Benzylidene Camphor",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Polymeric camphor UV filter capped at 6%; large molecule, minimal absorption.",
+      "basis": [
+        "EU Annex VI entry 11 (max 6%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "11",
+      "max_concentration": "6%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Peg-25 Paba",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "PEG-modified PABA filter capped at 10%.",
+      "basis": [
+        "EU Annex VI entry 13 (max 10%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "13",
+      "max_concentration": "10%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Isoamyl p-Methoxycinnamate",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Cinnamate UV filter capped at 10%.",
+      "basis": [
+        "EU Annex VI entry 14 (max 10%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "14",
+      "max_concentration": "10%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Diethylhexyl Butamido Triazone",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Photostable broad-spectrum filter capped at 10%; large molecule.",
+      "basis": [
+        "EU Annex VI entry 17 (max 10%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "17",
+      "max_concentration": "10%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Ethylhexyl Dimethyl Paba",
+      "function": "uv filter",
+      "risk": "moderate",
+      "risk_type": "health",
+      "reason": "Padimate O; PABA-family filter with a documented photosensitisation history.",
+      "basis": [
+        "EU Annex VI entry 21 (max 8%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "21",
+      "max_concentration": "8%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "medium"
+    },
+    {
+      "inci": "Benzophenone-5",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Water-soluble filter used mainly to protect the formula.",
+      "basis": [
+        "EU Annex VI entry 22 (max 5%(as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "22",
+      "max_concentration": "5%(as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Methylene Bis-Benzotriazolyl Tetramethylbutylphenol (Nano)",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "NANO form; photostable filter capped at 10%, not permitted where the lung may be exposed.",
+      "basis": [
+        "EU Annex VI entry 23a (max 10 %(*)(*) In case of combined use of Methylene Bis-Benzotriazolyl Tetramethylbutylphenol and Methylene Bis-Benzotriazolyl Tetramethylbutylphenol (nano), the sum shall not exceed the limit given in column g.’.)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "23a",
+      "max_concentration": "10 %(*)(*) In case of combined use of Methylene Bis-Benzotriazolyl Tetramethylbutylphenol and Methylene Bis-Benzotriazolyl Tetramethylbutylphenol (nano), the sum shall not exceed the limit given in column g.’.",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "Not to be used in applications that may lead to exposure of the end user's lungs by inhalation. Only nanomaterials having the following characteristics are allowed: — Purity ≥ 98,5 %, with 2,2′-methylene-bis- (6(2H-benzotriazol-2-yl)-4-(isooctyl)phenol) isomer fraction not exceeding 1,5 %;— Solubility < 5 ng/L in water at 25 °C; — Partition coefficient (Log Pow): 12,7 at 25 °C; — Uncoated; — Median particle size D50 (50 % of the number below this diameter): ≥ 120 nm of mass distribution and/or ≥ 60 nm of number size distribution.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Disodium Phenyl Dibenzimidazole Tetrasulfonate",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Water-soluble UVA filter capped at 10%.",
+      "basis": [
+        "EU Annex VI entry 24 (max 10%(as acid))"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "24",
+      "max_concentration": "10%(as acid)",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Polysilicone-15",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Polymeric filter capped at 10%; too large to penetrate skin.",
+      "basis": [
+        "EU Annex VI entry 26 (max 10%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "26",
+      "max_concentration": "10%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Titanium Dioxide (Nano)",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "NANO titanium dioxide capped at 25%; not permitted in applications leading to lung exposure.",
+      "basis": [
+        "EU Annex VI entry 27a (max 25%- In case of combined use of Titanium Dioxide and Titanium Dioxide (nano), the sum shall not exceed the limit of 25%.)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "27a",
+      "max_concentration": "25%- In case of combined use of Titanium Dioxide and Titanium Dioxide (nano), the sum shall not exceed the limit of 25%.",
+      "product_scope": null,
+      "warning_wording": "Not to be used in applications that may lead to exposure of the end-user's lungs by inhalation Only nanomaterials having the following characteristics are allowed: — purity ≥ 99 %,— rutile form, or rutile with up to 5 % anatase, with crystalline structure and physical appearance as clusters of spherical, needle, or lanceolate shapes, — median particle size based on number size distribution ≥ 30 nm, — aspect ratio from 1 to 4,5, and volume specific surface area ≤ 460 m2/cm3, — coated with Silica, Hydrated Silica, Alumina, Aluminium Hydroxide, Aluminium Stearate, Stearic Acid, Trimethoxycaprylylsilane, Glycerin, Dimethicone, Hydrogen Dimethicone, Simethicone;or coated with one of the follow­ing combinations: —Silica at a maximum concen­tration of 16 % and Cetyl Phosphate at a maximum concentration of 6 %,—Alumina at a maximum con­centration of 7 % and Manga­nese Dioxide at a maximum concentration of 0,7 % (not to be used in lip products), —Alumina at a maximum con­centration of 3 % and Triethoxycaprylylsilane at a maximum concentration of 9 %, — photocatalytic activity ≤ 10 % compared to corresponding non-coated or non-doped re­ference, — nanoparticles are photostable in the final formulation.Wording of conditions of use and warnings:For face products containing Tita­nium Dioxide (nano) coated with the combination Alumina and Manganese Dioxide: Not to be used on the lips.",
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Tris-Biphenyl Triazine (Nano)",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "NANO form capped at 10%; not permitted where the lung may be exposed.",
+      "basis": [
+        "EU Annex VI entry 29 (max 10%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "29",
+      "max_concentration": "10%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "Not to be used in sprays.Only nanomaterials having the folloing characteristics are allowed:- Median primary particle size >80 nm;- Purity ≥ 98%; - Uncoated",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Zinc Oxide (Nano)",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "NANO zinc oxide capped at 25%; not permitted in applications leading to lung exposure.",
+      "basis": [
+        "EU Annex VI entry 30a (max 25%- In case of combined use of zinc oxide and zinc oxide (nano), the sum shall not exceed the limit of 25%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "30a",
+      "max_concentration": "25%- In case of combined use of zinc oxide and zinc oxide (nano), the sum shall not exceed the limit of 25%",
+      "product_scope": null,
+      "warning_wording": "Not to be used in applications that may lead to exposure of the end-user's lungs by inhalation. Only nanomaterials having the following characteristics are allowed: — purity ≥ 96 %, with wurtzite crystalline structure and physical appearance as clusters that are rod-like, star-like and/or isometric shapes, with impurities consisting only of carbon dioxide and water, whilst any other impurities are less than 1 % in total, — median diameter of the particle number size distribution D50 (50 % of the number below this diameter) > 30 nm and D1 (1 % below this size) > 20 nm, — water solubility < 50 mg/L —uncoated, or coated with triethoxycaprylylsilane, dimethicone, dimethoxydiphenylsilanetriethoxycaprylylsilane cross- polymer, or octyl triethoxy silane.",
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Phenylene Bis-Diphenyltriazine",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Photostable broad-spectrum filter capped at 5%.",
+      "basis": [
+        "EU Annex VI entry 31 (max 5%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "31",
+      "max_concentration": "5%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "Not to be used in applications that may lead to exposure of the end user's lungs by inhalation.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Methoxypropylamino Cyclohexenylidene Ethoxyethylcyanoacetate",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted UV filter capped at 3%.",
+      "basis": [
+        "EU Annex VI entry 32 (max 3%)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "32",
+      "max_concentration": "3%",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "- Not to be used in applications that may lead to exposure of the end-user’s lungs by inhalation- Do not use with nitrosating agents- Maximum nitrosamine content: 50 μg/kg- Keep in nitrite-free containers",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "Permitted UV filter capped at 10%.",
+      "basis": [
+        "EU Annex VI entry 33 (max 10 %(In case of combined use of Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine and Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine (nano), the sum shall not exceed 10 %).)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "33",
+      "max_concentration": "10 %(In case of combined use of Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine and Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine (nano), the sum shall not exceed 10 %).",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": null,
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
+    },
+    {
+      "inci": "Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine (Nano)",
+      "function": "uv filter",
+      "risk": "low",
+      "risk_type": "health",
+      "reason": "NANO form capped at 10%; not permitted where the lung may be exposed.",
+      "basis": [
+        "EU Annex VI entry 34 (max 10 %(In case of combined use of Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine and Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine (nano), the sum shall not exceed 10 %).)"
+      ],
+      "eu": true,
+      "eu_annex": [
+        "VI"
+      ],
+      "eu_annex_ref": "34",
+      "max_concentration": "10 %(In case of combined use of Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine and Bis-(Diethylaminohydroxybenzoyl Benzoyl) Piperazine (nano), the sum shall not exceed 10 %).",
+      "product_scope": null,
+      "warning_wording": null,
+      "other_conditions": "Only nanomaterials having the following characteristics are allowed:— Purity ≥ 97 %—Median particle size D50 (50 % of the number below this diameter): ≥ 50 nm of number size distribution.Not to be used in applications that may lead to exposure of the end user’s lungs by inhalation.",
+      "dose_dependent": true,
+      "disputed": false,
+      "confidence": "high"
     }
   ]
 }
