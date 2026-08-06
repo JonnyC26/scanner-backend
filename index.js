@@ -379,6 +379,49 @@ for (const [commonName, inciTarget] of Object.entries(synonymTable.synonyms || {
   cosmeticBySynonym.set(normalizeInci(commonName), target);
 }
 
+// Health check: reference maps must be non-empty. Counts only what we load at boot.
+function getReferenceEntryCounts() {
+  return {
+    hazardCount: Array.isArray(cosmeticIngredients) ? cosmeticIngredients.length : 0,
+    synonymCount: Object.keys((synonymTable && synonymTable.synonyms) || {}).length,
+    cosingCount: cosingNamesMap ? cosingNamesMap.size : 0,
+  };
+}
+
+// Pure evaluator — unit-tested. Does not touch Firestore or third parties.
+function evaluateHealthStatus({
+  firestoreOk,
+  hazardCount,
+  synonymCount,
+  cosingCount,
+  uptimeSeconds,
+  tableVersion,
+  cosingNamesVersion,
+}) {
+  if (!firestoreOk) {
+    return { status: 503, body: { ok: false, reason: 'firestore unreachable' } };
+  }
+  if (!(hazardCount > 0) || !(synonymCount > 0) || !(cosingCount > 0)) {
+    return { status: 503, body: { ok: false, reason: 'reference data not loaded' } };
+  }
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      uptimeSeconds,
+      tableVersion,
+      cosingNamesVersion,
+      entryCount: hazardCount,
+    },
+  };
+}
+
+async function pingFirestore() {
+  // Minimal read — confirms credentials + network, not product data.
+  await db.collection(CACHE_COLLECTION).limit(1).get();
+  return true;
+}
+
 function resolveCosmeticEntry(entry) {
   if (!entry) return null;
   if (entry.member_of) {
@@ -756,6 +799,104 @@ function cosmeticPenaltyForRisk(risk) {
   if (risk === 'moderate') return 10;
   if (risk === 'low') return 3;
   return 0;
+}
+
+// Fixed copy for EPA/pesticide-style household cleaners. Never call the LLM.
+const HOUSEHOLD_EXPLANATION =
+  "This is a household cleaning product. Most of its ingredients aren't disclosed by law, so nobody can assess it — including us.";
+
+// Detect EPA-registered / pesticide-labelled household products from raw
+// ingredient text. Requires TWO OR MORE signals — a lone percentage would
+// misclassify every sunscreen listing UV filters with %.
+function looksLikeHouseholdProduct(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return false;
+
+  let signals = 0;
+
+  // Active ingredient(s) heading
+  if (/\bactive\s+ingredients?\b/i.test(raw)) signals += 1;
+
+  // Other ingredient(s) or inert ingredient(s) heading
+  if (/\b(?:other|inert)\s+ingredients?\b/i.test(raw)) signals += 1;
+
+  // EPA registration / establishment number
+  if (/\bEPA\s+Reg\.?\s*No\.?\b/i.test(raw) || /\bEPA\s+Est\.?\b/i.test(raw)) {
+    signals += 1;
+  }
+
+  // Percentage figure attached to a named ingredient (e.g. "Ethanol 58.00%", "0.10%")
+  if (/(?:[A-Za-z][A-Za-z0-9\s\-\/\.,()]{1,80}?\s+)?\d+(?:\.\d+)?\s*%/.test(raw)) {
+    signals += 1;
+  }
+
+  // Keep out of reach / hazards to humans / domestic animals block
+  if (
+    /\bkeep\s+out\s+of\s+reach\s+of\s+children\b/i.test(raw) ||
+    /\bhazards?\s+to\s+humans\b/i.test(raw) ||
+    /\bdomestic\s+animals\b/i.test(raw)
+  ) {
+    signals += 1;
+  }
+
+  return signals >= 2;
+}
+
+function buildHouseholdScanResponse({
+  productName = 'Unknown Product',
+  imageUrl = '',
+  ingredients = '',
+  extras = {},
+} = {}) {
+  return {
+    productType: 'household',
+    productName,
+    additiveNames: null,
+    additiveList: JSON.stringify([]),
+    ingredients,
+    nutriScore: null,
+    novaGroup: null,
+    additivesCount: null,
+    isOrganic: null,
+    protein: null,
+    sugar: null,
+    sodium: null,
+    sugarTier: null,
+    sodiumTier: null,
+    proteinTier: null,
+    score: null,
+    scoreBreakdown: JSON.stringify({
+      start: 100,
+      penalties: [],
+      categoryCaps: { high: 0, moderate: 0, low: 0 },
+      allergenPenalty: 0,
+      allergenCapApplied: false,
+      annexIICapApplied: false,
+      rawScore: null,
+      finalScore: null,
+      coverageMatched: 0,
+      coverageTotal: 0,
+      assessedCount: 0,
+      recognisedCount: 0,
+      totalCount: 0,
+      coverage: 0,
+    }),
+    alternatives: JSON.stringify([]),
+    explanation: HOUSEHOLD_EXPLANATION,
+    scoreColor: '#9E9E9E',
+    imageUrl,
+    scoreLabel: 'Not enough data',
+    coverageMatched: 0,
+    coverageTotal: 0,
+    assessedCount: 0,
+    recognisedCount: 0,
+    totalCount: 0,
+    noIngredientData: false,
+    ingredientFindings: JSON.stringify([]),
+    ingredientList: JSON.stringify([]),
+    tableVersion: COSMETIC_TABLE_VERSION,
+    ...extras,
+  };
 }
 
 function scoreCosmeticProduct(product) {
@@ -1818,6 +1959,7 @@ async function generateCosmeticExplanation(scored, ingredientsText) {
         : 'Lead with the highest-risk findings; keep tone proportionate to their severity.';
 
   const prompt = `You are explaining a cosmetic ingredient safety scan for a consumer app.
+Always write in the first-person plural ("we" / "we've" / "our"). Never use first-person singular ("I" / "I've" / "I'm" / "my").
 ${coverageContext}
 ${coverageNote}
 ${proportionNote}
@@ -1930,6 +2072,9 @@ async function generateFoodExplanation({
 // Rebuild a Haiku explanation from a productCache document (food or cosmetic).
 async function generateExplanationFromCached(cached) {
   const productType = cached.productType || 'food';
+  if (productType === 'household') {
+    return HOUSEHOLD_EXPLANATION;
+  }
   if (productType === 'cosmetic') {
     const findings = typeof cached.ingredientFindings === 'string'
       ? JSON.parse(cached.ingredientFindings || '[]')
@@ -2027,6 +2172,13 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
   const productName = product.product_name || 'Unknown Product';
   const imageUrl = product.image_front_url || product.image_url || '';
   const ingredients = product.ingredients_text || '';
+
+  // Household cleaners (EPA/pesticide labels) are not scoreable cosmetics.
+  if (looksLikeHouseholdProduct(ingredients)) {
+    console.log(`[HOUSEHOLD] barcode=${barcode} — skipping cosmetic score`);
+    return buildHouseholdScanResponse({ productName, imageUrl, ingredients });
+  }
+
   const scored = scoreCosmeticProduct(product);
 
   let explanation = null;
@@ -2246,6 +2398,30 @@ const PHOTO_UPSTREAM_RECHECK_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 function rescorePhotoCachedDocument(cached) {
   const ingredientsText = String((cached && cached.ingredients) || '').trim();
   if (!ingredientsText) return null;
+
+  // Household labels must not be re-scored as cosmetics on a table bump.
+  if (looksLikeHouseholdProduct(ingredientsText) || cached.productType === 'household') {
+    const household = buildHouseholdScanResponse({
+      productName: cached.productName || 'Scanned label',
+      imageUrl: cached.imageUrl || '',
+      ingredients: ingredientsText,
+      extras: {
+        source: 'photo',
+        photoParsedCount: cached.photoParsedCount,
+        photoCapturedAt: cached.photoCapturedAt,
+        photoCapturedBy: cached.photoCapturedBy,
+      },
+    });
+    const scoredStub = {
+      score: null,
+      coverageMatched: 0,
+      coverageTotal: 0,
+      unparseableCount: 0,
+      drugFactsMarker: null,
+      unmatchedNames: [],
+    };
+    return { responseData: household, scored: scoredStub, unmatchedNames: [] };
+  }
 
   const scored = scoreCosmeticProduct({ ingredients_text: ingredientsText });
   const responseData = {
@@ -2564,6 +2740,31 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
 
   return responseData;
 }
+
+// Liveness for uptime monitors. No auth, no rate limit. Checks only what we
+// control: Firestore reachability + non-empty reference maps at boot.
+app.get('/health', async (req, res) => {
+  const counts = getReferenceEntryCounts();
+  let firestoreOk = false;
+  try {
+    await pingFirestore();
+    firestoreOk = true;
+  } catch (err) {
+    console.log(`[HEALTH] firestore ping failed: ${err.message}`);
+    firestoreOk = false;
+  }
+
+  const result = evaluateHealthStatus({
+    firestoreOk,
+    hazardCount: counts.hazardCount,
+    synonymCount: counts.synonymCount,
+    cosingCount: counts.cosingCount,
+    uptimeSeconds: Math.floor(process.uptime()),
+    tableVersion: COSMETIC_TABLE_VERSION,
+    cosingNamesVersion: COSING_NAMES_VERSION,
+  });
+  return res.status(result.status).json(result.body);
+});
 
 app.get('/scan/:barcode', async (req, res) => {
   try {
@@ -2958,33 +3159,42 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     }
 
     const ingredientsText = ingredientNames.join(', ');
+    const isHousehold = looksLikeHouseholdProduct(ingredientsText);
     const product = { ingredients_text: ingredientsText };
-    const scored = scoreCosmeticProduct(product);
+    // Household: skip cosmetic scoring entirely (empty ingredientList, fixed copy).
+    const scored = isHousehold ? null : scoreCosmeticProduct(product);
 
     // Cache below-gate photo rescues too — transcribed ingredients are valuable
     // even when score is null. Never cache a zero-ingredient parse.
-    const photoParsedCount = Array.isArray(scored.ingredientList)
-      ? scored.ingredientList.length
-      : 0;
-    const canCache = !!normalizedBarcode && photoParsedCount > 0;
+    // Household results cache with an empty ingredientList so rescans are instant.
+    const photoParsedCount = isHousehold
+      ? 0
+      : (Array.isArray(scored.ingredientList) ? scored.ingredientList.length : 0);
+    const canCache = !!normalizedBarcode && (isHousehold || photoParsedCount > 0);
     // Ignore defer when we are not caching — there is no doc for /explain to fill.
-    const skipExplanation = deferExplanation && canCache;
+    // Household explanations are a fixed string; never defer or call Haiku.
+    const skipExplanation = !isHousehold && deferExplanation && canCache;
 
     let explanation = null;
-    if (!skipExplanation) {
+    if (isHousehold) {
+      explanation = HOUSEHOLD_EXPLANATION;
+      console.log(`[HOUSEHOLD] barcode=${normalizedBarcode || 'none'} photo=true`);
+    } else if (!skipExplanation) {
       explanation = await generateCosmeticExplanation(scored, ingredientsText);
     }
 
-    const unmatchedNames = scored.unmatchedNames || [];
-    const namesJoined = unmatchedNames.map(unmatchedNameLabel).join('|');
-    const namesTruncated = namesJoined.length > 200
-      ? namesJoined.slice(0, 200) + '...'
-      : namesJoined;
-    console.log(`[COSMETIC UNMATCHED] barcode=${normalizedBarcode || 'none'} count=${unmatchedNames.length} names=${namesTruncated}`);
-    recordUnmatchedInci(normalizedBarcode || null, unmatchedNames);
-    console.log(`[UNPARSEABLE] barcode=${normalizedBarcode || 'none'} count=${scored.unparseableCount || 0}`);
-    if (scored.drugFactsMarker) {
-      console.log(`[DRUG FACTS TRUNCATED] barcode=${normalizedBarcode || 'none'} marker=${scored.drugFactsMarker}`);
+    if (!isHousehold) {
+      const unmatchedNames = scored.unmatchedNames || [];
+      const namesJoined = unmatchedNames.map(unmatchedNameLabel).join('|');
+      const namesTruncated = namesJoined.length > 200
+        ? namesJoined.slice(0, 200) + '...'
+        : namesJoined;
+      console.log(`[COSMETIC UNMATCHED] barcode=${normalizedBarcode || 'none'} count=${unmatchedNames.length} names=${namesTruncated}`);
+      recordUnmatchedInci(normalizedBarcode || null, unmatchedNames);
+      console.log(`[UNPARSEABLE] barcode=${normalizedBarcode || 'none'} count=${scored.unparseableCount || 0}`);
+      if (scored.drugFactsMarker) {
+        console.log(`[DRUG FACTS TRUNCATED] barcode=${normalizedBarcode || 'none'} marker=${scored.drugFactsMarker}`);
+      }
     }
 
     // Prefer upstream product name + image when the barcode exists in OFF/OBF
@@ -3066,47 +3276,63 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
 
     const photoCapturedAt = Date.now();
     let persisted = false;
-    const responseData = {
-      productType: 'cosmetic',
-      productName,
-      additiveNames: null,
-      additiveList: JSON.stringify([]),
-      ingredients: ingredientsText,
-      nutriScore: null,
-      novaGroup: null,
-      additivesCount: null,
-      isOrganic: null,
-      protein: null,
-      sugar: null,
-      sodium: null,
-      sugarTier: null,
-      sodiumTier: null,
-      proteinTier: null,
-      score: scored.score,
-      scoreBreakdown: JSON.stringify(scored.scoreBreakdown),
-      alternatives: JSON.stringify([]),
-      explanation,
-      scoreColor: scored.scoreColor,
-      imageUrl,
-      scoreLabel: scored.scoreLabel,
-      coverageMatched: scored.coverageMatched,
-      coverageTotal: scored.coverageTotal,
-      assessedCount: scored.assessedCount,
-      recognisedCount: scored.recognisedCount,
-      totalCount: scored.totalCount,
-      noIngredientData: !!scored.noIngredientData,
-      ingredientFindings: JSON.stringify(scored.ingredientFindings),
-      ingredientList: JSON.stringify(scored.ingredientList || []),
-      tableVersion: COSMETIC_TABLE_VERSION,
-      source: 'photo',
-      photoParsedCount,
-      photoCapturedAt,
-      photoCapturedBy,
-      dietWarnings: '',
-      imageStored,
-      imageSkipReason,
-      persisted,
-    };
+    const responseData = isHousehold
+      ? buildHouseholdScanResponse({
+          productName,
+          imageUrl,
+          ingredients: ingredientsText,
+          extras: {
+            source: 'photo',
+            photoParsedCount,
+            photoCapturedAt,
+            photoCapturedBy,
+            dietWarnings: '',
+            imageStored,
+            imageSkipReason,
+            persisted,
+          },
+        })
+      : {
+          productType: 'cosmetic',
+          productName,
+          additiveNames: null,
+          additiveList: JSON.stringify([]),
+          ingredients: ingredientsText,
+          nutriScore: null,
+          novaGroup: null,
+          additivesCount: null,
+          isOrganic: null,
+          protein: null,
+          sugar: null,
+          sodium: null,
+          sugarTier: null,
+          sodiumTier: null,
+          proteinTier: null,
+          score: scored.score,
+          scoreBreakdown: JSON.stringify(scored.scoreBreakdown),
+          alternatives: JSON.stringify([]),
+          explanation,
+          scoreColor: scored.scoreColor,
+          imageUrl,
+          scoreLabel: scored.scoreLabel,
+          coverageMatched: scored.coverageMatched,
+          coverageTotal: scored.coverageTotal,
+          assessedCount: scored.assessedCount,
+          recognisedCount: scored.recognisedCount,
+          totalCount: scored.totalCount,
+          noIngredientData: !!scored.noIngredientData,
+          ingredientFindings: JSON.stringify(scored.ingredientFindings),
+          ingredientList: JSON.stringify(scored.ingredientList || []),
+          tableVersion: COSMETIC_TABLE_VERSION,
+          source: 'photo',
+          photoParsedCount,
+          photoCapturedAt,
+          photoCapturedBy,
+          dietWarnings: '',
+          imageStored,
+          imageSkipReason,
+          persisted,
+        };
     if (skipExplanation) {
       responseData.explanationPending = true;
     }
@@ -3119,13 +3345,17 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         const incomingMeta = {
           source: 'photo',
           photoParsedCount,
-          coverageMatched: scored.coverageMatched,
+          coverageMatched: isHousehold ? 0 : scored.coverageMatched,
         };
 
-        if (existing && existing.source !== 'photo') {
+        if (existing && existing.source !== 'photo' && !isHousehold) {
           console.log(`[PHOTO CACHE KEPT UPSTREAM] barcode=${normalizedBarcode}`);
           persisted = true;
-        } else if (existing && !shouldReplaceWithPhotoCache(existing, incomingMeta)) {
+        } else if (
+          !isHousehold &&
+          existing &&
+          !shouldReplaceWithPhotoCache(existing, incomingMeta)
+        ) {
           console.log(
             `[PHOTO CACHE KEPT EXISTING] barcode=${normalizedBarcode} existing=${photoCacheParsedCount(existing)} new=${photoParsedCount}`
           );
@@ -3133,7 +3363,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         } else {
           const { dietWarnings: _dietWarnings, persisted: _p, imageStored: _is, imageSkipReason: _isr, ...cachePayload } = responseData;
           cachePayload.ingredientList = stringifyIngredientListForCache(
-            scored.ingredientList,
+            isHousehold ? [] : scored.ingredientList,
             normalizedBarcode
           );
           const wrote = await writeProductCacheWithRetry(
@@ -3155,12 +3385,13 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
           capturedBy: photoCapturedBy,
         });
       }
-    } else if (normalizedBarcode && photoParsedCount === 0) {
+    } else if (normalizedBarcode && photoParsedCount === 0 && !isHousehold) {
       console.log(`[PHOTO SCAN NOT CACHED] barcode=${normalizedBarcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
     }
     responseData.persisted = persisted;
 
-    console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${scored.coverageMatched} front=${hasFrontImage ? 'yes' : 'no'} persisted=${persisted} imageStored=${imageStored} ms=${Date.now() - started}`);
+    const matchedLog = isHousehold ? 0 : scored.coverageMatched;
+    console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${matchedLog} household=${isHousehold} front=${hasFrontImage ? 'yes' : 'no'} persisted=${persisted} imageStored=${imageStored} ms=${Date.now() - started}`);
     res.json(responseData);
 
     if (skipExplanation && responseData.explanationPending) {
