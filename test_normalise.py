@@ -398,6 +398,8 @@ module.exports = {
   tidyParsedIngredientName,
   tagIndicatesCosmetic,
   hasCosmeticCategory,
+  tagIndicatesHousehold,
+  hasHouseholdCategory,
   lookupCosmeticIngredient,
   normalizeInci,
 };
@@ -414,6 +416,8 @@ const {
   tidyParsedIngredientName,
   tagIndicatesCosmetic,
   hasCosmeticCategory,
+  tagIndicatesHousehold,
+  hasHouseholdCategory,
   lookupCosmeticIngredient,
 } = require('/tmp/cosmetic_parse_helpers.js');
 
@@ -548,6 +552,39 @@ for (const name of ['1,2-Hexanediol', '1,4-Dioxane', 'Toluene-2,5-Diamine']) {
   assert(hasCosmeticCategory({ categories_tags: ['en:toothpastes', 'en:oral-care'] }) === true);
   assert(hasCosmeticCategory({ categories_tags: ['en:plant-based-foods'] }) === false);
   assert(hasCosmeticCategory({ categories_tags: [] }) === false);
+
+  // Household cleaning categories (Dawn Ultra etc.) — compound fragments only.
+  assert(tagIndicatesHousehold('en:dishwashing') === true);
+  assert(tagIndicatesHousehold('en:dish-soap') === true);
+  assert(tagIndicatesHousehold('en:detergents') === true);
+  assert(tagIndicatesHousehold('en:laundry-detergent') === true);
+  assert(tagIndicatesHousehold('en:cleaning-products') === true);
+  assert(tagIndicatesHousehold('en:household-cleaners') === true);
+  assert(tagIndicatesHousehold('en:surface-cleaners') === true);
+  assert(tagIndicatesHousehold('en:bleach') === true);
+  assert(tagIndicatesHousehold('en:disinfectants') === true);
+  assert(tagIndicatesHousehold('en:air-fresheners') === true);
+  assert(hasHouseholdCategory({
+    categories_tags: ['en:dishwashing', 'en:cleaning-products'],
+  }) === true);
+
+  // Bare "soap" must NOT be household — cosmetic soaps / hand soap / body wash / shampoo.
+  assert(tagIndicatesHousehold('en:soap') === false, 'bare soap must not be household');
+  assert(tagIndicatesHousehold('en:soaps') === false, 'soaps must not be household');
+  assert(tagIndicatesHousehold('en:hand-soap') === false, 'hand-soap must not be household');
+  assert(tagIndicatesHousehold('en:body-wash') === false, 'body-wash must not be household');
+  assert(tagIndicatesHousehold('en:shampoo') === false, 'shampoo must not be household');
+  assert(tagIndicatesHousehold('en:shampoos') === false, 'shampoos must not be household');
+  assert(hasHouseholdCategory({ categories_tags: ['en:soaps', 'en:hygiene'] }) === false,
+    'cosmetic soap categories must not be household');
+  assert(hasHouseholdCategory({ categories_tags: ['en:hand-soap', 'en:body-wash'] }) === false,
+    'hand soap / body wash must not be household');
+  assert(hasHouseholdCategory({ categories_tags: ['en:shampoos', 'en:hair-care'] }) === false,
+    'shampoo categories must not be household');
+  // Cosmetic path still owns soap/shampoo.
+  assert(hasCosmeticCategory({ categories_tags: ['en:soaps'] }) === true);
+  assert(hasCosmeticCategory({ categories_tags: ['en:hand-soap'] }) === true);
+  assert(hasCosmeticCategory({ categories_tags: ['en:shampoos'] }) === true);
 }
 
 // Synonym layer still works through the new parser (GuruNanda-style label).
@@ -2414,15 +2451,28 @@ const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('function stringifyIngredientListForCache');
 if (start < 0 || end < 0 || end <= start) throw new Error('could not locate scoring block');
+const fragStart = src.indexOf('const HOUSEHOLD_CATEGORY_FRAGMENTS');
+const fragEnd = src.indexOf('async function resolveProductType');
+if (fragStart < 0 || fragEnd < 0) throw new Error('could not locate household category block');
+const addStart = src.indexOf('function formatAdditivesCountDisplay');
+const addEnd = src.indexOf('async function generateFoodExplanation');
+if (addStart < 0 || addEnd < 0 || addEnd <= addStart) {
+  throw new Error('could not locate formatAdditivesCountDisplay');
+}
 const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(fragStart, fragEnd)}
+${src.slice(addStart, addEnd)}
 module.exports = {
   looksLikeHouseholdProduct,
   buildHouseholdScanResponse,
   HOUSEHOLD_EXPLANATION,
+  tagIndicatesHousehold,
+  hasHouseholdCategory,
+  formatAdditivesCountDisplay,
 };
 `;
 fs.writeFileSync('/tmp/household_helpers.js', block);
@@ -2524,6 +2574,46 @@ assert(
 );
 const list = JSON.parse(result.ingredientList);
 assert(Array.isArray(list) && list.length === 0, 'ingredientList must be empty');
+
+// Category-based household (Dawn Ultra) — dish soap has no EPA Active/Other split.
+assert(g.hasHouseholdCategory({
+  categories_tags: ['en:dishwashing', 'en:cleaning-products'],
+}) === true, 'Dawn-shaped dishwashing tags must be household');
+assert(g.hasHouseholdCategory({
+  categories_tags: ['en:dish-soap', 'en:detergents'],
+}) === true, 'dish-soap + detergents must be household');
+assert(g.hasHouseholdCategory({
+  categories_tags: ['en:laundry-detergent'],
+}) === true, 'laundry-detergent must be household');
+
+// Cosmetic personal-care soaps must stay out of household (no bare "soap" fragment).
+const notHouseholdCategories = [
+  ['en:soaps'],
+  ['en:soap'],
+  ['en:hand-soap'],
+  ['en:body-wash'],
+  ['en:shampoo'],
+  ['en:shampoos', 'en:hair-care'],
+  ['en:bath-and-shower', 'en:shower-gels'],
+];
+for (const tags of notHouseholdCategories) {
+  assert(
+    g.hasHouseholdCategory({ categories_tags: tags }) === false,
+    'must NOT be household category: ' + tags.join(',')
+  );
+}
+
+// Additives row: missing ingredients text → "Not known", not "None".
+assert(g.formatAdditivesCountDisplay(0, '') === 'Not known',
+  'empty ingredients must show Not known');
+assert(g.formatAdditivesCountDisplay(0, '   ') === 'Not known',
+  'whitespace-only ingredients must show Not known');
+assert(g.formatAdditivesCountDisplay(0, 'Water, Sugar') === 'None',
+  'zero additives with ingredients text must still show None');
+assert(g.formatAdditivesCountDisplay(2, 'Water, Sugar') === '2 additives',
+  'non-zero additives display');
+assert(g.formatAdditivesCountDisplay(0, null) === 'Not known',
+  'null ingredients must show Not known');
 
 console.log('household product classification ok');
 """

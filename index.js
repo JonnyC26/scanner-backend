@@ -1450,10 +1450,42 @@ function hasCosmeticCategory(product) {
   return tags.some(tagIndicatesCosmetic);
 }
 
+// Explicit household/cleaning category fragments. Matched as whole hyphen-delimited
+// segments — compound only (no bare "soap") so cosmetic soaps stay cosmetic.
+const HOUSEHOLD_CATEGORY_FRAGMENTS = [
+  'cleaning-products', 'cleaning',
+  'detergents', 'detergent',
+  'dishwashing', 'dish-soap',
+  'laundry', 'laundry-detergent',
+  'household', 'household-cleaners',
+  'surface-cleaners',
+  'bleach',
+  'disinfectants',
+  'air-fresheners',
+];
+
+function tagIndicatesHousehold(tag) {
+  const t = String(tag || '').replace(/^[a-z]{2}:/, '').toLowerCase();
+  if (!t) return false;
+  return HOUSEHOLD_CATEGORY_FRAGMENTS.some(frag => {
+    if (t === frag) return true;
+    if (t.startsWith(frag + '-')) return true;
+    if (t.endsWith('-' + frag)) return true;
+    if (t.includes('-' + frag + '-')) return true;
+    return false;
+  });
+}
+
+function hasHouseholdCategory(product) {
+  const tags = (product && product.categories_tags) || [];
+  return tags.some(tagIndicatesHousehold);
+}
+
 async function resolveProductType(barcode) {
   // Classify by category (and OBF), not merely by which database answered first.
   // Toothpaste/soap/etc. often exist in OFF with ingredients and would otherwise
-  // be scored as food.
+  // be scored as food. Dish soap / laundry detergent categories must win before
+  // the food default (looksLikeHouseholdProduct only covers EPA pesticide labels).
   let foodProduct = null;
   let cosmeticProduct = null;
 
@@ -1475,6 +1507,12 @@ async function resolveProductType(barcode) {
     }
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=null reason=not_found`);
     return { productType: null, product: null };
+  }
+
+  // Household cleaning categories beat food and cosmetic (Dawn Ultra etc.).
+  if (hasHouseholdCategory(foodProduct)) {
+    console.log(`[PRODUCT TYPE] barcode=${barcode} type=household reason=category_off`);
+    return { productType: 'household', product: foodProduct };
   }
 
   const offCosmeticCategory = hasCosmeticCategory(foodProduct);
@@ -2058,6 +2096,12 @@ async function requestFoodExplanation(prompt) {
   return claudeData.content[0].text;
 }
 
+function formatAdditivesCountDisplay(additivesCount, ingredientsText) {
+  // Empty ingredients text means we cannot know — do not print "None".
+  if (!String(ingredientsText || '').trim()) return 'Not known';
+  return additivesCount === 0 ? 'None' : additivesCount + ' additives';
+}
+
 async function generateFoodExplanation({
   sugarDisplay,
   sodiumDisplay,
@@ -2070,13 +2114,17 @@ async function generateFoodExplanation({
   ingredients,
   nutriScoreGrade,
 }) {
+  const hasIngredients = !!String(ingredients || '').trim();
+  const additivesPhrase = !hasIngredients
+    ? 'additives not known'
+    : `${additivesCount} additives`;
   const prompt = buildFoodExplanationPrompt({
     sugar: `${Math.round(sugarDisplay * 10) / 10}g`,
     sodium: `${Math.round(sodiumDisplay * 1000)}mg`,
     protein: `${Math.round(proteinDisplay * 10) / 10}g`,
     sugarTier,
     sodiumTier,
-    additivesPhrase: `${additivesCount} additives`,
+    additivesPhrase,
     isOrganic,
     novaGroup,
     ingredients,
@@ -2114,7 +2162,9 @@ async function generateExplanationFromCached(cached) {
   // Food — use the cached display strings (already formatted for the app).
   const additivesPhrase = cached.additivesCount === 'None'
     ? '0 additives'
-    : (cached.additivesCount || '0 additives');
+    : (cached.additivesCount === 'Not known'
+      ? 'additives not known'
+      : (cached.additivesCount || '0 additives'));
   // Accept legacy Yes/No cache values and yes/no/unknown/Unknown strings.
   const organicStatus = normalizeOrganicStatus(cached.isOrganic);
   const breakdown = typeof cached.scoreBreakdown === 'string'
@@ -2173,6 +2223,21 @@ function ensureExplanation(barcode, cached) {
   })();
   explanationInFlight.set(barcode, promise);
   return promise;
+}
+
+function scanAndCacheHousehold(barcode, product) {
+  const productName = product.product_name || 'Unknown Product';
+  const imageUrl = product.image_front_url || product.image_url || '';
+  const ingredients = product.ingredients_text || '';
+  recordRawObservation({
+    barcode,
+    productType: 'household',
+    source: 'off',
+    payload: product,
+    tableVersion: null,
+  });
+  console.log(`[HOUSEHOLD] barcode=${barcode} — category household, skipping score`);
+  return buildHouseholdScanResponse({ productName, imageUrl, ingredients });
 }
 
 async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false } = {}) {
@@ -2374,7 +2439,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     ingredients: ingredients,
     nutriScore,
     novaGroup,
-    additivesCount: additivesCount === 0 ? 'None' : additivesCount + ' additives',
+    additivesCount: formatAdditivesCountDisplay(additivesCount, ingredients),
     isOrganic: formatOrganicDisplay(organicStatus),
     protein: fmtProtein,
     sugar: fmtSugar,
@@ -2598,9 +2663,11 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
                 console.log(
                   `[CACHE PHOTO UPSTREAM REPLACE] barcode=${barcode} type=${resolved.productType}`
                 );
-                const upstreamData = resolved.productType === 'cosmetic'
-                  ? await scanAndCacheCosmetic(barcode, resolved.product, { skipExplanation })
-                  : await scanAndCacheFood(barcode, resolved.product, { skipExplanation });
+                const upstreamData = resolved.productType === 'household'
+                  ? scanAndCacheHousehold(barcode, resolved.product)
+                  : resolved.productType === 'cosmetic'
+                    ? await scanAndCacheCosmetic(barcode, resolved.product, { skipExplanation })
+                    : await scanAndCacheFood(barcode, resolved.product, { skipExplanation });
 
                 if (!upstreamData.noIngredientData) {
                   try {
@@ -2706,9 +2773,11 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
       throw notFoundErr;
     }
 
-    responseData = productType === 'cosmetic'
-      ? await scanAndCacheCosmetic(barcode, product, { skipExplanation })
-      : await scanAndCacheFood(barcode, product, { skipExplanation });
+    responseData = productType === 'household'
+      ? scanAndCacheHousehold(barcode, product)
+      : productType === 'cosmetic'
+        ? await scanAndCacheCosmetic(barcode, product, { skipExplanation })
+        : await scanAndCacheFood(barcode, product, { skipExplanation });
   } catch (refreshErr) {
     // Stale beats nothing: a slightly old answer is better than a false 404
     // (photo-rescued products, OFF/OBF outages, network errors).
