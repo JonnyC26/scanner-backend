@@ -2405,6 +2405,310 @@ console.log('cosing recognised-names layer ok', {
     print(proc.stdout.strip())
 
 
+def test_household_product_classification():
+    """Household pesticide labels vs sunscreens / cosmetics; empty list + null score."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('function stringifyIngredientListForCache');
+if (start < 0 || end < 0 || end <= start) throw new Error('could not locate scoring block');
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = process.cwd();
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+module.exports = {
+  looksLikeHouseholdProduct,
+  buildHouseholdScanResponse,
+  HOUSEHOLD_EXPLANATION,
+};
+`;
+fs.writeFileSync('/tmp/household_helpers.js', block);
+delete require.cache['/tmp/household_helpers.js'];
+const g = require('/tmp/household_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const lysol = [
+  'ACTIVE INGREDIENTS:',
+  'Alkyl (50% C14, 40% C12, 10% C16) dimethyl benzyl ammonium saccharinate 0.10%',
+  'Ethanol 58.00%',
+  'OTHER INGREDIENTS: 41.90%',
+  'KEEP OUT OF REACH OF CHILDREN',
+  'EPA Reg. No. 777-99',
+].join(' ');
+
+assert(g.looksLikeHouseholdProduct(lysol) === true, 'Lysol-shaped label must classify as household');
+
+// Clorox wipe: EPA Reg. + Other Ingredients percentage — exclusive + total ≥ 2.
+const clorox = 'EPA Reg. No. 5813-79 Other Ingredients: 99.816%';
+assert(g.looksLikeHouseholdProduct(clorox) === true, 'Clorox wipe with EPA Reg. must be household');
+
+// US OTC Drug Facts cosmetics — shared signals only; must NOT be household.
+const notHousehold = [
+  [
+    'Active ingredients: Avobenzone 3%, Homosalate 15%',
+    'Inactive ingredients: Water, Glycerin',
+    'Keep out of reach of children',
+  ].join(' '),
+  [
+    'Active ingredients: Salicylic Acid 2%',
+    'Inactive ingredients: Water, Glycerin',
+    'Keep out of reach of children',
+  ].join(' '),
+  [
+    'Active ingredients: Sodium Fluoride 0.243%',
+    'Inactive ingredients: Sorbitol, Water',
+    'Keep out of reach of children',
+  ].join(' '),
+  [
+    'Active ingredients: Aluminum Zirconium Tetrachlorohydrex Gly 15%',
+    'Inactive ingredients: Cyclopentasiloxane',
+    'Keep out of reach of children',
+  ].join(' '),
+  // Percentage-only sunscreen (original Batch A regression)
+  'Avobenzone 3%, Homosalate 15%',
+  // Normal cosmetic INCI
+  'Aqua, Glycerin, Phenoxyethanol, Tocopherol, Xanthan Gum',
+];
+for (const text of notHousehold) {
+  assert(
+    g.looksLikeHouseholdProduct(text) === false,
+    'must NOT be household: ' + text.slice(0, 80)
+  );
+}
+
+// One signal alone never fires (exclusive alone or shared alone).
+const singles = [
+  'ACTIVE INGREDIENTS: Water',
+  'OTHER INGREDIENTS: fragrance',
+  'INERT INGREDIENTS: water',
+  'EPA Reg. No. 777-99',
+  'EPA Est. 777-IN-1',
+  'Ethanol 58.00%',
+  'KEEP OUT OF REACH OF CHILDREN',
+  'Hazards to humans and domestic animals',
+];
+for (const text of singles) {
+  assert(
+    g.looksLikeHouseholdProduct(text) === false,
+    'single signal must not fire: ' + text
+  );
+}
+
+// Shared-only combo (3 shared, 0 exclusive) — the OTC false-positive pattern.
+assert(
+  g.looksLikeHouseholdProduct(
+    'Active ingredients: Avobenzone 3% Keep out of reach of children'
+  ) === false,
+  'three shared OTC signals without exclusive must not fire'
+);
+
+const result = g.buildHouseholdScanResponse({
+  productName: 'Lysol',
+  ingredients: lysol,
+});
+assert(result.productType === 'household', 'productType must be household');
+assert(result.score === null, 'score must be null');
+assert(result.scoreLabel === 'Not enough data', 'scoreLabel');
+assert(result.scoreColor === '#9E9E9E', 'scoreColor');
+assert(result.coverageMatched === 0 && result.coverageTotal === 0, 'coverage zeros');
+assert(result.explanation === g.HOUSEHOLD_EXPLANATION, 'fixed explanation');
+assert(
+  g.HOUSEHOLD_EXPLANATION.includes("aren't disclosed by law"),
+  'explanation must be the fixed household sentence'
+);
+const list = JSON.parse(result.ingredientList);
+assert(Array.isArray(list) && list.length === 0, 'ingredientList must be empty');
+
+console.log('household product classification ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"household classification assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
+def test_health_endpoint():
+    """GET /health — 200 with versions; evaluateHealthStatus 503 on empty maps."""
+    script = r"""
+const http = require('http');
+const path = require('path');
+const Module = require('module');
+const fs = require('fs');
+
+const mockFirestore = {
+  collection() {
+    return {
+      limit() {
+        return {
+          async get() {
+            return { empty: true, docs: [] };
+          },
+        };
+      },
+      doc() {
+        return {
+          async get() {
+            return { exists: false, data: () => undefined };
+          },
+          async set() {},
+        };
+      },
+      async add() {
+        return { id: 'x' };
+      },
+    };
+  },
+};
+mockFirestore.FieldValue = { serverTimestamp: () => 'SERVER_TS', increment: (n) => n };
+
+const mockAdmin = {
+  initializeApp() {},
+  credential: { cert() { return {}; } },
+  auth() {
+    return { async verifyIdToken() { return { uid: 'u' }; } };
+  },
+  firestore() {
+    return mockFirestore;
+  },
+};
+mockAdmin.firestore.FieldValue = mockFirestore.FieldValue;
+
+const origRequire = Module.prototype.require;
+Module.prototype.require = function (id) {
+  if (id === 'firebase-admin') return mockAdmin;
+  return origRequire.apply(this, arguments);
+};
+
+process.env.FIREBASE_SERVICE_ACCOUNT = JSON.stringify({
+  project_id: 'demo',
+  client_email: 'demo@demo.iam.gserviceaccount.com',
+  private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg==\n-----END PRIVATE KEY-----\n',
+});
+process.env.ANTHROPIC_API_KEY = 'test-key';
+
+const appPath = path.join(process.cwd(), 'index.js');
+delete require.cache[appPath];
+const app = require(appPath);
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+function request(method, urlPath) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      const req = http.request(
+        { host: '127.0.0.1', port, path: urlPath, method },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            server.close();
+            const text = Buffer.concat(chunks).toString('utf8');
+            let json = null;
+            try { json = text ? JSON.parse(text) : null; } catch (_) { json = text; }
+            resolve({ status: res.statusCode, json });
+          });
+        }
+      );
+      req.on('error', (err) => { server.close(); reject(err); });
+      req.end();
+    });
+  });
+}
+
+(async () => {
+  const res = await request('GET', '/health');
+  assert(res.status === 200, 'health → 200, got ' + res.status);
+  assert(res.json && res.json.ok === true, 'ok true');
+  assert(typeof res.json.uptimeSeconds === 'number', 'uptimeSeconds');
+  assert(typeof res.json.tableVersion === 'string' && res.json.tableVersion.length > 0, 'tableVersion');
+  assert(typeof res.json.cosingNamesVersion === 'string' && res.json.cosingNamesVersion.length > 0, 'cosingNamesVersion');
+  assert(typeof res.json.entryCount === 'number' && res.json.entryCount > 0, 'entryCount');
+
+  // Pure evaluator: empty reference map → 503
+  const src = fs.readFileSync(appPath, 'utf8');
+  const start = src.indexOf('function evaluateHealthStatus');
+  const end = src.indexOf('async function pingFirestore');
+  if (start < 0 || end < 0) throw new Error('evaluateHealthStatus not found');
+  const block = src.slice(start, end) + '\nmodule.exports = { evaluateHealthStatus };\n';
+  fs.writeFileSync('/tmp/health_eval.js', block);
+  delete require.cache['/tmp/health_eval.js'];
+  const { evaluateHealthStatus } = require('/tmp/health_eval.js');
+
+  const bad = evaluateHealthStatus({
+    firestoreOk: true,
+    hazardCount: 0,
+    synonymCount: 10,
+    cosingCount: 10,
+    uptimeSeconds: 1,
+    tableVersion: 't',
+    cosingNamesVersion: 'c',
+  });
+  assert(bad.status === 503 && bad.body.ok === false, 'empty hazard → 503');
+
+  const badFs = evaluateHealthStatus({
+    firestoreOk: false,
+    hazardCount: 10,
+    synonymCount: 10,
+    cosingCount: 10,
+    uptimeSeconds: 1,
+    tableVersion: 't',
+    cosingNamesVersion: 'c',
+  });
+  assert(badFs.status === 503 && badFs.body.reason === 'firestore unreachable');
+
+  console.log('health endpoint ok', {
+    tableVersion: res.json.tableVersion,
+    entryCount: res.json.entryCount,
+  });
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(f"health endpoint assertions failed (exit {proc.returncode})")
+    print(proc.stdout.strip())
+
+
+def test_cosmetic_explanation_uses_we_voice():
+    """Haiku cosmetic prompt must pin first-person plural and ban singular I."""
+    src = (ROOT / "index.js").read_text(encoding="utf-8")
+    start = src.index("async function generateCosmeticExplanation")
+    end = src.index("function buildFoodExplanationPrompt")
+    prompt_block = src[start:end]
+    assert "Always write in the first-person plural" in prompt_block
+    assert 'Never use first-person singular' in prompt_block
+    assert '"we"' in prompt_block or "'we'" in prompt_block
+    assert '"I"' in prompt_block or "'I'" in prompt_block
+    print("cosmetic explanation we-voice ok")
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -2426,6 +2730,9 @@ def main() -> int:
         test_front_image_endpoint,
         test_ingredients_text_preference_rejoin_and_u201a,
         test_cosing_recognised_names_layer,
+        test_household_product_classification,
+        test_health_endpoint,
+        test_cosmetic_explanation_uses_we_voice,
     ]
     failed = 0
     for test in tests:
