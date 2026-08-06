@@ -806,40 +806,56 @@ const HOUSEHOLD_EXPLANATION =
   "This is a household cleaning product. Most of its ingredients aren't disclosed by law, so nobody can assess it — including us.";
 
 // Detect EPA-registered / pesticide-labelled household products from raw
-// ingredient text. Requires TWO OR MORE signals — a lone percentage would
-// misclassify every sunscreen listing UV filters with %.
+// ingredient text.
+//
+// Signals split into pesticide-EXCLUSIVE vs SHARED with US OTC Drug Facts
+// (sunscreens, acne washes, fluoride toothpaste, antiperspirants). Those OTC
+// labels routinely carry "Active ingredients", a %, and "Keep out of reach of
+// children" — any two of which would misclassify them if counted alone.
+// "INACTIVE ingredients" on OTC labels must NOT count as "other"/"inert".
+//
+// Fire only when: ≥1 exclusive signal AND ≥2 signals total.
 function looksLikeHouseholdProduct(text) {
   const raw = String(text || '');
   if (!raw.trim()) return false;
 
-  let signals = 0;
+  let exclusive = 0;
+  let shared = 0;
 
-  // Active ingredient(s) heading
-  if (/\bactive\s+ingredients?\b/i.test(raw)) signals += 1;
-
-  // Other ingredient(s) or inert ingredient(s) heading
-  if (/\b(?:other|inert)\s+ingredients?\b/i.test(raw)) signals += 1;
-
+  // ── Pesticide-exclusive ──────────────────────────────────────────────────
   // EPA registration / establishment number
   if (/\bEPA\s+Reg\.?\s*No\.?\b/i.test(raw) || /\bEPA\s+Est\.?\b/i.test(raw)) {
-    signals += 1;
+    exclusive += 1;
+  }
+
+  // "Other ingredients" or "inert ingredients" — NOT OTC "Inactive ingredients"
+  if (/\b(?:other|inert)\s+ingredients?\b/i.test(raw)) {
+    exclusive += 1;
+  }
+
+  // Hazards to humans / domestic animals (pesticide precautionary block)
+  if (/\bhazards?\s+to\s+humans\b/i.test(raw) || /\bdomestic\s+animals\b/i.test(raw)) {
+    exclusive += 1;
+  }
+
+  // ── Shared with US OTC Drug Facts ────────────────────────────────────────
+  // Active ingredient(s) heading (\b prevents matching inside "Inactive")
+  if (/\bactive\s+ingredients?\b/i.test(raw)) {
+    shared += 1;
   }
 
   // Percentage figure attached to a named ingredient (e.g. "Ethanol 58.00%", "0.10%")
   if (/(?:[A-Za-z][A-Za-z0-9\s\-\/\.,()]{1,80}?\s+)?\d+(?:\.\d+)?\s*%/.test(raw)) {
-    signals += 1;
+    shared += 1;
   }
 
-  // Keep out of reach / hazards to humans / domestic animals block
-  if (
-    /\bkeep\s+out\s+of\s+reach\s+of\s+children\b/i.test(raw) ||
-    /\bhazards?\s+to\s+humans\b/i.test(raw) ||
-    /\bdomestic\s+animals\b/i.test(raw)
-  ) {
-    signals += 1;
+  // Keep out of reach of children
+  if (/\bkeep\s+out\s+of\s+reach\s+of\s+children\b/i.test(raw)) {
+    shared += 1;
   }
 
-  return signals >= 2;
+  const total = exclusive + shared;
+  return exclusive >= 1 && total >= 2;
 }
 
 function buildHouseholdScanResponse({

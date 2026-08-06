@@ -2444,16 +2444,45 @@ const lysol = [
 
 assert(g.looksLikeHouseholdProduct(lysol) === true, 'Lysol-shaped label must classify as household');
 
-const sunscreen = 'Avobenzone 3%, Homosalate 15%';
-assert(
-  g.looksLikeHouseholdProduct(sunscreen) === false,
-  'sunscreen UV percentages alone must NOT classify as household'
-);
+// Clorox wipe: EPA Reg. + Other Ingredients percentage — exclusive + total ≥ 2.
+const clorox = 'EPA Reg. No. 5813-79 Other Ingredients: 99.816%';
+assert(g.looksLikeHouseholdProduct(clorox) === true, 'Clorox wipe with EPA Reg. must be household');
 
-const cosmetic = 'Aqua, Glycerin, Phenoxyethanol, Tocopherol, Xanthan Gum';
-assert(g.looksLikeHouseholdProduct(cosmetic) === false, 'normal INCI list must not be household');
+// US OTC Drug Facts cosmetics — shared signals only; must NOT be household.
+const notHousehold = [
+  [
+    'Active ingredients: Avobenzone 3%, Homosalate 15%',
+    'Inactive ingredients: Water, Glycerin',
+    'Keep out of reach of children',
+  ].join(' '),
+  [
+    'Active ingredients: Salicylic Acid 2%',
+    'Inactive ingredients: Water, Glycerin',
+    'Keep out of reach of children',
+  ].join(' '),
+  [
+    'Active ingredients: Sodium Fluoride 0.243%',
+    'Inactive ingredients: Sorbitol, Water',
+    'Keep out of reach of children',
+  ].join(' '),
+  [
+    'Active ingredients: Aluminum Zirconium Tetrachlorohydrex Gly 15%',
+    'Inactive ingredients: Cyclopentasiloxane',
+    'Keep out of reach of children',
+  ].join(' '),
+  // Percentage-only sunscreen (original Batch A regression)
+  'Avobenzone 3%, Homosalate 15%',
+  // Normal cosmetic INCI
+  'Aqua, Glycerin, Phenoxyethanol, Tocopherol, Xanthan Gum',
+];
+for (const text of notHousehold) {
+  assert(
+    g.looksLikeHouseholdProduct(text) === false,
+    'must NOT be household: ' + text.slice(0, 80)
+  );
+}
 
-// One signal alone never fires.
+// One signal alone never fires (exclusive alone or shared alone).
 const singles = [
   'ACTIVE INGREDIENTS: Water',
   'OTHER INGREDIENTS: fragrance',
@@ -2470,6 +2499,14 @@ for (const text of singles) {
     'single signal must not fire: ' + text
   );
 }
+
+// Shared-only combo (3 shared, 0 exclusive) — the OTC false-positive pattern.
+assert(
+  g.looksLikeHouseholdProduct(
+    'Active ingredients: Avobenzone 3% Keep out of reach of children'
+  ) === false,
+  'three shared OTC signals without exclusive must not fire'
+);
 
 const result = g.buildHouseholdScanResponse({
   productName: 'Lysol',
