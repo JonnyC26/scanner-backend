@@ -51,7 +51,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '2';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '3';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -2459,6 +2459,9 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   // Refuse a food score when energy, proteins, and sodium/salt are all absent.
   // A non-empty nutriments object is not enough (Dawn Ultra: saturated-fat 0 +
   // sugars 0 only). Fixed copy — never call Haiku.
+  // Nutrition fields are null (not "N/A") so the app hides the nutrition card
+  // and the "score always uses nutrition per 100g" footnote — showing a table
+  // for a product we just said we can't identify is misleading.
   if (!hasScorableFoodNutriments(product && product.nutriments)) {
     const organicStatus = resolveOrganicStatus(product.labels_tags);
     console.log(`[FOOD NO NUTRITION] barcode=${barcode} — skipping food score`);
@@ -2475,15 +2478,15 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
         ingredients
       ),
       isOrganic: formatOrganicDisplay(organicStatus),
-      protein: 'N/A',
-      sugar: 'N/A',
-      sodium: 'N/A',
-      protein100g: 'N/A',
-      sugar100g: 'N/A',
-      sodium100g: 'N/A',
+      protein: null,
+      sugar: null,
+      sodium: null,
+      protein100g: null,
+      sugar100g: null,
+      sodium100g: null,
       servingQuantity: null,
       servingKnown: false,
-      scoreBasis: 'per100g',
+      scoreBasis: null,
       sugarTier: null,
       sodiumTier: null,
       proteinTier: null,

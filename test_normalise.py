@@ -2818,7 +2818,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '2', 'SCAN_LOGIC_VERSION must be 2, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '3', 'SCAN_LOGIC_VERSION must be 3, got ' + SCAN_LOGIC_VERSION);
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -2884,7 +2884,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '2', 'exported SCAN_LOGIC_VERSION must be 2');
+assert(g.SCAN_LOGIC_VERSION === '3', 'exported SCAN_LOGIC_VERSION must be 3');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -2939,7 +2939,9 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '2', 'normal food stamps logic version 2');
+  assert(result.scanLogicVersion === '3', 'normal food stamps logic version 3');
+  assert(result.protein != null, 'scored food keeps protein display');
+  assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
 
 // 2. Food with only energy still scores
@@ -2982,7 +2984,17 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '2', 'Dawn stamps logic version 2');
+  assert(result.scanLogicVersion === '3', 'Dawn stamps logic version 3');
+  // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
+  assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
+  assert(result.sugar === null, 'Dawn sugar must be null');
+  assert(result.sodium === null, 'Dawn sodium must be null');
+  assert(result.protein100g === null, 'Dawn protein100g must be null');
+  assert(result.sugar100g === null, 'Dawn sugar100g must be null');
+  assert(result.sodium100g === null, 'Dawn sodium100g must be null');
+  assert(result.scoreBasis === null, 'Dawn scoreBasis must be null to hide per-100g footnote');
+  assert(result.protein !== 'N/A' && result.sugar !== 'N/A' && result.sodium !== 'N/A',
+    'Dawn must not return N/A nutrition strings');
 }
 
 // Source: gate lives in scanAndCacheFood; Haiku skipped on this path
