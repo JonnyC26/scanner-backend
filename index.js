@@ -2155,7 +2155,7 @@ const FOOD_NO_INGREDIENTS_EXPLANATION =
 
 // Fixed copy when food lacks energy/proteins/sodium|salt — never call Haiku.
 const FOOD_NO_NUTRITION_EXPLANATION =
-  "We couldn't assess this product. It has no nutrition information, and it doesn't look like a food we can score.";
+  "We couldn't tell what kind of product this is. There's no nutrition information and no product category, so we can't score it. If it's a cleaning or household product, we don't assess those.";
 
 // Fixed copy when a cosmetic explanation is unusable (refusal / malformed).
 const COSMETIC_NO_EXPLANATION =

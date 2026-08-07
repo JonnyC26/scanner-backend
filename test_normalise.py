@@ -2885,10 +2885,12 @@ const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
 assert(g.SCAN_LOGIC_VERSION === '2', 'exported SCAN_LOGIC_VERSION must be 2');
-assert(/nutrition information/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
-  'fixed explanation must mention nutrition information');
-assert(/doesn't look like a food we can score/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
-  'fixed explanation must mention not looking like a food we can score');
+assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
+  'fixed explanation must say we could not tell product kind');
+assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
+  'fixed explanation must mention missing nutrition and category');
+assert(/cleaning or household product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
+  'fixed explanation must mention cleaning/household');
 
 // Helper: 0 is present; missing / non-numeric is absent.
 assert(g.hasNumericNutriment({ proteins_100g: 0 }, ['proteins_100g']) === true,
