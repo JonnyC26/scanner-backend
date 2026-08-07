@@ -2121,6 +2121,16 @@ function formatAdditivesCountDisplay(additivesCount, ingredientsText) {
 const FOOD_NO_INGREDIENTS_EXPLANATION =
   "We couldn't check the ingredients for this product because none are listed. The score is based on nutrition alone.";
 
+// Fixed copy when a cosmetic explanation is unusable (refusal / malformed).
+const COSMETIC_NO_EXPLANATION =
+  "We couldn't summarise this product's ingredients.";
+
+function fallbackExplanationForProductType(productType) {
+  if (productType === 'household') return HOUSEHOLD_EXPLANATION;
+  if (productType === 'cosmetic') return COSMETIC_NO_EXPLANATION;
+  return FOOD_NO_INGREDIENTS_EXPLANATION;
+}
+
 async function generateFoodExplanation({
   sugarDisplay,
   sodiumDisplay,
@@ -2224,12 +2234,17 @@ function hasUsableExplanation(data) {
   if (!data || data.explanation == null) return false;
   const text = String(data.explanation).trim();
   if (!text) return false;
-  // Real explanations are one or two sentences.
-  if (text.length > 400) return false;
+  // Cosmetic explanations are two to three sentences and can run long with
+  // several findings; 600 leaves headroom beyond the old 400 cap.
+  if (text.length > 600) return false;
   // Model returning a bullet list.
   if (/\n-\s/.test(text)) return false;
 
-  const lower = text.toLowerCase();
+  // Models often emit typographic apostrophes (U+2019 etc.); normalise before
+  // matching markers that use a straight apostrophe.
+  const lower = text
+    .toLowerCase()
+    .replace(/[\u2019\u02BC\u2018]/g, "'");
   const refusalMarkers = [
     "i can't",
     'i cannot',
@@ -2267,7 +2282,7 @@ function ensureExplanation(barcode, cached) {
       let explanation = await generateExplanationFromCached(cached);
       if (!hasUsableExplanation({ explanation })) {
         console.log(`[EXPLAIN UNUSABLE] barcode=${barcode} excerpt=${String(explanation || '').slice(0, 120)}`);
-        explanation = FOOD_NO_INGREDIENTS_EXPLANATION;
+        explanation = fallbackExplanationForProductType(cached && cached.productType);
       }
       try {
         await db.collection(CACHE_COLLECTION).doc(barcode).set({

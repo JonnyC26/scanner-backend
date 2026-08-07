@@ -2853,6 +2853,9 @@ module.exports = {
   hasCosmeticCategory,
   resolveProductType,
   FOOD_NO_INGREDIENTS_EXPLANATION,
+  COSMETIC_NO_EXPLANATION,
+  HOUSEHOLD_EXPLANATION,
+  fallbackExplanationForProductType,
   SCAN_LOGIC_VERSION: '${SCAN_LOGIC_VERSION}',
   CACHE_TTL_MS: ${CACHE_TTL_MS},
   buildFoodExplanationPromptSource: ${JSON.stringify(src.slice(foodPromptStart, foodPromptEnd))},
@@ -2995,18 +2998,53 @@ assert(g.hasUsableExplanation({
 assert(g.hasUsableExplanation({
   explanation: "I can't complete this request because there is nothing to analyze.",
 }) === false, "I can't refusal must be rejected");
+// Typographic apostrophes (U+2019) must normalise to straight before matching.
 assert(g.hasUsableExplanation({
-  explanation: 'x'.repeat(600),
-}) === false, '600-char string must be rejected');
+  explanation: "I can\u2019t complete this request because there is nothing to analyze.",
+}) === false, "curly I can't must be rejected");
+assert(g.hasUsableExplanation({
+  explanation: "I\u2019m unable to complete this task because the ingredient list provided is empty",
+}) === false, "curly I'm unable must be rejected");
+assert(g.hasUsableExplanation({
+  explanation: "I can\u02BCt complete this request.",
+}) === false, 'U+02BC apostrophe form must be rejected');
+assert(g.hasUsableExplanation({
+  explanation: 'x'.repeat(601),
+}) === false, '601-char string must be rejected');
+assert(g.hasUsableExplanation({
+  explanation: 'x'.repeat(500),
+}) === true, '500-char explanation must be within the 600 cap');
 assert(g.hasUsableExplanation({
   explanation: 'Here are the issues:\n- sugar is high\n- sodium is high',
 }) === false, 'bulleted list must be rejected');
 assert(g.hasUsableExplanation({
   explanation: "We've got high sugar at 12g per serving in this snack.",
 }) === true, 'normal one-sentence explanation must pass');
+// Legitimate multi-sentence cosmetic explanation with several findings (>400 chars).
+{
+  const cosmeticLong =
+    "We've flagged Methylchloroisothiazolinone and Methylisothiazolinone as potent sensitisers that are restricted in leave-on cosmetic products under current rules, and Fragrance as a declarable allergen mix that can trigger reactions in sensitive skin. " +
+    "Phenoxyethanol is a restricted preservative when used at higher levels in leave-on formulas. " +
+    "A few botanical extracts and plant oils were not covered by our hazard table, so this assessment is incomplete on those rows and should be read with that gap in mind.";
+  assert(cosmeticLong.length > 400 && cosmeticLong.length <= 600,
+    'fixture should sit between old and new caps, len=' + cosmeticLong.length);
+  assert(g.hasUsableExplanation({ explanation: cosmeticLong }) === true,
+    'multi-sentence cosmetic explanation must pass the 600 cap');
+}
 assert(g.hasUsableExplanation({ explanation: '' }) === false);
 assert(g.hasUsableExplanation({ explanation: null }) === false);
 assert(g.hasUsableExplanation({}) === false);
+
+// ensureExplanation fallback must be product-type aware (not food copy for cosmetics)
+assert(g.fallbackExplanationForProductType('food') === g.FOOD_NO_INGREDIENTS_EXPLANATION);
+assert(g.fallbackExplanationForProductType('cosmetic') === g.COSMETIC_NO_EXPLANATION);
+assert(g.fallbackExplanationForProductType('household') === g.HOUSEHOLD_EXPLANATION);
+assert(!/nutrition alone/i.test(g.COSMETIC_NO_EXPLANATION),
+  'cosmetic fallback must not mention nutrition');
+assert(/summarise this product's ingredients/i.test(g.COSMETIC_NO_EXPLANATION));
+assert(src.includes('fallbackExplanationForProductType(cached && cached.productType)') ||
+  src.includes('fallbackExplanationForProductType(cached.productType)'),
+  'ensureExplanation must pick fallback by productType');
 
 // 6 + 7. scanLogicVersion staleness
 function isCacheFresh(cached, nowMs) {
