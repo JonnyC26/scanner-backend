@@ -3867,6 +3867,66 @@ app.post('/report/image', async (req, res) => {
   return res.json({ ok: true });
 });
 
+// Permanently delete the authenticated user's account data: scan history,
+// Firestore user doc, Auth user. Product photos are kept; capturedBy is unlinked.
+app.post('/account/delete', async (req, res) => {
+  let uid;
+  try {
+    const token = parseBearerToken(req.headers['authorization'] || '');
+    if (!token) {
+      return res.status(401).json({ error: 'Sign in required' });
+    }
+    const decoded = await admin.auth().verifyIdToken(token);
+    if (!decoded || !decoded.uid) {
+      return res.status(401).json({ error: 'Sign in required' });
+    }
+    uid = decoded.uid;
+  } catch (authErr) {
+    console.log(`[ACCOUNT DELETE] auth failed: ${authErr.message}`);
+    return res.status(401).json({ error: 'Sign in required' });
+  }
+
+  try {
+    let scansDeleted = 0;
+    while (true) {
+      const snap = await db.collection('scans')
+        .where('userId', '==', uid)
+        .limit(500)
+        .get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+      scansDeleted += snap.size;
+    }
+
+    await db.collection('users').doc(uid).delete();
+
+    let imagesUnlinked = 0;
+    while (true) {
+      const snap = await db.collection(PRODUCT_IMAGES_COLLECTION)
+        .where('capturedBy', '==', uid)
+        .limit(500)
+        .get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.update(doc.ref, { capturedBy: null }));
+      await batch.commit();
+      imagesUnlinked += snap.size;
+    }
+
+    await admin.auth().deleteUser(uid);
+
+    console.log(
+      `[ACCOUNT DELETE] uid=${uid} scansDeleted=${scansDeleted} imagesUnlinked=${imagesUnlinked} userDocDeleted=true authDeleted=true`
+    );
+    return res.json({ ok: true, scansDeleted });
+  } catch (err) {
+    console.log(`[ACCOUNT DELETE] failed uid=${uid}: ${err.message}`);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/explain/:barcode', async (req, res) => {
   const started = Date.now();
   const { barcode } = req.params;
