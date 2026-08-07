@@ -3868,7 +3868,9 @@ app.post('/report/image', async (req, res) => {
 });
 
 // Permanently delete the authenticated user's account data: scan history,
-// Firestore user doc, Auth user. Product photos are kept; capturedBy is unlinked.
+// Firestore user doc, Auth user. Product photos are kept; capturedBy is
+// unlinked. Report identities are stripped (reportCount/suppressed unchanged);
+// imageReports and failedWrites keep their docs with uid fields nulled.
 app.post('/account/delete', async (req, res) => {
   let uid;
   try {
@@ -3915,12 +3917,64 @@ app.post('/account/delete', async (req, res) => {
       imagesUnlinked += snap.size;
     }
 
+    // Strip reporter identity only — leave reportCount and suppressed as-is.
+    let reportsUnlinked = 0;
+    while (true) {
+      const snap = await db.collection(PRODUCT_IMAGES_COLLECTION)
+        .where('reportedBy', 'array-contains', uid)
+        .limit(500)
+        .get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => {
+        batch.update(doc.ref, {
+          reportedBy: admin.firestore.FieldValue.arrayRemove(uid),
+        });
+      });
+      await batch.commit();
+      reportsUnlinked += snap.size;
+    }
+
+    // Keep imageReports audit docs; anonymize the reporter.
+    let imageReportsUnlinked = 0;
+    while (true) {
+      const snap = await db.collection(IMAGE_REPORTS_COLLECTION)
+        .where('reportedBy', '==', uid)
+        .limit(500)
+        .get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.update(doc.ref, { reportedBy: null }));
+      await batch.commit();
+      imageReportsUnlinked += snap.size;
+    }
+
+    // Keep failedWrites audit docs; anonymize the capturer.
+    let failedWritesUnlinked = 0;
+    while (true) {
+      const snap = await db.collection(FAILED_WRITES_COLLECTION)
+        .where('capturedBy', '==', uid)
+        .limit(500)
+        .get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.update(doc.ref, { capturedBy: null }));
+      await batch.commit();
+      failedWritesUnlinked += snap.size;
+    }
+
     await admin.auth().deleteUser(uid);
 
     console.log(
-      `[ACCOUNT DELETE] uid=${uid} scansDeleted=${scansDeleted} imagesUnlinked=${imagesUnlinked} userDocDeleted=true authDeleted=true`
+      `[ACCOUNT DELETE] uid=${uid} scansDeleted=${scansDeleted} imagesUnlinked=${imagesUnlinked} reportsUnlinked=${reportsUnlinked} imageReportsUnlinked=${imageReportsUnlinked} failedWritesUnlinked=${failedWritesUnlinked} userDocDeleted=true authDeleted=true`
     );
-    return res.json({ ok: true, scansDeleted });
+    return res.json({
+      ok: true,
+      scansDeleted,
+      reportsUnlinked,
+      imageReportsUnlinked,
+      failedWritesUnlinked,
+    });
   } catch (err) {
     console.log(`[ACCOUNT DELETE] failed uid=${uid}: ${err.message}`);
     return res.status(500).json({ error: err.message });
