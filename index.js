@@ -51,7 +51,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '1';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '2';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1419,6 +1419,38 @@ function productHasNutriments(product) {
   return !!(n && typeof n === 'object' && Object.keys(n).length > 0);
 }
 
+// Presence = key exists with a finite numeric value (0 counts). Missing key or
+// non-numeric value counts as absent. Used to refuse food scores when OFF has
+// a non-empty nutriments object that still lacks anything scoreable (Dawn Ultra
+// ships saturated-fat:0 + sugars:0 only — productHasNutriments is true).
+function hasNumericNutriment(nutriments, keys) {
+  if (!nutriments || typeof nutriments !== 'object') return false;
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(nutriments, key)) continue;
+    const v = nutriments[key];
+    if (typeof v === 'number' && Number.isFinite(v)) return true;
+  }
+  return false;
+}
+
+const FOOD_ENERGY_NUTRIMENT_KEYS = [
+  'energy-kcal_100g', 'energy-kcal',
+  'energy_100g', 'energy',
+  'energy-kj_100g', 'energy-kj',
+];
+const FOOD_PROTEIN_NUTRIMENT_KEYS = ['proteins_100g', 'proteins'];
+const FOOD_SODIUM_SALT_NUTRIMENT_KEYS = [
+  'sodium_100g', 'sodium',
+  'salt_100g', 'salt',
+];
+
+// True when at least one of energy / proteins / sodium|salt is present.
+function hasScorableFoodNutriments(nutriments) {
+  return hasNumericNutriment(nutriments, FOOD_ENERGY_NUTRIMENT_KEYS)
+    || hasNumericNutriment(nutriments, FOOD_PROTEIN_NUTRIMENT_KEYS)
+    || hasNumericNutriment(nutriments, FOOD_SODIUM_SALT_NUTRIMENT_KEYS);
+}
+
 // Explicit beauty/hygiene category fragments. Matched as whole hyphen-delimited
 // segments of categories_tags — not fuzzy substrings (so "soap" ≠ "soapberry").
 const COSMETIC_CATEGORY_FRAGMENTS = [
@@ -2121,6 +2153,10 @@ function formatAdditivesCountDisplay(additivesCount, ingredientsText) {
 const FOOD_NO_INGREDIENTS_EXPLANATION =
   "We couldn't check the ingredients for this product because none are listed. The score is based on nutrition alone.";
 
+// Fixed copy when food lacks energy/proteins/sodium|salt — never call Haiku.
+const FOOD_NO_NUTRITION_EXPLANATION =
+  "We couldn't assess this product. It has no nutrition information, and it doesn't look like a food we can score.";
+
 // Fixed copy when a cosmetic explanation is unusable (refusal / malformed).
 const COSMETIC_NO_EXPLANATION =
   "We couldn't summarise this product's ingredients.";
@@ -2191,6 +2227,11 @@ async function generateExplanationFromCached(cached) {
       ingredientFindings: findings,
       scoreBreakdown: breakdown,
     }, cached.ingredients || '');
+  }
+
+  // Food — null score from missing energy/proteins/sodium|salt: fixed copy, never Haiku.
+  if (cached.score == null && cached.scoreLabel === 'Not enough data') {
+    return FOOD_NO_NUTRITION_EXPLANATION;
   }
 
   // Food — missing ingredients get the fixed sentence, never Haiku.
@@ -2414,6 +2455,61 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   const productName = product.product_name || 'Unknown Product';
   const imageUrl = product.image_front_url || product.image_url || '';
   const ingredients = product.ingredients_text || '';
+
+  // Refuse a food score when energy, proteins, and sodium/salt are all absent.
+  // A non-empty nutriments object is not enough (Dawn Ultra: saturated-fat 0 +
+  // sugars 0 only). Fixed copy — never call Haiku.
+  if (!hasScorableFoodNutriments(product && product.nutriments)) {
+    const organicStatus = resolveOrganicStatus(product.labels_tags);
+    console.log(`[FOOD NO NUTRITION] barcode=${barcode} — skipping food score`);
+    return {
+      productType: 'food',
+      productName,
+      additiveNames: '',
+      additiveList: JSON.stringify([]),
+      ingredients,
+      nutriScore: product.nutriscore_grade || null,
+      novaGroup: product.nova_group || null,
+      additivesCount: formatAdditivesCountDisplay(
+        (product.additives_tags || []).length,
+        ingredients
+      ),
+      isOrganic: formatOrganicDisplay(organicStatus),
+      protein: 'N/A',
+      sugar: 'N/A',
+      sodium: 'N/A',
+      protein100g: 'N/A',
+      sugar100g: 'N/A',
+      sodium100g: 'N/A',
+      servingQuantity: null,
+      servingKnown: false,
+      scoreBasis: 'per100g',
+      sugarTier: null,
+      sodiumTier: null,
+      proteinTier: null,
+      score: null,
+      scoreBreakdown: JSON.stringify({
+        nutriScoreGrade: 'unknown',
+        nutriPts: null, nutriMax: 60,
+        additivesCount: 0,
+        additiveRisk: 'none',
+        additivePts: null, additiveMax: 30,
+        isOrganic: false,
+        organicPts: null, organicMax: 10,
+      }),
+      alternatives: JSON.stringify([]),
+      explanation: FOOD_NO_NUTRITION_EXPLANATION,
+      scoreColor: '#9E9E9E',
+      imageUrl,
+      scoreLabel: 'Not enough data',
+      coverageMatched: null,
+      coverageTotal: null,
+      ingredientFindings: null,
+      noIngredientData: false,
+      scanLogicVersion: SCAN_LOGIC_VERSION,
+    };
+  }
+
   const nutriScore = product.nutriscore_grade || 'c';
   const novaGroup = product.nova_group || 3;
   const additiveTags = product.additives_tags || [];

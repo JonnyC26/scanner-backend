@@ -2804,6 +2804,225 @@ def test_cosmetic_explanation_uses_we_voice():
     print("cosmetic explanation we-voice ok")
 
 
+def test_phase0_no_nutrition():
+    """Food path: refuse score when energy/proteins/sodium|salt are all absent."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+const SCAN_LOGIC_VERSION = logicMatch[1];
+assert(SCAN_LOGIC_VERSION === '2', 'SCAN_LOGIC_VERSION must be 2, got ' + SCAN_LOGIC_VERSION);
+
+const nutStart = src.indexOf('function productHasNutriments');
+const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
+if (nutStart < 0 || nutEnd < 0) throw new Error('could not locate nutriment helpers');
+
+const scoreStart = src.indexOf('function calculateScore');
+const scoreEnd = src.indexOf('// OFF labels_tags is crowd-entered');
+if (scoreStart < 0 || scoreEnd < 0) throw new Error('could not locate calculateScore block');
+
+const fmtStart = src.indexOf('function parseServingQuantity');
+const fmtEnd = src.indexOf('const additiveMap');
+if (fmtStart < 0 || fmtEnd < 0) throw new Error('could not locate serving/format helpers');
+
+const addDispStart = src.indexOf('function formatAdditivesCountDisplay');
+const foodExplainStart = src.indexOf('async function generateFoodExplanation');
+if (addDispStart < 0 || foodExplainStart < 0) {
+  throw new Error('could not locate food explanation constants');
+}
+
+const foodFnStart = src.indexOf('async function scanAndCacheFood');
+const foodFnEnd = src.indexOf('// Photo-rescued cache docs have no upstream');
+if (foodFnStart < 0 || foodFnEnd < 0) throw new Error('could not locate scanAndCacheFood');
+
+const cosStart = src.indexOf('const cosmeticTable = JSON.parse');
+const cosEnd = src.indexOf('// Firestore docs are size-capped');
+if (cosStart < 0 || cosEnd < 0) throw new Error('could not locate cosmetic block');
+
+const orgStart = src.indexOf('function resolveOrganicStatus');
+const orgEnd = src.indexOf('function parseServingQuantity');
+if (orgStart < 0 || orgEnd < 0) throw new Error('could not locate organic helpers');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = process.cwd();
+function recordRawObservation() {}
+async function getCategoryAlternatives() { return []; }
+async function generateFoodExplanation() {
+  throw new Error('Haiku must not be called');
+}
+const additiveMap = {};
+const additiveDetails = {};
+const SCAN_LOGIC_VERSION = '${SCAN_LOGIC_VERSION}';
+${src.slice(cosStart, cosEnd).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(nutStart, nutEnd)}
+${src.slice(scoreStart, scoreEnd)}
+${src.slice(orgStart, orgEnd)}
+${src.slice(fmtStart, fmtEnd)}
+${src.slice(addDispStart, foodExplainStart)}
+${src.slice(foodFnStart, foodFnEnd)}
+module.exports = {
+  hasNumericNutriment,
+  hasScorableFoodNutriments,
+  productHasNutriments,
+  scanAndCacheFood,
+  scoreCosmeticProduct,
+  FOOD_NO_NUTRITION_EXPLANATION,
+  SCAN_LOGIC_VERSION,
+};
+`;
+fs.writeFileSync('/tmp/no_nutrition_helpers.js', block);
+delete require.cache['/tmp/no_nutrition_helpers.js'];
+const g = require('/tmp/no_nutrition_helpers.js');
+
+(async () => {
+assert(g.SCAN_LOGIC_VERSION === '2', 'exported SCAN_LOGIC_VERSION must be 2');
+assert(/nutrition information/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
+  'fixed explanation must mention nutrition information');
+assert(/doesn't look like a food we can score/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
+  'fixed explanation must mention not looking like a food we can score');
+
+// Helper: 0 is present; missing / non-numeric is absent.
+assert(g.hasNumericNutriment({ proteins_100g: 0 }, ['proteins_100g']) === true,
+  '0 must count as present');
+assert(g.hasNumericNutriment({ proteins_100g: '0' }, ['proteins_100g']) === false,
+  'string must count as missing');
+assert(g.hasNumericNutriment({}, ['proteins_100g']) === false, 'missing key');
+assert(g.hasScorableFoodNutriments({
+  'saturated-fat': 0,
+  sugars: 0,
+}) === false, 'Dawn saturated-fat/sugars only must not be scorable');
+assert(g.hasScorableFoodNutriments({
+  'energy-kcal_100g': 50,
+}) === true, 'energy alone is scorable');
+assert(g.hasScorableFoodNutriments({
+  proteins_100g: 0,
+}) === true, 'proteins 0 alone is scorable');
+assert(g.hasScorableFoodNutriments({
+  salt_100g: 0,
+}) === true, 'salt 0 alone is scorable');
+assert(g.hasScorableFoodNutriments({
+  sodium_100g: 0.1,
+}) === true, 'sodium alone is scorable');
+
+// productHasNutriments still true for Dawn shape (non-empty object).
+assert(g.productHasNutriments({
+  nutriments: { 'saturated-fat': 0, sugars: 0 },
+}) === true, 'Dawn shape still passes productHasNutriments');
+
+// 1. Normal food with energy + protein + sodium → numeric score
+{
+  const result = await g.scanAndCacheFood('111', {
+    product_name: 'Yogurt',
+    ingredients_text: 'Milk, live cultures',
+    nutriscore_grade: 'b',
+    nova_group: 3,
+    additives_tags: [],
+    labels_tags: [],
+    nutriments: {
+      'energy-kcal_100g': 80,
+      proteins_100g: 4,
+      sodium_100g: 0.05,
+      sugars_100g: 4,
+    },
+  }, { skipExplanation: true });
+  assert(result.productType === 'food', 'normal food type');
+  assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
+  assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
+  assert(result.scanLogicVersion === '2', 'normal food stamps logic version 2');
+}
+
+// 2. Food with only energy still scores
+{
+  const result = await g.scanAndCacheFood('222', {
+    product_name: 'Mystery Calories',
+    ingredients_text: 'Wheat flour',
+    nutriscore_grade: 'c',
+    additives_tags: [],
+    nutriments: { 'energy-kcal_100g': 200 },
+  }, { skipExplanation: true });
+  assert(typeof result.score === 'number', 'energy-only food must score, got ' + result.score);
+  assert(result.score !== null, 'energy-only score not null');
+  assert(result.scoreLabel !== 'Not enough data', 'energy-only must not be Not enough data');
+}
+
+// 3. Dawn Ultra nutriment shape → no score, fixed explanation, no Haiku
+{
+  const dawn = {
+    product_name: 'Dawn ultra',
+    ingredients_text: 'alcohol denat., sodium lauryl sulfate, water',
+    nutriscore_grade: 'unknown',
+    nova_group: 4,
+    additives_tags: ['en:e487'],
+    categories_tags: [],
+    nutriments: {
+      'saturated-fat': 0,
+      'saturated-fat_100g': 0,
+      sugars: 0,
+      sugars_100g: 0,
+      'nova-group': 4,
+      'nova-group_100g': 4,
+    },
+  };
+  // skipExplanation false — must still not call Haiku (stub throws)
+  const result = await g.scanAndCacheFood('030772011584', dawn, { skipExplanation: false });
+  assert(result.score === null, 'Dawn score must be null, got ' + result.score);
+  assert(result.scoreLabel === 'Not enough data', 'Dawn scoreLabel');
+  assert(result.scoreColor === '#9E9E9E', 'Dawn grey scoreColor');
+  assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
+  assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
+  assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
+  assert(result.scanLogicVersion === '2', 'Dawn stamps logic version 2');
+}
+
+// Source: gate lives in scanAndCacheFood; Haiku skipped on this path
+assert(src.includes('hasScorableFoodNutriments(product && product.nutriments)'),
+  'scanAndCacheFood must gate on hasScorableFoodNutriments');
+assert(src.includes('FOOD_NO_NUTRITION_EXPLANATION'),
+  'index.js must define FOOD_NO_NUTRITION_EXPLANATION');
+assert(src.includes('[FOOD NO NUTRITION]'),
+  'scanAndCacheFood must log FOOD NO NUTRITION');
+
+// 4. Cosmetic is unaffected
+{
+  const scored = g.scoreCosmeticProduct({
+    ingredients_text: 'Aqua, Glycerin, Phenoxyethanol, Tocopherol',
+  });
+  assert(typeof scored.score === 'number' && scored.score !== null,
+    'cosmetic must still score, got ' + scored.score);
+  assert(scored.scoreLabel !== undefined, 'cosmetic has scoreLabel');
+  assert(scored.coverageTotal > 0, 'cosmetic has coverage');
+}
+
+console.log('phase0 no nutrition ok');
+})().catch((err) => {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"phase0 no-nutrition assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def test_phase0_batch_c():
     """Batch C: usable ingredient text, refusal filter, food no-LLM, cache logic version."""
     script = r"""
@@ -3131,6 +3350,7 @@ def main() -> int:
         test_household_product_classification,
         test_health_endpoint,
         test_cosmetic_explanation_uses_we_voice,
+        test_phase0_no_nutrition,
         test_phase0_batch_c,
     ]
     failed = 0
