@@ -49,6 +49,9 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 // Cached entries older than this are treated as stale and get re-scanned,
 // so a product's data doesn't go permanently out of date if OFF updates it.
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+// Any change to classification, food scoring, or explanation copy requires a
+// SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
+const SCAN_LOGIC_VERSION = '1';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -683,7 +686,7 @@ function isUnparseableIngredientName(name) {
 // are kept in ingredientList for display but excluded from coverage, scoring,
 // and the unmatchedInci tally.
 //
-// Prefer ingredients_text whenever it is present and non-empty. OFF's structured
+// Prefer ingredients_text whenever it is present and usable. OFF's structured
 // ingredients array is built by a food taxonomy and often splits botanical
 // binomials ("cocos nucifera" / "oil"); the free-text path runs through
 // splitCosmeticIngredientText which keeps those intact.
@@ -694,6 +697,16 @@ function isUnparseableIngredientName(name) {
 // free-text "May Contain (+/-):" marker, so marker-based splitting does not apply.
 //
 // Also returns { items, drugFactsMarker } so callers can log truncation.
+
+// OFF/OBF often store ingredients_text as "." or other punctuation-only junk.
+// Require at least 3 letters so those do not count as a real ingredient list.
+function hasUsableIngredientText(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  const letters = (t.match(/[A-Za-z\u00C0-\u024F]/g) || []).length;
+  return letters >= 3;
+}
+
 function parseCosmeticIngredientList(product) {
   const parsed = [];
 
@@ -709,7 +722,7 @@ function parseCosmeticIngredientList(product) {
   };
 
   // Prefer free-text when usable — structured array is a fallback only.
-  const hasIngredientsText = !!(product.ingredients_text && String(product.ingredients_text).trim());
+  const hasIngredientsText = hasUsableIngredientText(product.ingredients_text);
   if (hasIngredientsText) {
     // Prefer the Ingredients:/INCI: section when warning copy precedes it, then
     // drop Drug Facts / warning panels that follow the list.
@@ -911,6 +924,7 @@ function buildHouseholdScanResponse({
     ingredientFindings: JSON.stringify([]),
     ingredientList: JSON.stringify([]),
     tableVersion: COSMETIC_TABLE_VERSION,
+    scanLogicVersion: SCAN_LOGIC_VERSION,
     ...extras,
   };
 }
@@ -1397,7 +1411,7 @@ async function fetchProductFromFacts(baseUrl, barcode) {
 function productHasIngredients(product) {
   if (!product) return false;
   if (Array.isArray(product.ingredients) && product.ingredients.length > 0) return true;
-  return !!(product.ingredients_text && product.ingredients_text.trim());
+  return hasUsableIngredientText(product.ingredients_text);
 }
 
 function productHasNutriments(product) {
@@ -2072,7 +2086,8 @@ function buildFoodExplanationPrompt({
         ? 'The nutritional grade behind most of this score is middling. Do not claim the product is highly healthy overall; balance any positives with that context. Never say "Nutri-Score" or the letter grade.'
         : 'The nutritional grade behind most of this score is relatively strong. You may mention a genuine benefit when supported by the data. Never say "Nutri-Score" or the letter grade.';
 
-  return `Product data: sugar ${sugar} per serving (${sugarTier} tier), sodium ${sodium} per serving (${sodiumTier} tier), protein ${protein} per serving, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}.
+  return `Always write in the first-person plural ("we" / "we've" / "our"). Never use first-person singular ("I" / "I've" / "I'm" / "my").
+Product data: sugar ${sugar} per serving (${sugarTier} tier), sodium ${sodium} per serving (${sodiumTier} tier), protein ${protein} per serving, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}.
 Score context: ${nutriGuidance}
 In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The explanation must not contradict the score shown beside it. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration." PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters. Do not restate an overall product score or Excellent/Good/Poor/Bad tier.`;
 }
@@ -2097,9 +2112,23 @@ async function requestFoodExplanation(prompt) {
 }
 
 function formatAdditivesCountDisplay(additivesCount, ingredientsText) {
-  // Empty ingredients text means we cannot know — do not print "None".
-  if (!String(ingredientsText || '').trim()) return 'Not known';
+  // Empty / punctuation-only ingredients text means we cannot know — do not print "None".
+  if (!hasUsableIngredientText(ingredientsText)) return 'Not known';
   return additivesCount === 0 ? 'None' : additivesCount + ' additives';
+}
+
+// Fixed copy when food has no usable ingredient list — never call Haiku for this.
+const FOOD_NO_INGREDIENTS_EXPLANATION =
+  "We couldn't check the ingredients for this product because none are listed. The score is based on nutrition alone.";
+
+// Fixed copy when a cosmetic explanation is unusable (refusal / malformed).
+const COSMETIC_NO_EXPLANATION =
+  "We couldn't summarise this product's ingredients.";
+
+function fallbackExplanationForProductType(productType) {
+  if (productType === 'household') return HOUSEHOLD_EXPLANATION;
+  if (productType === 'cosmetic') return COSMETIC_NO_EXPLANATION;
+  return FOOD_NO_INGREDIENTS_EXPLANATION;
 }
 
 async function generateFoodExplanation({
@@ -2114,7 +2143,7 @@ async function generateFoodExplanation({
   ingredients,
   nutriScoreGrade,
 }) {
-  const hasIngredients = !!String(ingredients || '').trim();
+  const hasIngredients = hasUsableIngredientText(ingredients);
   const additivesPhrase = !hasIngredients
     ? 'additives not known'
     : `${additivesCount} additives`;
@@ -2130,7 +2159,12 @@ async function generateFoodExplanation({
     ingredients,
     nutriScoreGrade,
   });
-  return requestFoodExplanation(prompt);
+  const explanation = await requestFoodExplanation(prompt);
+  if (!hasUsableExplanation({ explanation })) {
+    console.log(`[FOOD EXPLAIN UNUSABLE] excerpt=${String(explanation || '').slice(0, 120)}`);
+    return FOOD_NO_INGREDIENTS_EXPLANATION;
+  }
+  return explanation;
 }
 
 // Rebuild a Haiku explanation from a productCache document (food or cosmetic).
@@ -2159,6 +2193,11 @@ async function generateExplanationFromCached(cached) {
     }, cached.ingredients || '');
   }
 
+  // Food — missing ingredients get the fixed sentence, never Haiku.
+  if (!hasUsableIngredientText(cached.ingredients)) {
+    return FOOD_NO_INGREDIENTS_EXPLANATION;
+  }
+
   // Food — use the cached display strings (already formatted for the app).
   const additivesPhrase = cached.additivesCount === 'None'
     ? '0 additives'
@@ -2183,11 +2222,44 @@ async function generateExplanationFromCached(cached) {
     ingredients: cached.ingredients || '',
     nutriScoreGrade,
   });
-  return requestFoodExplanation(prompt);
+  const explanation = await requestFoodExplanation(prompt);
+  if (!hasUsableExplanation({ explanation })) {
+    console.log(`[FOOD EXPLAIN UNUSABLE] excerpt=${String(explanation || '').slice(0, 120)}`);
+    return FOOD_NO_INGREDIENTS_EXPLANATION;
+  }
+  return explanation;
 }
 
 function hasUsableExplanation(data) {
-  return !!(data && data.explanation && String(data.explanation).trim());
+  if (!data || data.explanation == null) return false;
+  const text = String(data.explanation).trim();
+  if (!text) return false;
+  // Cosmetic explanations are two to three sentences and can run long with
+  // several findings; 600 leaves headroom beyond the old 400 cap.
+  if (text.length > 600) return false;
+  // Model returning a bullet list.
+  if (/\n-\s/.test(text)) return false;
+
+  // Models often emit typographic apostrophes (U+2019 etc.); normalise before
+  // matching markers that use a straight apostrophe.
+  const lower = text
+    .toLowerCase()
+    .replace(/[\u2019\u02BC\u2018]/g, "'");
+  const refusalMarkers = [
+    "i can't",
+    'i cannot',
+    "i'm unable",
+    'i am unable',
+    'i apologize',
+    'i appreciate the detailed instructions',
+    'could you provide',
+    'please provide',
+    'the ingredient list provided',
+  ];
+  if (refusalMarkers.some(m => lower.includes(m))) return false;
+  // "as requested" together with a question mark.
+  if (lower.includes('as requested') && text.includes('?')) return false;
+  return true;
 }
 
 // Dedupe concurrent Haiku work for the same barcode (deferred fill + /explain).
@@ -2207,7 +2279,11 @@ function ensureExplanation(barcode, cached) {
         }
       } catch (_) { /* fall through to generate */ }
 
-      const explanation = await generateExplanationFromCached(cached);
+      let explanation = await generateExplanationFromCached(cached);
+      if (!hasUsableExplanation({ explanation })) {
+        console.log(`[EXPLAIN UNUSABLE] barcode=${barcode} excerpt=${String(explanation || '').slice(0, 120)}`);
+        explanation = fallbackExplanationForProductType(cached && cached.productType);
+      }
       try {
         await db.collection(CACHE_COLLECTION).doc(barcode).set({
           explanation,
@@ -2317,6 +2393,7 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
     ingredientFindings: JSON.stringify(scored.ingredientFindings),
     ingredientList: JSON.stringify(scored.ingredientList || []),
     tableVersion: COSMETIC_TABLE_VERSION,
+    scanLogicVersion: SCAN_LOGIC_VERSION,
   };
   if (skipExplanation && !scored.noIngredientData) {
     responseData.explanationPending = true;
@@ -2413,7 +2490,11 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   const fmtSodium100g = formatSodiumMg(sodiumRaw);
 
   let explanation = null;
-  if (!skipExplanation) {
+  const noIngredientData = !hasUsableIngredientText(ingredients);
+  if (noIngredientData) {
+    // Fixed copy — do not call Haiku with an empty/junk ingredient list.
+    explanation = FOOD_NO_INGREDIENTS_EXPLANATION;
+  } else if (!skipExplanation) {
     explanation = await generateFoodExplanation({
       sugarDisplay,
       sodiumDisplay,
@@ -2463,8 +2544,10 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     coverageMatched: null,
     coverageTotal: null,
     ingredientFindings: null,
+    noIngredientData,
+    scanLogicVersion: SCAN_LOGIC_VERSION,
   };
-  if (skipExplanation) {
+  if (skipExplanation && !noIngredientData) {
     responseData.explanationPending = true;
   }
   return responseData;
@@ -2523,6 +2606,7 @@ function rescorePhotoCachedDocument(cached) {
     ingredientFindings: JSON.stringify(scored.ingredientFindings),
     ingredientList: JSON.stringify(scored.ingredientList || []),
     tableVersion: COSMETIC_TABLE_VERSION,
+    scanLogicVersion: SCAN_LOGIC_VERSION,
     // photoCapturedAt / photoParsedCount / photoCapturedBy are provenance of
     // the human transcription — never refresh them on local re-score.
   };
@@ -2620,10 +2704,13 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
         const cached = cacheDoc.data();
         const age = Date.now() - (cached.cachedAt || 0);
         const cachedType = cached.productType || 'food';
+        // Documents cached before scanLogicVersion existed (or on an older
+        // logic version) must re-scan so classification/scoring fixes apply.
+        const logicStale = cached.scanLogicVersion !== SCAN_LOGIC_VERSION;
         // Cosmetic scores must be recomputed when the hazard table changes.
         const tableStale = cachedType === 'cosmetic' &&
           cached.tableVersion !== COSMETIC_TABLE_VERSION;
-        if (age < CACHE_TTL_MS && !tableStale) {
+        if (age < CACHE_TTL_MS && !tableStale && !logicStale) {
           console.log(`[CACHE HIT] barcode=${barcode} type=${cachedType} age=${Math.round(age / 3600000)}h`);
           const { cachedAt, ...responseData } = cached;
           if (!responseData.productType) responseData.productType = 'food';
@@ -2644,7 +2731,9 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
 
         // Keep the stale doc for photo local re-score and stale-beats-nothing.
         staleCached = cached;
-        if (tableStale) {
+        if (logicStale) {
+          console.log(`[CACHE STALE LOGIC] barcode=${barcode} cached=${cached.scanLogicVersion} current=${SCAN_LOGIC_VERSION} — re-scanning`);
+        } else if (tableStale) {
           console.log(`[CACHE STALE TABLE] barcode=${barcode} cached=${cached.tableVersion} current=${COSMETIC_TABLE_VERSION} — re-scanning`);
         } else {
           console.log(`[CACHE STALE] barcode=${barcode} age=${Math.round(age / 3600000)}h — re-scanning`);
@@ -3409,6 +3498,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
           ingredientFindings: JSON.stringify(scored.ingredientFindings),
           ingredientList: JSON.stringify(scored.ingredientList || []),
           tableVersion: COSMETIC_TABLE_VERSION,
+          scanLogicVersion: SCAN_LOGIC_VERSION,
           source: 'photo',
           photoParsedCount,
           photoCapturedAt,

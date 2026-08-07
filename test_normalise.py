@@ -666,6 +666,7 @@ const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
+const SCAN_LOGIC_VERSION = '1';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(helperStart, helperEnd)}
 module.exports = {
@@ -1261,11 +1262,12 @@ const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
+const SCAN_LOGIC_VERSION = '1';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 function productHasIngredients(product) {
   if (!product) return false;
   if (Array.isArray(product.ingredients) && product.ingredients.length > 0) return true;
-  return !!(product.ingredients_text && product.ingredients_text.trim());
+  return hasUsableIngredientText(product.ingredients_text);
 }
 ${src.slice(helperStart, helperEnd)}
 module.exports = {
@@ -2463,6 +2465,7 @@ const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
+const SCAN_LOGIC_VERSION = '1';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 ${src.slice(addStart, addEnd)}
@@ -2614,6 +2617,8 @@ assert(g.formatAdditivesCountDisplay(2, 'Water, Sugar') === '2 additives',
   'non-zero additives display');
 assert(g.formatAdditivesCountDisplay(0, null) === 'Not known',
   'null ingredients must show Not known');
+assert(g.formatAdditivesCountDisplay(0, '.') === 'Not known',
+  'punctuation-only ingredients must show Not known');
 
 console.log('household product classification ok');
 """
@@ -2799,6 +2804,309 @@ def test_cosmetic_explanation_uses_we_voice():
     print("cosmetic explanation we-voice ok")
 
 
+def test_phase0_batch_c():
+    """Batch C: usable ingredient text, refusal filter, food no-LLM, cache logic version."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
+
+const prodStart = src.indexOf('async function fetchProductFromFacts');
+const resolveEnd = src.indexOf('function calculateScore');
+if (prodStart < 0 || resolveEnd < 0) throw new Error('could not locate product/resolve block');
+
+const explainStart = src.indexOf('function hasUsableExplanation');
+const explainEnd = src.indexOf('const explanationInFlight');
+if (explainStart < 0 || explainEnd < 0) throw new Error('could not locate hasUsableExplanation');
+
+const foodPromptStart = src.indexOf('function buildFoodExplanationPrompt');
+const foodPromptEnd = src.indexOf('async function requestFoodExplanation');
+if (foodPromptStart < 0 || foodPromptEnd < 0) throw new Error('could not locate food prompt');
+
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+const SCAN_LOGIC_VERSION = logicMatch[1];
+const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+const foodNoStart = src.indexOf('const FOOD_NO_INGREDIENTS_EXPLANATION');
+const foodNoEnd = src.indexOf('async function generateFoodExplanation');
+if (foodNoStart < 0 || foodNoEnd < 0) throw new Error('could not locate FOOD_NO_INGREDIENTS_EXPLANATION');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = process.cwd();
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(prodStart, resolveEnd)}
+${src.slice(explainStart, explainEnd)}
+${src.slice(foodNoStart, foodNoEnd)}
+module.exports = {
+  hasUsableIngredientText,
+  productHasIngredients,
+  parseCosmeticIngredientList,
+  scoreCosmeticProduct,
+  hasUsableExplanation,
+  hasCosmeticCategory,
+  resolveProductType,
+  FOOD_NO_INGREDIENTS_EXPLANATION,
+  COSMETIC_NO_EXPLANATION,
+  HOUSEHOLD_EXPLANATION,
+  fallbackExplanationForProductType,
+  SCAN_LOGIC_VERSION: '${SCAN_LOGIC_VERSION}',
+  CACHE_TTL_MS: ${CACHE_TTL_MS},
+  buildFoodExplanationPromptSource: ${JSON.stringify(src.slice(foodPromptStart, foodPromptEnd))},
+};
+`;
+fs.writeFileSync('/tmp/batch_c_helpers.js', block);
+delete require.cache['/tmp/batch_c_helpers.js'];
+const g = require('/tmp/batch_c_helpers.js');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+(async () => {
+// 1. hasUsableIngredientText
+assert(g.hasUsableIngredientText('.') === false, '"." must be unusable');
+assert(g.hasUsableIngredientText('...') === false, '"..." must be unusable');
+assert(g.hasUsableIngredientText(' ') === false, 'whitespace must be unusable');
+assert(g.hasUsableIngredientText('a') === false, '"a" must be unusable');
+assert(g.hasUsableIngredientText('ab') === false, '"ab" must be unusable');
+assert(g.hasUsableIngredientText('Aqua, Glycerin') === true, 'real list must be usable');
+assert(g.productHasIngredients({ ingredients_text: '.' }) === false,
+  'productHasIngredients must reject "."');
+
+// 2. Cosmetic with "." text falls through to structured array
+{
+  const parsed = g.parseCosmeticIngredientList({
+    ingredients_text: '.',
+    ingredients: [
+      { text: 'Aqua' },
+      { text: 'Glycerin' },
+      { text: 'Parfum' },
+    ],
+  });
+  const names = parsed.items.map(i => i.name);
+  assert(names.includes('Aqua') && names.includes('Glycerin') && names.includes('Parfum'),
+    'must parse from array when text is ".": ' + JSON.stringify(names));
+  assert(names.length === 3, 'expected 3 rows, got ' + names.length);
+  const scored = g.scoreCosmeticProduct({
+    ingredients_text: '.',
+    ingredients: [
+      { text: 'Aqua' },
+      { text: 'Glycerin' },
+      { text: 'Parfum' },
+    ],
+  });
+  assert(scored.coverageTotal === 3, 'coverageTotal from array, got ' + scored.coverageTotal);
+  assert(scored.coverageTotal > 0, 'must not silent zero-ingredient parse');
+}
+
+// 3. OFF "." + cosmetic category → cosmetic via OBF
+{
+  const offProduct = {
+    product_name: 'Dove Whole Body',
+    ingredients_text: '.',
+    categories_tags: ['en:deodorants', 'en:hygiene'],
+    nutriments: {},
+  };
+  const obfProduct = {
+    product_name: 'Dove Whole Body Deodorant',
+    ingredients_text: 'Aqua, Glycerin, Parfum',
+    categories_tags: ['en:deodorants'],
+  };
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('openfoodfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: offProduct }) };
+    }
+    if (u.includes('openbeautyfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: obfProduct }) };
+    }
+    return { ok: false };
+  };
+  const resolved = await g.resolveProductType('0000000000000');
+  assert(resolved.productType === 'cosmetic', 'must resolve cosmetic, got ' + resolved.productType);
+  assert(resolved.product === obfProduct, 'must use OBF product');
+}
+
+// Also: OFF "." without category → fall through to OBF
+{
+  const offProduct = {
+    product_name: 'Mystery Deodorant',
+    ingredients_text: '.',
+    categories_tags: ['en:snacks'],
+    nutriments: { 'energy-kcal_100g': 10 },
+  };
+  const obfProduct = {
+    product_name: 'Mystery Deodorant OBF',
+    ingredients_text: 'Aqua, Alcohol Denat., Parfum',
+  };
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('openfoodfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: offProduct }) };
+    }
+    if (u.includes('openbeautyfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: obfProduct }) };
+    }
+    return { ok: false };
+  };
+  const resolved = await g.resolveProductType('1111111111111');
+  assert(resolved.productType === 'cosmetic',
+    'OFF "." must fall through to OBF, got ' + resolved.productType);
+  assert(resolved.product.ingredients_text.includes('Aqua'), 'must use OBF ingredients');
+}
+
+// 4. Food path: no usable ingredients → fixed sentence, no LLM, noIngredientData
+{
+  let llmCalls = 0;
+  global.fetch = async () => {
+    llmCalls += 1;
+    throw new Error('LLM must not be called');
+  };
+
+  const ingredients = '.';
+  const noIngredientData = !g.hasUsableIngredientText(ingredients);
+  assert(noIngredientData === true);
+  const explanation = noIngredientData
+    ? g.FOOD_NO_INGREDIENTS_EXPLANATION
+    : 'should-not-happen';
+  assert(explanation === g.FOOD_NO_INGREDIENTS_EXPLANATION);
+  assert(/couldn't check the ingredients/i.test(explanation));
+  assert(llmCalls === 0, 'no LLM call for missing ingredients');
+
+  const foodFnStart = src.indexOf('async function scanAndCacheFood');
+  const foodFnEnd = src.indexOf('// Photo-rescued cache docs have no upstream');
+  const foodFn = src.slice(foodFnStart, foodFnEnd);
+  assert(foodFn.includes('hasUsableIngredientText(ingredients)'),
+    'scanAndCacheFood must guard on hasUsableIngredientText');
+  assert(foodFn.includes('noIngredientData'),
+    'scanAndCacheFood must set noIngredientData');
+  assert(foodFn.includes('FOOD_NO_INGREDIENTS_EXPLANATION'),
+    'scanAndCacheFood must use fixed sentence');
+}
+
+// 5. hasUsableExplanation rejects refusals / long / bullets; accepts normal
+assert(g.hasUsableExplanation({
+  explanation: "I'm unable to complete this task because the ingredient list provided is empty",
+}) === false, 'unable refusal must be rejected');
+assert(g.hasUsableExplanation({
+  explanation: "I can't complete this request because there is nothing to analyze.",
+}) === false, "I can't refusal must be rejected");
+// Typographic apostrophes (U+2019) must normalise to straight before matching.
+assert(g.hasUsableExplanation({
+  explanation: "I can\u2019t complete this request because there is nothing to analyze.",
+}) === false, "curly I can't must be rejected");
+assert(g.hasUsableExplanation({
+  explanation: "I\u2019m unable to complete this task because the ingredient list provided is empty",
+}) === false, "curly I'm unable must be rejected");
+assert(g.hasUsableExplanation({
+  explanation: "I can\u02BCt complete this request.",
+}) === false, 'U+02BC apostrophe form must be rejected');
+assert(g.hasUsableExplanation({
+  explanation: 'x'.repeat(601),
+}) === false, '601-char string must be rejected');
+assert(g.hasUsableExplanation({
+  explanation: 'x'.repeat(500),
+}) === true, '500-char explanation must be within the 600 cap');
+assert(g.hasUsableExplanation({
+  explanation: 'Here are the issues:\n- sugar is high\n- sodium is high',
+}) === false, 'bulleted list must be rejected');
+assert(g.hasUsableExplanation({
+  explanation: "We've got high sugar at 12g per serving in this snack.",
+}) === true, 'normal one-sentence explanation must pass');
+// Legitimate multi-sentence cosmetic explanation with several findings (>400 chars).
+{
+  const cosmeticLong =
+    "We've flagged Methylchloroisothiazolinone and Methylisothiazolinone as potent sensitisers that are restricted in leave-on cosmetic products under current rules, and Fragrance as a declarable allergen mix that can trigger reactions in sensitive skin. " +
+    "Phenoxyethanol is a restricted preservative when used at higher levels in leave-on formulas. " +
+    "A few botanical extracts and plant oils were not covered by our hazard table, so this assessment is incomplete on those rows and should be read with that gap in mind.";
+  assert(cosmeticLong.length > 400 && cosmeticLong.length <= 600,
+    'fixture should sit between old and new caps, len=' + cosmeticLong.length);
+  assert(g.hasUsableExplanation({ explanation: cosmeticLong }) === true,
+    'multi-sentence cosmetic explanation must pass the 600 cap');
+}
+assert(g.hasUsableExplanation({ explanation: '' }) === false);
+assert(g.hasUsableExplanation({ explanation: null }) === false);
+assert(g.hasUsableExplanation({}) === false);
+
+// ensureExplanation fallback must be product-type aware (not food copy for cosmetics)
+assert(g.fallbackExplanationForProductType('food') === g.FOOD_NO_INGREDIENTS_EXPLANATION);
+assert(g.fallbackExplanationForProductType('cosmetic') === g.COSMETIC_NO_EXPLANATION);
+assert(g.fallbackExplanationForProductType('household') === g.HOUSEHOLD_EXPLANATION);
+assert(!/nutrition alone/i.test(g.COSMETIC_NO_EXPLANATION),
+  'cosmetic fallback must not mention nutrition');
+assert(/summarise this product's ingredients/i.test(g.COSMETIC_NO_EXPLANATION));
+assert(src.includes('fallbackExplanationForProductType(cached && cached.productType)') ||
+  src.includes('fallbackExplanationForProductType(cached.productType)'),
+  'ensureExplanation must pick fallback by productType');
+
+// 6 + 7. scanLogicVersion staleness
+function isCacheFresh(cached, nowMs) {
+  const age = nowMs - (cached.cachedAt || 0);
+  const cachedType = cached.productType || 'food';
+  const logicStale = cached.scanLogicVersion !== g.SCAN_LOGIC_VERSION;
+  const tableStale = cachedType === 'cosmetic' && false;
+  return age < g.CACHE_TTL_MS && !tableStale && !logicStale;
+}
+
+const now = Date.now();
+assert(isCacheFresh({
+  productType: 'food',
+  cachedAt: now - 1000,
+}, now) === false, 'missing scanLogicVersion must be stale');
+
+assert(isCacheFresh({
+  productType: 'food',
+  cachedAt: now - 1000,
+  scanLogicVersion: g.SCAN_LOGIC_VERSION,
+}, now) === true, 'matching scanLogicVersion + fresh age must be hit');
+
+assert(isCacheFresh({
+  productType: 'household',
+  cachedAt: now - 1000,
+  scanLogicVersion: '0',
+}, now) === false, 'mismatched scanLogicVersion must be stale');
+
+const scanStart = src.indexOf('async function scanAndCache(barcode');
+const scanSlice = src.slice(scanStart, scanStart + 2500);
+assert(scanSlice.includes('logicStale'), 'scanAndCache must check logicStale');
+assert(scanSlice.includes('SCAN_LOGIC_VERSION'), 'scanAndCache must compare SCAN_LOGIC_VERSION');
+assert(/scanLogicVersion:\s*SCAN_LOGIC_VERSION/.test(src),
+  'cached documents must stamp scanLogicVersion');
+
+// 8. Food prompt contains first-person-plural instruction
+assert(g.buildFoodExplanationPromptSource.includes('Always write in the first-person plural'),
+  'food prompt must pin first-person plural');
+assert(g.buildFoodExplanationPromptSource.includes('Never use first-person singular'),
+  'food prompt must ban first-person singular');
+
+console.log('phase0 batch c ok');
+})().catch((err) => {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"phase0 batch c assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -2823,6 +3131,7 @@ def main() -> int:
         test_household_product_classification,
         test_health_endpoint,
         test_cosmetic_explanation_uses_we_voice,
+        test_phase0_batch_c,
     ]
     failed = 0
     for test in tests:
