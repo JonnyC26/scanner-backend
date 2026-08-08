@@ -1365,7 +1365,8 @@ assert(photoParsedCountWithin50Percent(10, 4) === false);
 assert(photoParsedCountWithin50Percent(10, 16) === false);
 assert(photoParsedCountWithin50Percent(0, 5) === true);
 
-// Upstream entry is never overwritten by a photo entry.
+// Quality helper still refuses to overwrite scored upstream; the /scan/photo
+// path separately replaces unscoreable upstream (null score / no ingredients).
 {
   const upstream = { source: 'obf', photoParsedCount: 0, coverageMatched: 0 };
   const photo = { source: 'photo', photoParsedCount: 99, coverageMatched: 50 };
@@ -1373,6 +1374,26 @@ assert(photoParsedCountWithin50Percent(0, 5) === true);
   assert(shouldReplaceWithPhotoCache({ source: 'off' }, photo) === false);
   assert(shouldReplaceWithPhotoCache(null, photo) === true, 'empty cache accepts photo');
   assert(shouldReplaceWithPhotoCache(undefined, photo) === true);
+}
+
+// /scan/photo: unscoreable upstream is replaced; usable upstream is kept.
+{
+  assert(src.includes('[PHOTO CACHE REPLACED UNSCOREABLE]'),
+    'must log PHOTO CACHE REPLACED UNSCOREABLE');
+  assert(src.includes('[PHOTO CACHE KEPT UPSTREAM]'),
+    'must still log PHOTO CACHE KEPT UPSTREAM for usable upstream');
+  const keptIdx = src.indexOf('if (existing && existing.source !== \'photo\' && !isHousehold)');
+  assert(keptIdx > 0, 'photo upstream keep/replace block missing');
+  const slice = src.slice(keptIdx, keptIdx + 1200);
+  assert(slice.includes('hasUsableIngredientText(existing.ingredients)'),
+    'must check hasUsableIngredientText on existing.ingredients');
+  assert(slice.includes('existing.score == null') || slice.includes('existing.score === null'),
+    'must treat null score as unscoreable');
+  assert(slice.includes('existingIngredientList.length === 0') ||
+    slice.includes('existingIngredientList.length == 0'),
+    'must require empty ingredientList for no-usable-ingredients');
+  assert(slice.includes('[PHOTO CACHE REPLACED UNSCOREABLE]'),
+    'replace log must live in the upstream keep/replace block');
 }
 
 // Upstream replaces a photo entry when it gains ingredients.
@@ -2818,7 +2839,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '3', 'SCAN_LOGIC_VERSION must be 3, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '4', 'SCAN_LOGIC_VERSION must be 4, got ' + SCAN_LOGIC_VERSION);
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -2884,7 +2905,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '3', 'exported SCAN_LOGIC_VERSION must be 3');
+assert(g.SCAN_LOGIC_VERSION === '4', 'exported SCAN_LOGIC_VERSION must be 4');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -2939,7 +2960,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '3', 'normal food stamps logic version 3');
+  assert(result.scanLogicVersion === '4', 'normal food stamps logic version 4');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -2984,7 +3005,7 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '3', 'Dawn stamps logic version 3');
+  assert(result.scanLogicVersion === '4', 'Dawn stamps logic version 4');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
