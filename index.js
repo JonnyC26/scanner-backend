@@ -2784,6 +2784,24 @@ function shouldReplacePhotoWithUpstream(product) {
   return !!(product && productHasIngredients(product));
 }
 
+// Cache/scan payload with nothing to score: no usable ingredient text, empty
+// ingredientList, or a null score. Used both ways — photo may overwrite such
+// an upstream entry, and a photo entry must not be discarded for one.
+function isUnscoreableCacheEntry(entry) {
+  if (!entry) return true;
+  let ingredientList = [];
+  try {
+    const parsed = JSON.parse(entry.ingredientList || '[]');
+    ingredientList = Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    ingredientList = [];
+  }
+  const noUsableIngredients =
+    !hasUsableIngredientText(entry.ingredients) &&
+    ingredientList.length === 0;
+  return noUsableIngredients || entry.score == null;
+}
+
 // When a re-scan fails, prefer a stale cache over a false "not found".
 // Returns the response payload, or null if there is nothing to fall back to.
 function staleCacheFallbackPayload(staleCached) {
@@ -2848,49 +2866,58 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
             try {
               const resolved = await resolveProductType(barcode);
               if (shouldReplacePhotoWithUpstream(resolved.product)) {
-                console.log(
-                  `[CACHE PHOTO UPSTREAM REPLACE] barcode=${barcode} type=${resolved.productType}`
-                );
                 const upstreamData = resolved.productType === 'household'
                   ? scanAndCacheHousehold(barcode, resolved.product)
                   : resolved.productType === 'cosmetic'
                     ? await scanAndCacheCosmetic(barcode, resolved.product, { skipExplanation })
                     : await scanAndCacheFood(barcode, resolved.product, { skipExplanation });
 
-                if (!upstreamData.noIngredientData) {
-                  try {
-                    const cachePayload = {
-                      ...upstreamData,
-                      cachedAt: Date.now(),
-                    };
-                    if (upstreamData.productType === 'cosmetic' && upstreamData.ingredientList) {
-                      cachePayload.ingredientList = stringifyIngredientListForCache(
-                        (() => { try { return JSON.parse(upstreamData.ingredientList); } catch (_) { return []; } })(),
-                        barcode
-                      );
-                    }
-                    await db.collection(CACHE_COLLECTION).doc(barcode).set(cachePayload);
-                  } catch (cacheWriteErr) {
-                    console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
-                  }
+                // Same unscoreable rule as [PHOTO CACHE REPLACED UNSCOREABLE],
+                // opposite direction: do not discard photo data for a worse
+                // upstream (e.g. food-no-nutrition "Not enough data").
+                if (isUnscoreableCacheEntry(upstreamData)) {
+                  console.log(`[CACHE PHOTO UPSTREAM WORSE] barcode=${barcode}`);
                 } else {
-                  console.log(`[CACHE SKIP] barcode=${barcode} noIngredientData=true`);
-                }
+                  console.log(
+                    `[CACHE PHOTO UPSTREAM REPLACE] barcode=${barcode} type=${resolved.productType}`
+                  );
 
-                if (!skipExplanation && !hasUsableExplanation(upstreamData)) {
-                  try {
-                    const explanation = await ensureExplanation(barcode, upstreamData);
-                    upstreamData.explanation = explanation;
-                    upstreamData.explanationPending = false;
-                  } catch (fillErr) {
-                    console.log(`[EXPLAIN FILL ERROR] barcode=${barcode} ${fillErr.message}`);
+                  if (!upstreamData.noIngredientData) {
+                    try {
+                      const cachePayload = {
+                        ...upstreamData,
+                        cachedAt: Date.now(),
+                      };
+                      if (upstreamData.productType === 'cosmetic' && upstreamData.ingredientList) {
+                        cachePayload.ingredientList = stringifyIngredientListForCache(
+                          (() => { try { return JSON.parse(upstreamData.ingredientList); } catch (_) { return []; } })(),
+                          barcode
+                        );
+                      }
+                      await db.collection(CACHE_COLLECTION).doc(barcode).set(cachePayload);
+                    } catch (cacheWriteErr) {
+                      console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
+                    }
+                  } else {
+                    console.log(`[CACHE SKIP] barcode=${barcode} noIngredientData=true`);
                   }
+
+                  if (!skipExplanation && !hasUsableExplanation(upstreamData)) {
+                    try {
+                      const explanation = await ensureExplanation(barcode, upstreamData);
+                      upstreamData.explanation = explanation;
+                      upstreamData.explanationPending = false;
+                    } catch (fillErr) {
+                      console.log(`[EXPLAIN FILL ERROR] barcode=${barcode} ${fillErr.message}`);
+                    }
+                  }
+                  return upstreamData;
                 }
-                return upstreamData;
+              } else {
+                console.log(
+                  `[CACHE PHOTO UPSTREAM MISS] barcode=${barcode} hasProduct=${!!resolved.product}`
+                );
               }
-              console.log(
-                `[CACHE PHOTO UPSTREAM MISS] barcode=${barcode} hasProduct=${!!resolved.product}`
-              );
             } catch (upstreamErr) {
               console.log(
                 `[CACHE PHOTO UPSTREAM ERROR] barcode=${barcode} ${upstreamErr.message}`
@@ -3624,21 +3651,9 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
 
         let writePhotoCache = true;
         if (existing && existing.source !== 'photo' && !isHousehold) {
-          let existingIngredientList = [];
-          try {
-            const parsed = JSON.parse(existing.ingredientList || '[]');
-            existingIngredientList = Array.isArray(parsed) ? parsed : [];
-          } catch (_) {
-            existingIngredientList = [];
-          }
-          const noUsableIngredients =
-            !hasUsableIngredientText(existing.ingredients) &&
-            existingIngredientList.length === 0;
           // Unscoreable upstream (e.g. food-no-nutrition misclassified cosmetic)
           // must not block a photo result that has a real score/ingredients.
-          const upstreamUnscoreable =
-            noUsableIngredients || existing.score == null;
-          if (upstreamUnscoreable) {
+          if (isUnscoreableCacheEntry(existing)) {
             console.log(`[PHOTO CACHE REPLACED UNSCOREABLE] barcode=${normalizedBarcode}`);
           } else {
             console.log(`[PHOTO CACHE KEPT UPSTREAM] barcode=${normalizedBarcode}`);
