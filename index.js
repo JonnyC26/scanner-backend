@@ -51,7 +51,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '3';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '4';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -3622,9 +3622,29 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
           coverageMatched: isHousehold ? 0 : scored.coverageMatched,
         };
 
+        let writePhotoCache = true;
         if (existing && existing.source !== 'photo' && !isHousehold) {
-          console.log(`[PHOTO CACHE KEPT UPSTREAM] barcode=${normalizedBarcode}`);
-          persisted = true;
+          let existingIngredientList = [];
+          try {
+            const parsed = JSON.parse(existing.ingredientList || '[]');
+            existingIngredientList = Array.isArray(parsed) ? parsed : [];
+          } catch (_) {
+            existingIngredientList = [];
+          }
+          const noUsableIngredients =
+            !hasUsableIngredientText(existing.ingredients) &&
+            existingIngredientList.length === 0;
+          // Unscoreable upstream (e.g. food-no-nutrition misclassified cosmetic)
+          // must not block a photo result that has a real score/ingredients.
+          const upstreamUnscoreable =
+            noUsableIngredients || existing.score == null;
+          if (upstreamUnscoreable) {
+            console.log(`[PHOTO CACHE REPLACED UNSCOREABLE] barcode=${normalizedBarcode}`);
+          } else {
+            console.log(`[PHOTO CACHE KEPT UPSTREAM] barcode=${normalizedBarcode}`);
+            writePhotoCache = false;
+            persisted = true;
+          }
         } else if (
           !isHousehold &&
           existing &&
@@ -3633,8 +3653,11 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
           console.log(
             `[PHOTO CACHE KEPT EXISTING] barcode=${normalizedBarcode} existing=${photoCacheParsedCount(existing)} new=${photoParsedCount}`
           );
+          writePhotoCache = false;
           persisted = true;
-        } else {
+        }
+
+        if (writePhotoCache) {
           const { dietWarnings: _dietWarnings, persisted: _p, imageStored: _is, imageSkipReason: _isr, ...cachePayload } = responseData;
           cachePayload.ingredientList = stringifyIngredientListForCache(
             isHousehold ? [] : scored.ingredientList,
