@@ -1278,6 +1278,7 @@ module.exports = {
   shouldReplacePhotoWithUpstream,
   photoNeedsUpstreamRecheck,
   productHasIngredients,
+  isUnscoreableCacheEntry,
   PHOTO_UPSTREAM_RECHECK_MS,
 };
 `;
@@ -1290,6 +1291,7 @@ const {
   shouldReplacePhotoWithUpstream,
   photoNeedsUpstreamRecheck,
   productHasIngredients,
+  isUnscoreableCacheEntry,
   PHOTO_UPSTREAM_RECHECK_MS,
 } = require('/tmp/photo_quality_helpers.js');
 
@@ -1376,6 +1378,35 @@ assert(photoParsedCountWithin50Percent(0, 5) === true);
   assert(shouldReplaceWithPhotoCache(undefined, photo) === true);
 }
 
+// Shared unscoreable rule (photo ↔ upstream, both directions).
+{
+  assert(isUnscoreableCacheEntry(null) === true);
+  assert(isUnscoreableCacheEntry({}) === true, 'empty entry is unscoreable');
+  assert(isUnscoreableCacheEntry({ ingredients: '', ingredientList: '[]', score: null }) === true);
+  assert(isUnscoreableCacheEntry({ ingredients: '.', ingredientList: '[]', score: null }) === true);
+  // Food-no-nutrition style: ingredients present but null score → unscoreable.
+  assert(isUnscoreableCacheEntry({
+    ingredients: 'alcohol denat., sodium lauryl sulfate, water',
+    ingredientList: '[]',
+    score: null,
+  }) === true, 'null score is unscoreable even with ingredient text');
+  assert(isUnscoreableCacheEntry({
+    ingredients: '',
+    ingredientList: '[]',
+    score: 70,
+  }) === true, 'score without ingredients is still unscoreable');
+  assert(isUnscoreableCacheEntry({
+    ingredients: 'Aqua, Glycerin, Parfum',
+    ingredientList: '[]',
+    score: 70,
+  }) === false, 'usable text + score is scoreable');
+  assert(isUnscoreableCacheEntry({
+    ingredients: '',
+    ingredientList: JSON.stringify([{ name: 'Aqua' }]),
+    score: 55,
+  }) === false, 'non-empty ingredientList + score is scoreable');
+}
+
 // /scan/photo: unscoreable upstream is replaced; usable upstream is kept.
 {
   assert(src.includes('[PHOTO CACHE REPLACED UNSCOREABLE]'),
@@ -1384,16 +1415,24 @@ assert(photoParsedCountWithin50Percent(0, 5) === true);
     'must still log PHOTO CACHE KEPT UPSTREAM for usable upstream');
   const keptIdx = src.indexOf('if (existing && existing.source !== \'photo\' && !isHousehold)');
   assert(keptIdx > 0, 'photo upstream keep/replace block missing');
-  const slice = src.slice(keptIdx, keptIdx + 1200);
-  assert(slice.includes('hasUsableIngredientText(existing.ingredients)'),
-    'must check hasUsableIngredientText on existing.ingredients');
-  assert(slice.includes('existing.score == null') || slice.includes('existing.score === null'),
-    'must treat null score as unscoreable');
-  assert(slice.includes('existingIngredientList.length === 0') ||
-    slice.includes('existingIngredientList.length == 0'),
-    'must require empty ingredientList for no-usable-ingredients');
+  const slice = src.slice(keptIdx, keptIdx + 900);
+  assert(slice.includes('isUnscoreableCacheEntry(existing)'),
+    'photo path must use shared isUnscoreableCacheEntry');
   assert(slice.includes('[PHOTO CACHE REPLACED UNSCOREABLE]'),
     'replace log must live in the upstream keep/replace block');
+}
+
+// scanAndCache: unscoreable upstream must not beat a photo entry.
+{
+  assert(src.includes('[CACHE PHOTO UPSTREAM WORSE]'),
+    'must log CACHE PHOTO UPSTREAM WORSE');
+  const worseIdx = src.indexOf('[CACHE PHOTO UPSTREAM WORSE]');
+  assert(worseIdx > 0, 'WORSE log missing');
+  const worseSlice = src.slice(Math.max(0, worseIdx - 400), worseIdx + 200);
+  assert(worseSlice.includes('isUnscoreableCacheEntry(upstreamData)'),
+    'WORSE path must use shared isUnscoreableCacheEntry on upstreamData');
+  assert(src.includes('[CACHE PHOTO UPSTREAM REPLACE]'),
+    'REPLACE log must remain for scoreable upstream');
 }
 
 // Upstream replaces a photo entry when it gains ingredients.
