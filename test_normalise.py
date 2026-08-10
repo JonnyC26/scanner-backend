@@ -1490,13 +1490,16 @@ const start = src.indexOf('// ── Request guards (rate limits + vision bill b
 const end = src.indexOf('// ── Cosmetic ingredient table');
 if (start < 0 || end < 0 || end <= start) throw new Error('could not locate request guards');
 
+assert(!src.includes('function getClientIp'), 'getClientIp must be deleted');
+assert(src.includes("app.set('trust proxy', 1)"), 'must trust exactly one proxy hop');
+
 const block = `
 ${src.slice(start, end)}
 module.exports = {
   checkRateLimit,
   sweepRateLimitBuckets,
   rateLimitBuckets,
-  getClientIp,
+  enforceIpRateLimit,
   parseBearerToken,
   tryConsumeVisionSlot,
   getVisionCallsToday,
@@ -1520,6 +1523,7 @@ module.exports = {
 };
 `;
 fs.writeFileSync('/tmp/request_guards.js', block);
+delete require.cache['/tmp/request_guards.js'];
 const g = require('/tmp/request_guards.js');
 
 function assert(cond, msg) {
@@ -1548,10 +1552,37 @@ assert(g.parseBearerToken('Bearer tok.en.here') === 'tok.en.here');
 assert(g.parseBearerToken('Bearer  tok.en.here') === 'tok.en.here', 'extra whitespace still parses');
 assert(g.parseBearerToken('Bearer tok extra') === 'tok', 'takes first token only');
 
-// Client IP prefers first X-Forwarded-For hop.
-assert(g.getClientIp({ headers: { 'x-forwarded-for': '1.2.3.4, 5.6.7.8' }, ip: '9.9.9.9' }) === '1.2.3.4');
-assert(g.getClientIp({ headers: {}, ip: '10.0.0.1' }) === '10.0.0.1');
-assert(g.getClientIp({ headers: {} }) === 'unknown');
+// enforceIpRateLimit keys on req.ip — forged XFF must not open a new bucket.
+{
+  g.rateLimitBuckets.clear();
+  const statuses = [];
+  const mockRes = {
+    set() { return this; },
+    status(code) { statuses.push(code); return this; },
+    json() { return this; },
+  };
+  const logs = [];
+  const origLog = console.log;
+  console.log = (...args) => { logs.push(args.join(' ')); };
+  for (let i = 0; i < 3; i++) {
+    const req = {
+      ip: '10.0.0.5',
+      headers: { 'x-forwarded-for': `${i}.${i}.${i}.${i}` },
+    };
+    assert(g.enforceIpRateLimit(req, mockRes, '/scan', 3) === true, 'allowed ' + i);
+  }
+  const forged = {
+    ip: '10.0.0.5',
+    headers: { 'x-forwarded-for': '9.9.9.9' },
+  };
+  assert(g.enforceIpRateLimit(forged, mockRes, '/scan', 3) === false,
+    'forged XFF must share the req.ip bucket');
+  console.log = origLog;
+  assert(statuses.includes(429), 'denied response is 429');
+  assert(g.rateLimitBuckets.has('/scan:ip:10.0.0.5'), 'bucket keyed on req.ip');
+  assert(!g.rateLimitBuckets.has('/scan:ip:9.9.9.9'), 'forged XFF must not create a bucket');
+  assert(logs.some(l => l === '[IP] resolved=10.0.0.5'), 'must log resolved req.ip');
+}
 
 // Rate limit: allow up to N, then deny with retryAfter.
 {
@@ -1756,18 +1787,40 @@ assert(g.shouldWriteProductImage({ bytes: 10, data: 'abc', suppressed: true }) =
   'suppressed image must be replaceable');
 assert(g.IMAGE_SUPPRESS_REPORT_THRESHOLD === 2);
 
-// PUBLIC_BASE_URL env wins; else host from request.
+// PUBLIC_BASE_URL only — never host / x-forwarded-host from the request.
 {
   const prev = process.env.PUBLIC_BASE_URL;
   process.env.PUBLIC_BASE_URL = 'https://api.example.com/';
   assert(g.resolvePublicBaseUrl({ get: () => 'ignored' }) === 'https://api.example.com');
   delete process.env.PUBLIC_BASE_URL;
-  const req = {
+  const attackerReq = {
     protocol: 'https',
-    get: (h) => (h === 'host' ? 'scanner.up.railway.app' : undefined),
+    get: (h) => {
+      if (h === 'x-forwarded-host') return 'attacker.example';
+      if (h === 'host') return 'scanner.up.railway.app';
+      if (h === 'x-forwarded-proto') return 'https';
+      return undefined;
+    },
   };
-  assert(g.resolvePublicBaseUrl(req) === 'https://scanner.up.railway.app');
+  assert(g.resolvePublicBaseUrl(attackerReq) === '',
+    'unset PUBLIC_BASE_URL must return empty even with x-forwarded-host');
+  // Photo-scan path: leave imageUrl unchanged when base is empty.
+  let imageUrl = '';
+  const imageStored = true;
+  const normalizedBarcode = '3017620422003';
+  if (!imageUrl && imageStored && normalizedBarcode) {
+    const base = g.resolvePublicBaseUrl(attackerReq);
+    if (base) imageUrl = `${base}/image/${normalizedBarcode}`;
+  }
+  assert(imageUrl === '', 'must not write a header-derived imageUrl');
+  let existing = 'https://cdn.example/existing.jpg';
+  if (!existing && imageStored && normalizedBarcode) {
+    const base = g.resolvePublicBaseUrl(attackerReq);
+    if (base) existing = `${base}/image/${normalizedBarcode}`;
+  }
+  assert(existing === 'https://cdn.example/existing.jpg', 'existing imageUrl unchanged');
   if (prev !== undefined) process.env.PUBLIC_BASE_URL = prev;
+  else delete process.env.PUBLIC_BASE_URL;
 }
 
 // Mid-scan cap: ingredients took the last slot → front read must be dropped.
@@ -4017,6 +4070,227 @@ console.log('phase0 grading honesty ok');
     print(proc.stdout.strip())
 
 
+def test_batch1_security():
+    """Batch 1: trust proxy / PUBLIC_BASE_URL / PRESCORE_SECRET /explain limit."""
+    script = r"""
+const http = require('http');
+const path = require('path');
+const Module = require('module');
+const fs = require('fs');
+
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+assert(src.includes("app.set('trust proxy', 1)"), 'trust proxy 1 required');
+assert(!src.includes('function getClientIp'), 'getClientIp must be gone');
+assert(!src.includes("|| 'change-me'"), 'PRESCORE_SECRET must not fall back to change-me');
+assert(
+  src.includes("if (!enforceIpRateLimit(req, res, '/explain', RATE_LIMIT_SCAN_SEARCH_PER_IP)) return;"),
+  '/explain must enforce the scan/search IP limit first'
+);
+assert(
+  src.includes('[CONFIG] PUBLIC_BASE_URL not set — stored image URLs disabled'),
+  'must log when PUBLIC_BASE_URL unset'
+);
+
+const mockFirestore = {
+  collection() {
+    return {
+      limit() {
+        return {
+          async get() {
+            return { empty: true, docs: [] };
+          },
+        };
+      },
+      orderBy() {
+        return this;
+      },
+      doc() {
+        return {
+          async get() {
+            return { exists: false, data: () => undefined };
+          },
+          async set() {},
+          async delete() {},
+          async update() {},
+        };
+      },
+      async add() {
+        return { id: 'x' };
+      },
+      async get() {
+        return { empty: true, docs: [] };
+      },
+    };
+  },
+};
+mockFirestore.FieldValue = {
+  serverTimestamp: () => 'SERVER_TS',
+  increment: (n) => n,
+};
+
+const mockAdmin = {
+  initializeApp() {},
+  credential: { cert() { return {}; } },
+  auth() {
+    return { async verifyIdToken() { return { uid: 'u' }; } };
+  },
+  firestore() {
+    return mockFirestore;
+  },
+};
+mockAdmin.firestore.FieldValue = mockFirestore.FieldValue;
+
+const origRequire = Module.prototype.require;
+Module.prototype.require = function (id) {
+  if (id === 'firebase-admin') return mockAdmin;
+  return origRequire.apply(this, arguments);
+};
+
+process.env.FIREBASE_SERVICE_ACCOUNT = JSON.stringify({
+  project_id: 'demo',
+  client_email: 'demo@demo.iam.gserviceaccount.com',
+  private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg==\n-----END PRIVATE KEY-----\n',
+});
+process.env.ANTHROPIC_API_KEY = 'test-key';
+delete process.env.PUBLIC_BASE_URL;
+delete process.env.PRESCORE_SECRET;
+
+function loadApp() {
+  const appPath = path.join(process.cwd(), 'index.js');
+  delete require.cache[appPath];
+  return require(appPath);
+}
+
+function withServer(app, fn) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, '127.0.0.1', async () => {
+      try {
+        const { port } = server.address();
+        const result = await fn(port);
+        server.close(() => resolve(result));
+      } catch (err) {
+        server.close(() => reject(err));
+      }
+    });
+  });
+}
+
+function request(port, method, urlPath, { headers } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: urlPath,
+        method,
+        headers: headers || {},
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try { json = text ? JSON.parse(text) : null; } catch (_) { json = text; }
+          resolve({ status: res.statusCode, json });
+        });
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+const ADMIN_ROUTES = [
+  ['GET', '/admin/prescore'],
+  ['GET', '/admin/cache/inspect'],
+  ['POST', '/admin/cache/delete'],
+  ['GET', '/admin/failed-writes'],
+  ['GET', '/admin/image-reports'],
+  ['POST', '/admin/image/delete'],
+  ['GET', '/admin/diagnose'],
+  ['GET', '/admin/diagnose/report'],
+];
+
+(async () => {
+  // 4. PRESCORE_SECRET unset → every /admin/* is 503; /health still 200.
+  {
+    delete process.env.PRESCORE_SECRET;
+    const app = loadApp();
+    await withServer(app, async (port) => {
+      for (const [method, route] of ADMIN_ROUTES) {
+        const res = await request(port, method, route + '?secret=anything');
+        assert(res.status === 503, route + ' unset secret → 503, got ' + res.status);
+        assert(res.json && res.json.error === 'Admin routes disabled', route + ' body');
+      }
+      const health = await request(port, 'GET', '/health');
+      assert(health.status === 200, '/health must stay 200, got ' + health.status);
+    });
+  }
+
+  // 5. PRESCORE_SECRET set → correct passes, incorrect 403.
+  {
+    process.env.PRESCORE_SECRET = 'batch1-test-secret';
+    const app = loadApp();
+    await withServer(app, async (port) => {
+      const bad = await request(port, 'GET', '/admin/cache/inspect?secret=wrong');
+      assert(bad.status === 403, 'wrong secret → 403, got ' + bad.status);
+      assert(bad.json && bad.json.error === 'Forbidden');
+
+      const short = await request(port, 'GET', '/admin/cache/inspect?secret=x');
+      assert(short.status === 403, 'length-mismatched secret → 403');
+
+      const good = await request(
+        port,
+        'GET',
+        '/admin/cache/inspect?secret=batch1-test-secret'
+      );
+      // Auth passed the middleware; missing barcode is a handler 400.
+      assert(good.status === 400, 'correct secret reaches handler, got ' + good.status);
+      assert(good.json && good.json.error === 'Missing barcode');
+    });
+    delete process.env.PRESCORE_SECRET;
+  }
+
+  // 6. /explain/:barcode returns 429 once the IP limit is exceeded.
+  // Direct to the app (no proxy hop): omit XFF so all calls share socket req.ip.
+  {
+    delete process.env.PRESCORE_SECRET;
+    const app = loadApp();
+    await withServer(app, async (port) => {
+      for (let i = 0; i < 300; i++) {
+        const res = await request(port, 'GET', '/explain/3017620422003');
+        assert(res.status !== 429, 'first 300 explain calls must not 429, got ' + res.status + ' at ' + i);
+      }
+      const limited = await request(port, 'GET', '/explain/3017620422003');
+      assert(limited.status === 429, '301st explain must 429, got ' + limited.status);
+      assert(limited.json && limited.json.error === 'Too many requests');
+    });
+  }
+
+  console.log('batch1 security ok');
+})().catch((err) => {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(f"batch1 security assertions failed (exit {proc.returncode})")
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -4045,6 +4319,7 @@ def main() -> int:
         test_additives_universal_extraction,
         test_phase0_batch_c,
         test_phase0_grading_honesty,
+        test_batch1_security,
     ]
     failed = 0
     for test in tests:
