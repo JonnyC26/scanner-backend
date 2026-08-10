@@ -1561,10 +1561,25 @@ assert(g.parseBearerToken('Bearer tok extra') === 'tok', 'takes first token only
     status(code) { statuses.push(code); return this; },
     json() { return this; },
   };
-  const logs = [];
+  const prevLogIp = process.env.LOG_CLIENT_IP;
+  delete process.env.LOG_CLIENT_IP;
+  const logsOff = [];
   const origLog = console.log;
+  console.log = (...args) => { logsOff.push(args.join(' ')); };
+  assert(g.enforceIpRateLimit(
+    { ip: '10.0.0.5', headers: { 'x-forwarded-for': '1.1.1.1' } },
+    mockRes,
+    '/scan',
+    3
+  ) === true);
+  console.log = origLog;
+  assert(!logsOff.some(l => l.startsWith('[IP] resolved=')),
+    'IP log must stay off unless LOG_CLIENT_IP=1');
+
+  process.env.LOG_CLIENT_IP = '1';
+  const logs = [];
   console.log = (...args) => { logs.push(args.join(' ')); };
-  for (let i = 0; i < 3; i++) {
+  for (let i = 1; i < 3; i++) {
     const req = {
       ip: '10.0.0.5',
       headers: { 'x-forwarded-for': `${i}.${i}.${i}.${i}` },
@@ -1578,10 +1593,12 @@ assert(g.parseBearerToken('Bearer tok extra') === 'tok', 'takes first token only
   assert(g.enforceIpRateLimit(forged, mockRes, '/scan', 3) === false,
     'forged XFF must share the req.ip bucket');
   console.log = origLog;
+  if (prevLogIp === undefined) delete process.env.LOG_CLIENT_IP;
+  else process.env.LOG_CLIENT_IP = prevLogIp;
   assert(statuses.includes(429), 'denied response is 429');
   assert(g.rateLimitBuckets.has('/scan:ip:10.0.0.5'), 'bucket keyed on req.ip');
   assert(!g.rateLimitBuckets.has('/scan:ip:9.9.9.9'), 'forged XFF must not create a bucket');
-  assert(logs.some(l => l === '[IP] resolved=10.0.0.5'), 'must log resolved req.ip');
+  assert(logs.some(l => l === '[IP] resolved=10.0.0.5'), 'must log resolved req.ip when enabled');
 }
 
 // Rate limit: allow up to N, then deny with retryAfter.

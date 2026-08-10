@@ -143,7 +143,10 @@ function sendRateLimited(res, route, key, retryAfter) {
 
 function enforceIpRateLimit(req, res, route, limit) {
   const ip = req.ip || 'unknown';
-  console.log(`[IP] resolved=${ip}`);
+  // Opt-in only — logging every client IP on every request is noisy and a privacy issue.
+  if (process.env.LOG_CLIENT_IP === '1') {
+    console.log(`[IP] resolved=${ip}`);
+  }
   const result = checkRateLimit(`${route}:ip:${ip}`, limit);
   if (!result.allowed) {
     sendRateLimited(res, route, `ip:${ip}`, result.retryAfter);
