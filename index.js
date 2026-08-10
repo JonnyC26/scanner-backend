@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const app = express();
+// Trust exactly one proxy hop (Railway). Err low: too high re-opens XFF spoofing.
+app.set('trust proxy', 1);
 // Keep the default 100kb JSON limit globally. /scan/photo and POST /image/:barcode
 // attach their own 8mb parser — skip the global one there so large photos are not
 // rejected early.
@@ -70,17 +72,6 @@ const rateLimitBuckets = new Map(); // key -> { count, resetAt }
 let visionDayKey = ''; // YYYY-MM-DD UTC
 let visionDayCount = 0;
 let visionCapWarningLoggedForDay = ''; // UTC day we already logged the 80% warning
-
-function getClientIp(req) {
-  const xff = req.headers && req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.trim()) {
-    return xff.split(',')[0].trim();
-  }
-  if (Array.isArray(xff) && xff.length > 0) {
-    return String(xff[0]).trim();
-  }
-  return (req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
-}
 
 function parseBearerToken(authHeader) {
   if (typeof authHeader !== 'string') return null;
@@ -151,7 +142,11 @@ function sendRateLimited(res, route, key, retryAfter) {
 }
 
 function enforceIpRateLimit(req, res, route, limit) {
-  const ip = getClientIp(req);
+  const ip = req.ip || 'unknown';
+  // Opt-in only — logging every client IP on every request is noisy and a privacy issue.
+  if (process.env.LOG_CLIENT_IP === '1') {
+    console.log(`[IP] resolved=${ip}`);
+  }
   const result = checkRateLimit(`${route}:ip:${ip}`, limit);
   if (!result.allowed) {
     sendRateLimited(res, route, `ip:${ip}`, result.retryAfter);
@@ -181,13 +176,9 @@ function stripDataUrlBase64(imageBase64) {
   return String(imageBase64 || '').replace(/^data:[^;]+;base64,/, '');
 }
 
-function resolvePublicBaseUrl(req) {
-  const fromEnv = (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
-  if (fromEnv) return fromEnv;
-  const host = (req.get && (req.get('x-forwarded-host') || req.get('host'))) || '';
-  if (!host) return '';
-  const proto = (req.get && req.get('x-forwarded-proto')) || req.protocol || 'https';
-  return `${proto}://${host}`;
+// Only PUBLIC_BASE_URL — never host/proto from request headers (client-controlled).
+function resolvePublicBaseUrl() {
+  return (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
 }
 
 // Prefer brand + product name; either alone is fine; null when nothing usable.
@@ -3776,8 +3767,9 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     if (!productName) productName = 'Scanned label';
 
     // Point at our stored front image only when upstream provided none.
+    // Requires PUBLIC_BASE_URL — never invent a URL from request headers.
     if (!imageUrl && imageStored && normalizedBarcode) {
-      const base = resolvePublicBaseUrl(req);
+      const base = resolvePublicBaseUrl();
       if (base) {
         imageUrl = `${base}/image/${normalizedBarcode}`;
       }
@@ -4232,6 +4224,8 @@ app.post('/account/delete', async (req, res) => {
 });
 
 app.get('/explain/:barcode', async (req, res) => {
+  if (!enforceIpRateLimit(req, res, '/explain', RATE_LIMIT_SCAN_SEARCH_PER_IP)) return;
+
   const started = Date.now();
   const { barcode } = req.params;
 
@@ -4374,8 +4368,17 @@ app.get('/search', async (req, res) => {
 // real user to scan a common product gets an instant cached result instead
 // of the full ~3-5s live scan. Protected by a simple secret query param —
 // this is not meant to be discoverable or hit repeatedly.
-const PRESCORE_SECRET = process.env.PRESCORE_SECRET || 'change-me';
+const PRESCORE_SECRET = process.env.PRESCORE_SECRET || '';
 let prescoreRunning = false;
+let prescoreSecretMissingLogged = false;
+
+function adminSecretMatches(provided) {
+  if (typeof provided !== 'string' || !PRESCORE_SECRET) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(PRESCORE_SECRET);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
 
 async function fetchPopularBarcodes(limit) {
   const barcodes = [];
@@ -4434,13 +4437,20 @@ async function runPrescoreJob(limit) {
 
 app.use('/admin', (req, res, next) => {
   if (!enforceIpRateLimit(req, res, '/admin', RATE_LIMIT_ADMIN_PER_IP)) return;
+  if (!PRESCORE_SECRET) {
+    if (!prescoreSecretMissingLogged) {
+      prescoreSecretMissingLogged = true;
+      console.log('[CONFIG] PRESCORE_SECRET not set — admin routes disabled');
+    }
+    return res.status(503).json({ error: 'Admin routes disabled' });
+  }
+  if (!adminSecretMatches(req.query.secret)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   next();
 });
 
 app.get('/admin/prescore', (req, res) => {
-  if (req.query.secret !== PRESCORE_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
   if (prescoreRunning) {
     return res.json({ status: 'already running' });
   }
@@ -4453,9 +4463,6 @@ app.get('/admin/prescore', (req, res) => {
 
 // Admin repair: inspect / delete a permanent cache entry (photo or upstream).
 app.get('/admin/cache/inspect', async (req, res) => {
-  if (req.query.secret !== PRESCORE_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
   const barcode = String(req.query.barcode || '').trim();
   if (!barcode) {
     return res.status(400).json({ error: 'Missing barcode' });
@@ -4473,9 +4480,6 @@ app.get('/admin/cache/inspect', async (req, res) => {
 });
 
 app.post('/admin/cache/delete', async (req, res) => {
-  if (req.query.secret !== PRESCORE_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
   const barcode = String(req.query.barcode || '').trim();
   if (!barcode) {
     return res.status(400).json({ error: 'Missing barcode' });
@@ -4515,9 +4519,6 @@ app.post('/admin/cache/delete', async (req, res) => {
 });
 
 app.get('/admin/failed-writes', async (req, res) => {
-  if (req.query.secret !== PRESCORE_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
   try {
     const snap = await db.collection(FAILED_WRITES_COLLECTION)
@@ -4533,9 +4534,6 @@ app.get('/admin/failed-writes', async (req, res) => {
 });
 
 app.get('/admin/image-reports', async (req, res) => {
-  if (req.query.secret !== PRESCORE_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
   try {
     const snap = await db.collection(IMAGE_REPORTS_COLLECTION)
@@ -4585,9 +4583,6 @@ app.get('/admin/image-reports', async (req, res) => {
 });
 
 app.post('/admin/image/delete', async (req, res) => {
-  if (req.query.secret !== PRESCORE_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
   const barcode = normalizeBarcode(req.query.barcode || (req.body && req.body.barcode) || '');
   if (!barcode) {
     return res.status(400).json({ error: 'Invalid barcode' });
@@ -4911,9 +4906,6 @@ async function runDiagnoseJob(limit, countries) {
 }
 
 app.get('/admin/diagnose', (req, res) => {
-  if (req.query.secret !== PRESCORE_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
   if (diagnoseRunning) {
     return res.json({ status: 'already running' });
   }
@@ -4925,9 +4917,6 @@ app.get('/admin/diagnose', (req, res) => {
 });
 
 app.get('/admin/diagnose/report', async (req, res) => {
-  if (req.query.secret !== PRESCORE_SECRET) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
   try {
     const visionCallsToday = getVisionCallsToday();
     const runId = (req.query.runId || '').toString().trim();
@@ -4956,6 +4945,9 @@ app.get('/admin/diagnose/report', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 startRateLimitSweeper();
+if (!resolvePublicBaseUrl()) {
+  console.log('[CONFIG] PUBLIC_BASE_URL not set — stored image URLs disabled');
+}
 if (require.main === module) {
   app.listen(PORT, () => console.log(`Running on port ${PORT}`));
 }
