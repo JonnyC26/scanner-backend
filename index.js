@@ -1710,15 +1710,18 @@ function toServing(val100g, servingVal, servingQuantity) {
 }
 
 // Threshold values are unchanged — only which figure they are applied to.
+// Null means unknown data; never coerce to 0 and invent a "low" tier.
 function computeNutrientTiers(sugarVal, sodiumVal, proteinVal) {
-  const sugar = sugarVal ?? 0;
-  const sodium = sodiumVal ?? 0;
-  const protein = proteinVal ?? 0;
-  return {
-    sugarTier: sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low',
-    sodiumTier: sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low',
-    proteinTier: protein >= 10 ? 'high' : 'low',
-  };
+  const sugarTier = sugarVal == null
+    ? 'unknown'
+    : sugarVal >= 22.5 ? 'high' : sugarVal >= 5 ? 'medium' : 'low';
+  const sodiumTier = sodiumVal == null
+    ? 'unknown'
+    : sodiumVal >= 0.6 ? 'high' : sodiumVal >= 0.12 ? 'medium' : 'low';
+  const proteinTier = proteinVal == null
+    ? 'unknown'
+    : proteinVal >= 10 ? 'high' : 'low';
+  return { sugarTier, sodiumTier, proteinTier };
 }
 
 // Shared by /scan and /search so tiers and servingKnown stay aligned.
@@ -2260,12 +2263,21 @@ Avoid jargon like "Annex II" — say "prohibited in the EU" if relevant.`;
   }
 }
 
+function isKnownNutrientForPrompt(value, tier) {
+  if (value == null) return false;
+  const text = String(value).trim();
+  if (!text || text === 'N/A') return false;
+  if (tier === 'unknown') return false;
+  return true;
+}
+
 function buildFoodExplanationPrompt({
   sugar,
   sodium,
   protein,
   sugarTier,
   sodiumTier,
+  proteinTier,
   additivesPhrase,
   isOrganic,
   novaGroup,
@@ -2281,8 +2293,23 @@ function buildFoodExplanationPrompt({
         ? 'The nutritional grade behind most of this score is middling. Do not claim the product is highly healthy overall; balance any positives with that context. Never say "Nutri-Score" or the letter grade.'
         : 'The nutritional grade behind most of this score is relatively strong. You may mention a genuine benefit when supported by the data. Never say "Nutri-Score" or the letter grade.';
 
+  // Omit nutrients with no data — never invent "N/A (low/unknown tier)".
+  const nutrientParts = [];
+  if (isKnownNutrientForPrompt(sugar, sugarTier)) {
+    nutrientParts.push(`sugar ${sugar} ${basisLabel} (${sugarTier} tier)`);
+  }
+  if (isKnownNutrientForPrompt(sodium, sodiumTier)) {
+    nutrientParts.push(`sodium ${sodium} ${basisLabel} (${sodiumTier} tier)`);
+  }
+  if (isKnownNutrientForPrompt(protein, proteinTier)) {
+    nutrientParts.push(`protein ${protein} ${basisLabel}`);
+  }
+  const nutrientPhrase = nutrientParts.length > 0
+    ? nutrientParts.join(', ') + ', '
+    : '';
+
   return `Always write in the first-person plural ("we" / "we've" / "our"). Never use first-person singular ("I" / "I've" / "I'm" / "my").
-Product data: sugar ${sugar} ${basisLabel} (${sugarTier} tier), sodium ${sodium} ${basisLabel} (${sodiumTier} tier), protein ${protein} ${basisLabel}, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}.
+Product data: ${nutrientPhrase}${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}.
 Score context: ${nutriGuidance}
 In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The explanation must not contradict the score shown beside it. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration." PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters. Do not restate an overall product score or Excellent/Good/Poor/Bad tier.`;
 }
@@ -2331,7 +2358,7 @@ function fallbackExplanationForProductType(productType) {
 }
 
 function formatNutrientForPrompt(gramsVal, kind) {
-  if (gramsVal === null || gramsVal === undefined) return 'N/A';
+  if (gramsVal === null || gramsVal === undefined) return null;
   if (kind === 'sodium') return `${Math.round(gramsVal * 1000)}mg`;
   return `${Math.round(gramsVal * 10) / 10}g`;
 }
@@ -2342,6 +2369,7 @@ async function generateFoodExplanation({
   proteinDisplay,
   sugarTier,
   sodiumTier,
+  proteinTier,
   additivesCount,
   isOrganic,
   novaGroup,
@@ -2359,6 +2387,7 @@ async function generateFoodExplanation({
     protein: formatNutrientForPrompt(proteinDisplay, 'protein'),
     sugarTier,
     sodiumTier,
+    proteinTier,
     additivesPhrase,
     isOrganic,
     novaGroup,
@@ -2433,6 +2462,7 @@ async function generateExplanationFromCached(cached) {
     protein,
     sugarTier: cached.sugarTier,
     sodiumTier: cached.sodiumTier,
+    proteinTier: cached.proteinTier,
     additivesPhrase,
     isOrganic: organicStatus,
     novaGroup: cached.novaGroup,
@@ -2776,6 +2806,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
       proteinDisplay: explainProtein,
       sugarTier,
       sodiumTier,
+      proteinTier,
       additivesCount,
       isOrganic: organicStatus,
       novaGroup,

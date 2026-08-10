@@ -3673,9 +3673,9 @@ const extractStart = src.indexOf("// OFF's additives_tags is a curated subset");
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
 if (extractStart < 0 || extractEnd < 0) throw new Error('could not locate extractAdditiveCodes helpers');
 
-const promptStart = src.indexOf('function buildFoodExplanationPrompt');
+const promptStart = src.indexOf('function isKnownNutrientForPrompt');
 const promptEnd = src.indexOf('async function requestFoodExplanation');
-if (promptStart < 0 || promptEnd < 0) throw new Error('could not locate buildFoodExplanationPrompt');
+if (promptStart < 0 || promptEnd < 0) throw new Error('could not locate food explanation prompt helpers');
 
 const block = `
 const fs = require('fs');
@@ -3907,6 +3907,7 @@ function loggedNutriFallback(barcode) {
     proteinDisplay: 10,
     sugarTier: 'medium',
     sodiumTier: 'medium',
+    proteinTier: 'high',
     additivesCount: 0,
     isOrganic: 'no',
     novaGroup: 4,
@@ -3917,13 +3918,80 @@ function loggedNutriFallback(barcode) {
   // generateFoodExplanation returns model text; check the prompt builder instead
   const built = g.buildFoodExplanationPrompt({
     sugar: '15g', sodium: '500mg', protein: '10g',
-    sugarTier: 'medium', sodiumTier: 'medium',
+    sugarTier: 'medium', sodiumTier: 'medium', proteinTier: 'high',
     additivesPhrase: '0 additives', isOrganic: 'no',
     novaGroup: 4, ingredients: 'Oats', nutriScoreGrade: 'c',
     basisLabel: 'per serving',
   });
   assert(built.includes('per serving'), 'serving basis labeled per serving');
   assert(typeof prompt === 'string' && prompt.length > 0, 'explanation generated');
+}
+
+// Null nutrient → unknown tier (not low); omitted from explanation prompt
+{
+  const tiers = g.computeNutrientTiers(null, null, 12);
+  assert(tiers.sugarTier === 'unknown', 'null sugar → unknown, got ' + tiers.sugarTier);
+  assert(tiers.sodiumTier === 'unknown', 'null sodium → unknown, got ' + tiers.sodiumTier);
+  assert(tiers.proteinTier === 'high', '12g protein still high');
+  // Verified zero remains low — only null is unknown.
+  const zeroTiers = g.computeNutrientTiers(0, 0, 0);
+  assert(zeroTiers.sugarTier === 'low', '0g sugar is low, not unknown');
+  assert(zeroTiers.sodiumTier === 'low', '0g sodium is low, not unknown');
+  assert(zeroTiers.proteinTier === 'low', '0g protein is low, not unknown');
+
+  // Serving known but sodium missing → sodiumTier unknown, display null
+  const partial = g.resolveFoodServingNutrition({
+    proteins_100g: 10,
+    sugars_100g: 8,
+    // sodium_100g absent
+    proteins_serving: 5,
+    sugars_serving: 4,
+  }, null);
+  assert(partial.servingKnown === true, 'partial serving still known');
+  assert(partial.sodiumDisplay === null, 'missing sodium display null');
+  assert(partial.sodiumTier === 'unknown', 'missing sodium tier unknown, got ' + partial.sodiumTier);
+  assert(partial.sugarTier === 'low', '4g sugar/serving is low');
+
+  const omitPrompt = g.buildFoodExplanationPrompt({
+    sugar: '4g',
+    sodium: null,
+    protein: '5g',
+    sugarTier: 'low',
+    sodiumTier: 'unknown',
+    proteinTier: 'low',
+    additivesPhrase: '0 additives',
+    isOrganic: 'no',
+    novaGroup: 4,
+    ingredients: 'Oats',
+    nutriScoreGrade: 'c',
+    basisLabel: 'per serving',
+  });
+  assert(omitPrompt.includes('sugar 4g per serving (low tier)'), 'known sugar kept in prompt');
+  assert(omitPrompt.includes('protein 5g per serving'), 'known protein kept in prompt');
+  const omitDataLine = omitPrompt.split('\n').find(l => l.startsWith('Product data:'));
+  assert(omitDataLine && !/sodium/.test(omitDataLine),
+    'null/unknown sodium must be omitted from Product data line: ' + omitDataLine);
+  assert(!/N\/A/.test(omitDataLine), 'prompt must not say N/A for omitted nutrient');
+  assert(!/unknown tier/.test(omitDataLine), 'prompt must not state unknown tier');
+
+  const naPrompt = g.buildFoodExplanationPrompt({
+    sugar: 'N/A',
+    sodium: '500mg',
+    protein: 'N/A',
+    sugarTier: 'unknown',
+    sodiumTier: 'medium',
+    proteinTier: 'unknown',
+    additivesPhrase: '1 additives',
+    isOrganic: 'no',
+    novaGroup: 4,
+    ingredients: 'Salt',
+    nutriScoreGrade: 'd',
+    basisLabel: 'per serving',
+  });
+  const naDataLine = naPrompt.split('\n').find(l => l.startsWith('Product data:'));
+  assert(naDataLine.includes('sodium 500mg per serving (medium tier)'), 'known sodium kept');
+  assert(!/\bsugar\b/.test(naDataLine), 'N/A sugar omitted from Product data');
+  assert(!/\bprotein\b/.test(naDataLine), 'N/A protein omitted from Product data');
 }
 
 console.log = origLog;
