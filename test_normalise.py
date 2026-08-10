@@ -2878,7 +2878,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '4', 'SCAN_LOGIC_VERSION must be 4, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '5', 'SCAN_LOGIC_VERSION must be 5, got ' + SCAN_LOGIC_VERSION);
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -2910,6 +2910,10 @@ const orgStart = src.indexOf('function resolveOrganicStatus');
 const orgEnd = src.indexOf('function parseServingQuantity');
 if (orgStart < 0 || orgEnd < 0) throw new Error('could not locate organic helpers');
 
+const extractStart = src.indexOf("// OFF's additives_tags is a curated subset");
+const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
+if (extractStart < 0 || extractEnd < 0) throw new Error('could not locate extractAdditiveCodes helpers');
+
 const block = `
 const fs = require('fs');
 const path = require('path');
@@ -2927,6 +2931,7 @@ ${src.slice(nutStart, nutEnd)}
 ${src.slice(scoreStart, scoreEnd)}
 ${src.slice(orgStart, orgEnd)}
 ${src.slice(fmtStart, fmtEnd)}
+${src.slice(extractStart, extractEnd)}
 ${src.slice(addDispStart, foodExplainStart)}
 ${src.slice(foodFnStart, foodFnEnd)}
 module.exports = {
@@ -2944,7 +2949,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '4', 'exported SCAN_LOGIC_VERSION must be 4');
+assert(g.SCAN_LOGIC_VERSION === '5', 'exported SCAN_LOGIC_VERSION must be 5');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -2999,7 +3004,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '4', 'normal food stamps logic version 4');
+  assert(result.scanLogicVersion === '5', 'normal food stamps logic version 5');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -3044,7 +3049,7 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '4', 'Dawn stamps logic version 4');
+  assert(result.scanLogicVersion === '5', 'Dawn stamps logic version 5');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3093,6 +3098,214 @@ console.log('phase0 no nutrition ok');
         sys.stderr.write(proc.stderr)
         raise AssertionError(
             f"phase0 no-nutrition assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
+def test_additives_universal_extraction():
+    """Union additives_tags with per-ingredient E-numbers; suffix fallback; diet warnings."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+assert(logicMatch[1] === '5', 'SCAN_LOGIC_VERSION must be 5, got ' + logicMatch[1]);
+
+const mapStart = src.indexOf('const additiveMap =');
+const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
+if (mapStart < 0 || extractEnd < 0) throw new Error('could not locate additive helpers');
+
+const dietStart = src.indexOf('function detectDietWarnings');
+const dietEnd = src.indexOf('// Core scan logic, extracted so both the /scan route');
+if (dietStart < 0 || dietEnd < 0) throw new Error('could not locate detectDietWarnings');
+
+// Sites 4/5 must request ingredients so the helper has data to union.
+assert(
+  /fields=[^`'"]*additives_tags[^`'"]*ingredients/.test(src) ||
+  /fields=[^`'"]*ingredients[^`'"]*additives_tags/.test(src),
+  'search/alternatives fields must include ingredients alongside additives_tags'
+);
+assert(
+  (src.match(/fields=[^`'"]*ingredients/g) || []).length >= 2,
+  'both alternatives and /search field lists must include ingredients'
+);
+
+// Scoring must stay risk-weighted (not raw additivesCount).
+const calcStart = src.indexOf('function calculateScore');
+const calcEnd = src.indexOf('function getScoreBreakdown');
+const calcBody = src.slice(calcStart, calcEnd);
+assert(calcBody.includes('riskLevel'), 'calculateScore must use risk levels');
+assert(!/additivesCount\s*[<>]=?/.test(calcBody),
+  'calculateScore must not threshold on raw additivesCount');
+
+const block = `
+${src.slice(mapStart, extractEnd)}
+${src.slice(dietStart, dietEnd)}
+module.exports = {
+  extractAdditiveCodes,
+  resolveAdditiveLookupKey,
+  additiveDisplayName,
+  additiveRiskDetails,
+  detectDietWarnings,
+  additiveMap,
+  additiveDetails,
+};
+`;
+fs.writeFileSync('/tmp/additives_universal_helpers.js', block);
+delete require.cache['/tmp/additives_universal_helpers.js'];
+const g = require('/tmp/additives_universal_helpers.js');
+
+function sorted(arr) { return [...arr].sort(); }
+
+// 1. Liquid I.V. shape — tags subset + ingredient taxonomy → 6 unique codes
+{
+  const product = {
+    additives_tags: ['en:e330', 'en:e960'],
+    ingredients: [
+      { id: 'en:water', text: 'Water' },
+      { id: 'en:e330', text: 'Citric acid' },
+      { id: 'en:e332ii', text: 'Dipotassium citrate' },
+      { id: 'en:e551', text: 'Silicon dioxide' },
+      { id: 'en:e960', text: 'Steviol glycosides' },
+      { id: 'en:e300', text: 'Vitamin C' },
+      { id: 'en:e375', text: 'Niacin' },
+    ],
+  };
+  const codes = g.extractAdditiveCodes(product);
+  assert(codes.length === 6, 'Liquid I.V. must yield 6 codes, got ' + codes.length + ': ' + codes);
+  assert(sorted(codes).join(',') === 'e300,e330,e332ii,e375,e551,e960',
+    'Liquid I.V. codes mismatch: ' + sorted(codes));
+}
+
+// 2. Already complete — identical tags and ingredient codes → no double-count
+{
+  const product = {
+    additives_tags: ['en:e330', 'en:e960'],
+    ingredients: [
+      { id: 'en:e330' },
+      { id: 'en:e960' },
+    ],
+  };
+  const codes = g.extractAdditiveCodes(product);
+  assert(codes.length === 2, 'complete product must stay at 2, got ' + codes.length);
+  assert(sorted(codes).join(',') === 'e330,e960', 'complete codes: ' + sorted(codes));
+}
+
+// 3. Tags only — ingredients absent → fall back to tags, no throw
+{
+  const codes = g.extractAdditiveCodes({ additives_tags: ['en:e330', 'en:e211'] });
+  assert(codes.length === 2, 'tags-only count');
+  assert(sorted(codes).join(',') === 'e211,e330', 'tags-only codes');
+}
+
+// 4. Ingredients only — empty additives_tags, E-numbers in ingredients[]
+{
+  const codes = g.extractAdditiveCodes({
+    additives_tags: [],
+    ingredients: [{ id: 'en:e551' }, { id: 'en:e300' }],
+  });
+  assert(codes.length === 2, 'ingredients-only count');
+  assert(sorted(codes).join(',') === 'e300,e551', 'ingredients-only codes');
+}
+
+// 5. Nested — E-number two levels deep
+{
+  const codes = g.extractAdditiveCodes({
+    additives_tags: [],
+    ingredients: [
+      {
+        id: 'en:flavoring',
+        ingredients: [
+          {
+            id: 'en:natural-flavour',
+            ingredients: [{ id: 'en:e160a' }],
+          },
+        ],
+      },
+    ],
+  });
+  assert(codes.includes('e160a'), 'nested e160a must be found, got ' + codes);
+  assert(codes.length === 1, 'nested must not invent extras');
+}
+
+// 6. Suffixed — e332ii resolves name via e332 fallback, not "E332II"
+{
+  assert(g.additiveDisplayName('e332ii') === 'Potassium Citrate',
+    'e332ii must resolve to Potassium Citrate, got ' + g.additiveDisplayName('e332ii'));
+  assert(g.additiveDisplayName('e332ii') !== 'E332II', 'must not render raw E332II');
+  const details = g.additiveRiskDetails('e332ii');
+  assert(details && details.riskLevel === 'safe', 'e332ii must inherit e332 risk');
+}
+
+// 7. No additives at all
+{
+  const codes = g.extractAdditiveCodes({
+    additives_tags: [],
+    ingredients: [{ id: 'en:water' }, { id: 'en:sugar' }],
+  });
+  assert(codes.length === 0, 'plain product must be 0, got ' + codes.length);
+  assert(Array.isArray(codes), 'must return array');
+}
+
+// 8. Diet warnings — e120 only in ingredients[], vegan profile → warning
+{
+  const product = {
+    additives_tags: [],
+    ingredients: [{ id: 'en:e120', text: 'Carmine' }],
+    ingredients_text: 'Water, colour',
+    labels_tags: [],
+    allergens_tags: [],
+    traces_tags: [],
+  };
+  const warning = g.detectDietWarnings(product, 'vegan');
+  assert(warning && /carmine/i.test(warning),
+    'vegan + e120 in ingredients[] must warn, got: ' + JSON.stringify(warning));
+  assert(/not compatible with vegan/i.test(warning), 'must mention vegan incompatibility');
+}
+
+// 9. Malformed — ingredients string / items without id → no throw, tags fallback
+{
+  let codes;
+  try {
+    codes = g.extractAdditiveCodes({
+      additives_tags: ['en:e330'],
+      ingredients: 'citric acid',
+    });
+  } catch (err) {
+    throw new Error('ingredients string must not throw: ' + err.message);
+  }
+  assert(codes.length === 1 && codes[0] === 'e330', 'string ingredients → tags fallback');
+
+  try {
+    codes = g.extractAdditiveCodes({
+      additives_tags: ['en:e211'],
+      ingredients: [{ text: 'sodium benzoate' }, null, 42, { id: 123 }],
+    });
+  } catch (err) {
+    throw new Error('malformed items must not throw: ' + err.message);
+  }
+  assert(codes.length === 1 && codes[0] === 'e211', 'malformed items → tags fallback');
+}
+
+console.log('additives universal extraction ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"additives universal assertions failed (exit {proc.returncode})"
         )
     print(proc.stdout.strip())
 
@@ -3425,6 +3638,7 @@ def main() -> int:
         test_health_endpoint,
         test_cosmetic_explanation_uses_we_voice,
         test_phase0_no_nutrition,
+        test_additives_universal_extraction,
         test_phase0_batch_c,
     ]
     failed = 0

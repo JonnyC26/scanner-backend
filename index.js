@@ -51,7 +51,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '4';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '5';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1821,6 +1821,94 @@ const additiveDetails = {
   'e1200': { category: 'Bulking agent', riskLevel: 'safe', description: 'Polydextrose is a synthetic soluble fiber made from glucose, sorbitol, and citric acid. It is used as a bulking agent and fat replacer in low-calorie foods. It acts as a prebiotic, feeding beneficial gut bacteria, and may help with blood sugar regulation. It is considered safe by all major regulatory agencies.', learnMoreUrl: 'https://en.wikipedia.org/wiki/Polydextrose' },
 };
 
+// OFF's additives_tags is a curated subset. Its per-ingredient taxonomy IDs
+// carry E-numbers it omits from that field (vitamins, some salts). Union both.
+function extractAdditiveCodes(product) {
+  const codes = new Set();
+
+  for (const tag of (product && product.additives_tags) || []) {
+    if (tag == null) continue;
+    const key = String(tag).replace(/^en:/i, '').toLowerCase();
+    if (key) codes.add(key);
+  }
+
+  function walk(items) {
+    if (!Array.isArray(items)) return;
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const id = item.id;
+      if (typeof id === 'string' && /^en:e\d+/i.test(id)) {
+        codes.add(id.replace(/^en:/i, '').toLowerCase());
+      }
+      if (item.ingredients) walk(item.ingredients);
+    }
+  }
+
+  try {
+    walk(product && product.ingredients);
+  } catch (_) {
+    // Malformed ingredients must never break additive extraction.
+  }
+
+  return [...codes];
+}
+
+// OFF emits sub-forms (e332ii, e160ai). Prefer the exact code when named;
+// otherwise fall back to the base number / letter form for map lookups.
+function resolveAdditiveLookupKey(code) {
+  const key = String(code || '').replace(/^en:/i, '').toLowerCase();
+  if (!key) return key;
+  if (additiveMap[key] || additiveDetails[key]) return key;
+
+  // Strip trailing roman-numeral form suffixes: e332ii → e332, e160ai → e160a
+  let stripped = key.replace(/(?:viii|vii|vi|iv|ix|iii|ii|i)$/i, '');
+  if (stripped !== key && (additiveMap[stripped] || additiveDetails[stripped])) {
+    return stripped;
+  }
+
+  // Digits + single class letter: e160ai → e160a
+  const withLetter = key.match(/^(e\d+[a-z])/i);
+  if (withLetter && (additiveMap[withLetter[1]] || additiveDetails[withLetter[1]])) {
+    return withLetter[1].toLowerCase();
+  }
+
+  // Base number only: e332ii → e332
+  const baseNum = key.match(/^(e\d+)/i);
+  if (baseNum && (additiveMap[baseNum[1]] || additiveDetails[baseNum[1]])) {
+    return baseNum[1].toLowerCase();
+  }
+
+  return key;
+}
+
+function additiveDisplayName(code) {
+  const key = String(code || '').replace(/^en:/i, '').toLowerCase();
+  const lookup = resolveAdditiveLookupKey(key);
+  return additiveMap[lookup] || key.toUpperCase();
+}
+
+function additiveRiskDetails(code) {
+  const key = String(code || '').replace(/^en:/i, '').toLowerCase();
+  const lookup = resolveAdditiveLookupKey(key);
+  return additiveDetails[lookup] || additiveDetails[key];
+}
+
+// Animal-derived E-numbers that conflict with vegan / vegetarian profiles.
+// Matched on exact code or numeric base (e120ii → e120) — not prefixes
+// (e120 must not match e1200).
+const ANIMAL_ADDITIVE_BASES = new Set(['e120', 'e901', 'e904']);
+function findAnimalDerivedAdditive(codes) {
+  for (const code of codes || []) {
+    const key = String(code || '').replace(/^en:/i, '').toLowerCase();
+    if (ANIMAL_ADDITIVE_BASES.has(key)) return key;
+    const base = key.match(/^(e\d+)/i);
+    if (base && ANIMAL_ADDITIVE_BASES.has(base[1].toLowerCase())) {
+      return base[1].toLowerCase();
+    }
+  }
+  return null;
+}
+
 // OFF's top-level category tags are too broad to produce relevant comparisons —
 // matching only on one of these would compare e.g. a protein bar against bottled
 // water. If a product's only available tags are this generic, skip recommendations
@@ -1852,7 +1940,7 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   }
 
   const searchRes = await fetch(
-    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&countries_tags_en=United States&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,image_front_url,image_url,categories_tags`,
+    `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&countries_tags_en=United States&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,ingredients,labels_tags,nutriments,image_front_url,image_url,categories_tags`,
     { headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' } }
   );
   if (!searchRes.ok) {
@@ -1871,14 +1959,14 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
     .map(p => {
       const pNutriScore = p.nutriscore_grade || 'c';
       const pNovaGroup = p.nova_group || 3;
-      const pAdditivesCount = (p.additives_tags || []).length;
+      const pAdditiveCodes = extractAdditiveCodes(p);
+      const pAdditivesCount = pAdditiveCodes.length;
       const pIsOrganic = p.labels_tags?.includes('en:organic') || false;
       const pProtein = p.nutriments?.proteins_100g || 0;
       const pSugar = p.nutriments?.sugars_100g || 0;
       const pSodium = p.nutriments?.sodium_100g || 0;
-      const pAdditiveList = (p.additives_tags || []).map(a => {
-        const key = a.replace('en:', '').toLowerCase();
-        const details = additiveDetails[key];
+      const pAdditiveList = pAdditiveCodes.map(a => {
+        const details = additiveRiskDetails(a);
         return { riskLevel: details?.riskLevel || 'safe' };
       });
       const pScore = calculateScore(pNutriScore, pNovaGroup, pAdditivesCount, pIsOrganic, pProtein, pSugar, pSodium, pAdditiveList);
@@ -1925,7 +2013,8 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
 
 // Diet warning detection — checks a product against the user's dietary
 // preferences and returns a human-readable warning string, or empty string
-// if no conflicts. Uses OFF's labels_tags, ingredients_text, and additives_tags.
+// if no conflicts. Uses OFF's labels_tags, ingredients_text, and additive codes
+// (additives_tags unioned with per-ingredient taxonomy IDs).
 function detectDietWarnings(product, healthProfile) {
   if (!healthProfile || healthProfile.trim() === '') return '';
   const prefs = new Set(healthProfile.split(',').map(s => s.trim()).filter(Boolean));
@@ -1933,7 +2022,7 @@ function detectDietWarnings(product, healthProfile) {
 
   const labels = product.labels_tags || [];
   const ingredients = (product.ingredients_text || '').toLowerCase();
-  const additives = (product.additives_tags || []).map(a => a.replace('en:', '').toLowerCase());
+  const additives = extractAdditiveCodes(product);
   const allergens = (product.allergens_tags || []).map(a => a.replace('en:', '').toLowerCase());
   const traces = (product.traces_tags || []).map(t => t.replace('en:', '').toLowerCase());
 
@@ -1951,6 +2040,15 @@ function detectDietWarnings(product, healthProfile) {
         'casein', 'lactose', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn'];
       const found = animalTerms.find(t => ingredients.includes(t) || allergens.includes(t));
       if (found) warnings.push(`Contains ${found} — not compatible with vegan diet`);
+      // Animal-derived additives (e.g. E120 carmine) often appear only in
+      // ingredients[] taxonomy IDs, not additives_tags — check both via helper.
+      else {
+        const animalAdd = findAnimalDerivedAdditive(additives);
+        if (animalAdd) {
+          const name = additiveDisplayName(animalAdd).toLowerCase();
+          warnings.push(`Contains ${name} — not compatible with vegan diet`);
+        }
+      }
     }
   }
 
@@ -1964,6 +2062,13 @@ function detectDietWarnings(product, healthProfile) {
         'fish', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn', 'gelatin', 'gelatine', 'lard'];
       const found = meatTerms.find(t => ingredients.includes(t) || allergens.includes(t));
       if (found) warnings.push(`Contains ${found} — not compatible with vegetarian diet`);
+      else {
+        const animalAdd = findAnimalDerivedAdditive(additives);
+        if (animalAdd) {
+          const name = additiveDisplayName(animalAdd).toLowerCase();
+          warnings.push(`Contains ${name} — not compatible with vegetarian diet`);
+        }
+      }
     }
   }
 
@@ -2474,7 +2579,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
       nutriScore: product.nutriscore_grade || null,
       novaGroup: product.nova_group || null,
       additivesCount: formatAdditivesCountDisplay(
-        (product.additives_tags || []).length,
+        extractAdditiveCodes(product).length,
         ingredients
       ),
       isOrganic: formatOrganicDisplay(organicStatus),
@@ -2515,18 +2620,15 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
 
   const nutriScore = product.nutriscore_grade || 'c';
   const novaGroup = product.nova_group || 3;
-  const additiveTags = product.additives_tags || [];
+  const additiveTags = extractAdditiveCodes(product);
   const additivesCount = additiveTags.length;
 
-  const additiveNames = additiveTags.map(a => {
-    const key = a.replace('en:', '').toLowerCase();
-    return additiveMap[key] || key.toUpperCase();
-  }).join(', ') || '';
+  const additiveNames = additiveTags.map(a => additiveDisplayName(a)).join(', ') || '';
 
   const additiveList = additiveTags.map(a => {
-    const key = a.replace('en:', '').toLowerCase();
-    const name = additiveMap[key] || key.toUpperCase();
-    const details = additiveDetails[key];
+    const key = String(a).replace(/^en:/i, '').toLowerCase();
+    const name = additiveDisplayName(key);
+    const details = additiveRiskDetails(key);
     return {
       code: key,
       name: name,
@@ -4082,7 +4184,7 @@ app.get('/search', async (req, res) => {
   }
 
   try {
-    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,image_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,labels_tags,nutriments,serving_quantity,ingredients_text,allergens_tags,traces_tags&page_size=20&json=1`;
+    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,image_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,ingredients,labels_tags,nutriments,serving_quantity,ingredients_text,allergens_tags,traces_tags&page_size=20&json=1`;
     const response = await fetch(searchUrl);
     if (!response.ok) {
       console.error(`Search-a-licious returned ${response.status}`);
@@ -4095,7 +4197,8 @@ app.get('/search', async (req, res) => {
       .map(p => {
         const nutriScore = p.nutriscore_grade;
         const novaGroup = p.nova_group;
-        const additivesCount = (p.additives_tags || []).length;
+        const searchAdditiveCodes = extractAdditiveCodes(p);
+        const additivesCount = searchAdditiveCodes.length;
         const organicStatus = resolveOrganicStatus(p.labels_tags);
         const isOrganicForScore = organicStatus === 'yes';
         const proteinRaw = p.nutriments?.proteins_100g ?? null;
@@ -4104,9 +4207,8 @@ app.get('/search', async (req, res) => {
         const protein = proteinRaw ?? 0;
         const sugar = sugarRaw ?? 0;
         const sodium = sodiumRaw ?? 0;
-        const searchAdditiveList = (p.additives_tags || []).map(a => {
-          const key = a.replace('en:', '').toLowerCase();
-          const details = additiveDetails[key];
+        const searchAdditiveList = searchAdditiveCodes.map(a => {
+          const details = additiveRiskDetails(a);
           return { riskLevel: details?.riskLevel || 'safe' };
         });
 
