@@ -772,6 +772,44 @@ global.fetch = async function (...args) {
   assert(rescorePhotoCachedDocument({ source: 'photo' }) === null);
 }
 
+// --- Batch 2: food photo entry must not be re-scored as cosmetic ---
+{
+  const foodPhoto = {
+    productType: 'food',
+    source: 'photo',
+    productName: 'Sprouts Tortillas',
+    ingredients: 'Wheat flour, water, salt, canola oil',
+    score: null,
+    scoreLabel: 'Not enough data',
+    scoreColor: '#9E9E9E',
+    photoParsedCount: 0,
+    photoCapturedAt: 222222,
+    photoCapturedBy: 'uid-food',
+    explanation: "We read the ingredients from your photo, but we can't score a food product from its label alone — we need nutrition information too.",
+    imageUrl: '',
+    tableVersion: '0.4',
+    cachedAt: Date.now() - (60 * 24 * 60 * 60 * 1000),
+  };
+  const beforeFetch = fetchCalls;
+  const foodRescored = rescorePhotoCachedDocument(foodPhoto);
+  assert(foodRescored, 'expected food photo rescore payload');
+  assert(fetchCalls === beforeFetch, 'food photo rescore must not call fetch');
+  assert(foodRescored.responseData.productType === 'food',
+    'food photo must stay food, got ' + foodRescored.responseData.productType);
+  assert(foodRescored.responseData.score === null, 'food photo score must stay null');
+  assert(foodRescored.responseData.scoreLabel === 'Not enough data', 'food scoreLabel');
+  assert(foodRescored.responseData.scoreColor === '#9E9E9E', 'food grey scoreColor');
+  assert(foodRescored.responseData.ingredients === foodPhoto.ingredients,
+    'food ingredients text preserved');
+  const foodList = JSON.parse(foodRescored.responseData.ingredientList || '[]');
+  assert(Array.isArray(foodList) && foodList.length === 0,
+    'food photo ingredientList must stay empty');
+  assert(foodRescored.responseData.explanation &&
+    foodRescored.responseData.explanation.includes('nutrition information'),
+    'food photo keeps fixed nutrition explanation');
+  assert(foodRescored.scored.coverageMatched === 0, 'no cosmetic coverage on food rescore');
+}
+
 // --- FIX 2: stale beats nothing when re-scan throws ---
 {
   const stale = {
@@ -1413,7 +1451,8 @@ assert(photoParsedCountWithin50Percent(0, 5) === true);
     'must log PHOTO CACHE REPLACED UNSCOREABLE');
   assert(src.includes('[PHOTO CACHE KEPT UPSTREAM]'),
     'must still log PHOTO CACHE KEPT UPSTREAM for usable upstream');
-  const keptIdx = src.indexOf('if (existing && existing.source !== \'photo\' && !isHousehold)');
+  // Cosmetic photo only — food/household photo results always write (no score fight).
+  const keptIdx = src.indexOf('if (existing && existing.source !== \'photo\' && isCosmeticPhoto)');
   assert(keptIdx > 0, 'photo upstream keep/replace block missing');
   const slice = src.slice(keptIdx, keptIdx + 900);
   assert(slice.includes('isUnscoreableCacheEntry(existing)'),
@@ -2948,7 +2987,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '6', 'SCAN_LOGIC_VERSION must be 6, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '7', 'SCAN_LOGIC_VERSION must be 7, got ' + SCAN_LOGIC_VERSION);
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -3019,7 +3058,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '6', 'exported SCAN_LOGIC_VERSION must be 6');
+assert(g.SCAN_LOGIC_VERSION === '7', 'exported SCAN_LOGIC_VERSION must be 7');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3074,7 +3113,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '6', 'normal food stamps logic version 6');
+  assert(result.scanLogicVersion === '7', 'normal food stamps logic version 7');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -3119,7 +3158,7 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '6', 'Dawn stamps logic version 6');
+  assert(result.scanLogicVersion === '7', 'Dawn stamps logic version 7');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3185,7 +3224,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '6', 'SCAN_LOGIC_VERSION must be 6, got ' + logicMatch[1]);
+assert(logicMatch[1] === '7', 'SCAN_LOGIC_VERSION must be 7, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -3697,7 +3736,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '6', 'SCAN_LOGIC_VERSION must be 6, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '7', 'SCAN_LOGIC_VERSION must be 7, got ' + SCAN_LOGIC_VERSION);
 
 // ?? 40 must remain — instrumentation only, no score redesign.
 assert(/nutriPoints\[nutriScore\?\.toLowerCase\(\)\]/.test(src) ||
@@ -4308,6 +4347,219 @@ const ADMIN_ROUTES = [
     print(proc.stdout.strip())
 
 
+def test_batch2_classification():
+    """Photo/search must not assume productType; food photo unscored; search uses tags."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+assert(logicMatch[1] === '7', 'SCAN_LOGIC_VERSION must be 7, got ' + logicMatch[1]);
+
+// --- Source: /scan/photo resolves type before scoring ---
+const photoStart = src.indexOf("app.post('/scan/photo'");
+const photoEnd = src.indexOf("app.get('/image/:barcode'");
+assert(photoStart >= 0 && photoEnd > photoStart, 'locate /scan/photo');
+const photoBody = src.slice(photoStart, photoEnd);
+assert(photoBody.includes('resolveProductType'), '/scan/photo must call resolveProductType');
+assert(photoBody.includes("resolvedType === 'food'") || photoBody.includes('isFoodPhoto'),
+  '/scan/photo must branch on food');
+assert(photoBody.includes('buildFoodPhotoScanResponse'),
+  '/scan/photo must use buildFoodPhotoScanResponse for food');
+assert(photoBody.includes('buildHouseholdScanResponse'),
+  '/scan/photo must use household builder');
+// Scoring only on cosmetic path
+assert(photoBody.includes('isCosmeticPhoto ? scoreCosmeticProduct'),
+  'cosmetic scoring must be gated behind isCosmeticPhoto');
+assert(!/productType:\s*'cosmetic'/.test(
+  photoBody.slice(0, photoBody.indexOf('isFoodPhoto'))
+), 'must not hardcode cosmetic before classification');
+
+// --- Source: /search requests categories_tags and classifies ---
+const searchStart = src.indexOf("app.get('/search'");
+const searchEnd = src.indexOf('const PRESCORE_SECRET');
+assert(searchStart >= 0 && searchEnd > searchStart, 'locate /search');
+const searchBody = src.slice(searchStart, searchEnd);
+assert(searchBody.includes('categories_tags'), '/search fields must include categories_tags');
+assert(searchBody.includes('classifySearchProductType'),
+  '/search must classify via classifySearchProductType');
+assert(searchBody.includes('productType'), '/search results must include productType');
+
+// --- Extract helpers for behavioural tests ---
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
+const fragStart = src.indexOf('const COSMETIC_CATEGORY_FRAGMENTS');
+const fragEnd = src.indexOf('async function resolveProductType');
+if (fragStart < 0 || fragEnd < 0) throw new Error('could not locate category fragments');
+const helperStart = src.indexOf('// Photo-rescued cache docs have no upstream');
+const helperEnd = src.indexOf('async function scanAndCache(barcode');
+if (helperStart < 0 || helperEnd < 0) throw new Error('could not locate photo cache helpers');
+
+const scoreStart = src.indexOf('function calculateScore');
+const scoreEnd = src.indexOf('// OFF labels_tags is crowd-entered');
+if (scoreStart < 0 || scoreEnd < 0) throw new Error('could not locate calculateScore');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = process.cwd();
+const SCAN_LOGIC_VERSION = '7';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(fragStart, fragEnd)}
+${src.slice(helperStart, helperEnd)}
+${src.slice(scoreStart, scoreEnd)}
+module.exports = {
+  buildFoodPhotoScanResponse,
+  buildHouseholdScanResponse,
+  FOOD_PHOTO_EXPLANATION,
+  classifySearchProductType,
+  tagIndicatesCosmetic,
+  tagIndicatesHousehold,
+  rescorePhotoCachedDocument,
+  scoreCosmeticProduct,
+  calculateScore,
+  SCAN_LOGIC_VERSION,
+};
+`;
+fs.writeFileSync('/tmp/batch2_helpers.js', block);
+delete require.cache['/tmp/batch2_helpers.js'];
+const g = require('/tmp/batch2_helpers.js');
+
+// 1. Food photo response shape — no cosmetic scoring
+{
+  const food = g.buildFoodPhotoScanResponse({
+    productName: 'Sprouts Tortillas',
+    ingredients: 'Wheat flour, water, salt, canola oil',
+  });
+  assert(food.productType === 'food', 'food photo type');
+  assert(food.score === null, 'food photo score null');
+  assert(food.scoreLabel === 'Not enough data', 'food photo scoreLabel');
+  assert(food.scoreColor === '#9E9E9E', 'food photo grey');
+  assert(food.ingredients === 'Wheat flour, water, salt, canola oil', 'ingredients text');
+  const list = JSON.parse(food.ingredientList);
+  assert(Array.isArray(list) && list.length === 0, 'empty ingredientList');
+  assert(food.explanation === g.FOOD_PHOTO_EXPLANATION, 'fixed food photo explanation');
+  assert(food.explanation.includes('nutrition information'), 'mentions nutrition');
+}
+
+// 2. Cosmetic photo path still scores (helper behaviour unchanged)
+{
+  const scored = g.scoreCosmeticProduct({
+    ingredients_text: 'Aqua, Glycerin, Phenoxyethanol',
+  });
+  assert(typeof scored.score === 'number' || scored.score === null, 'cosmetic still scores');
+  assert(scored.coverageTotal >= 2, 'cosmetic coverage from INCI');
+}
+
+// 3. Household builder still household
+{
+  const hh = g.buildHouseholdScanResponse({
+    productName: 'Dawn',
+    ingredients: 'Water, surfactants',
+  });
+  assert(hh.productType === 'household', 'household type');
+  assert(hh.score === null, 'household score null');
+}
+
+// 4. No-barcode cosmetic assumption: route still has productType cosmetic branch
+assert(photoBody.includes("productType: 'cosmetic'"),
+  'no-barcode / cosmetic branch still assigns cosmetic');
+
+// 5. rescorePhotoCachedDocument leaves food as food
+{
+  const rescored = g.rescorePhotoCachedDocument({
+    productType: 'food',
+    source: 'photo',
+    productName: 'Tortillas',
+    ingredients: 'Wheat flour, water',
+    score: null,
+    scoreLabel: 'Not enough data',
+    photoCapturedAt: 1,
+    photoCapturedBy: 'u',
+  });
+  assert(rescored.responseData.productType === 'food', 'rescore keeps food');
+  assert(rescored.responseData.score === null, 'rescore food score null');
+  const list = JSON.parse(rescored.responseData.ingredientList || '[]');
+  assert(list.length === 0, 'rescore food empty list');
+}
+
+// 6–9. Search classification via categories_tags
+{
+  assert(g.classifySearchProductType(['en:toothpastes', 'en:oral-care']) === 'cosmetic',
+    'toothpaste tags → cosmetic');
+  assert(g.classifySearchProductType(['en:shampoos']) === 'cosmetic',
+    'shampoo tags → cosmetic');
+  assert(g.classifySearchProductType(['en:dishwashing', 'en:cleaning-products']) === 'household',
+    'dishwashing → household');
+  assert(g.classifySearchProductType(['en:detergents']) === 'household',
+    'detergents → household');
+  assert(g.classifySearchProductType(['en:breads', 'en:plant-based-foods']) === 'food',
+    'bread tags → food');
+  assert(g.classifySearchProductType([]) === 'food', 'empty tags → food');
+  assert(g.classifySearchProductType(undefined) === 'food', 'missing tags → food');
+  assert(g.classifySearchProductType(null) === 'food', 'null tags → food');
+
+  // Household wins when both present
+  assert(
+    g.classifySearchProductType(['en:soaps', 'en:dishwashing']) === 'household',
+    'household wins over cosmetic tags'
+  );
+
+  // Mirror /search scoring gate
+  function searchScoreFor(tags) {
+    const productType = g.classifySearchProductType(tags);
+    if (productType === 'household' || productType === 'cosmetic') {
+      return { productType, score: null, scoreLabel: 'Not enough data', scoreColor: '#9E9E9E' };
+    }
+    const score = g.calculateScore('b', 3, 0, false, 5, 5, 0.1, []);
+    return {
+      productType,
+      score,
+      scoreLabel: score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad',
+      scoreColor: score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336',
+    };
+  }
+  const cos = searchScoreFor(['en:toothpastes']);
+  assert(cos.productType === 'cosmetic' && cos.score === null, 'search cosmetic unscored');
+  const hh = searchScoreFor(['en:laundry-detergent']);
+  assert(hh.productType === 'household' && hh.score === null, 'search household unscored');
+  const food = searchScoreFor(['en:yogurts']);
+  assert(food.productType === 'food' && typeof food.score === 'number', 'search food scored');
+  const unknown = searchScoreFor([]);
+  assert(unknown.productType === 'food' && typeof unknown.score === 'number',
+    'search unknown treated as food and scored');
+}
+
+// Hard check: photo handler must not set cosmetic before resolveProductType call.
+{
+  const resolveIdx = photoBody.indexOf('resolveProductType');
+  const firstCosmeticAssign = photoBody.indexOf("productType: 'cosmetic'");
+  assert(resolveIdx >= 0 && firstCosmeticAssign > resolveIdx,
+    'photo path must resolve type before any productType: cosmetic assignment');
+}
+
+console.log('batch2 classification ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(f"batch2 classification assertions failed (exit {proc.returncode})")
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -4337,6 +4589,7 @@ def main() -> int:
         test_phase0_batch_c,
         test_phase0_grading_honesty,
         test_batch1_security,
+        test_batch2_classification,
     ]
     failed = 0
     for test in tests:
