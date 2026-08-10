@@ -51,7 +51,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '5';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '6';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1610,10 +1610,15 @@ async function resolveProductType(barcode) {
   return { productType: 'food', product: foodProduct };
 }
 
-function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList) {
+function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, barcode) {
   // 60% Nutri-Score
   const nutriPoints = { 'a': 60, 'b': 50, 'c': 40, 'd': 30, 'e': 15 };
-  const nutriPts = nutriPoints[nutriScore?.toLowerCase()] ?? 40;
+  const mappedNutriPts = nutriPoints[nutriScore?.toLowerCase()];
+  // Keep assuming 40 (grade C) when Nutri-Score is missing — instrumentation only.
+  if (mappedNutriPts === undefined && barcode != null) {
+    console.log(`[NUTRI FALLBACK] barcode=${barcode} assumed 40`);
+  }
+  const nutriPts = mappedNutriPts ?? 40;
 
   // 30% Additives — risk-weighted, not count-based
   let additivePts = 30;
@@ -1649,6 +1654,7 @@ function getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, pro
 
   return {
     nutriScoreGrade: (nutriScore || 'unknown').toUpperCase(),
+    nutriScoreKnown: !!nutriScore,
     nutriPts, nutriMax: 60,
     additivesCount: additiveList ? additiveList.length : 0,
     additiveRisk,
@@ -1693,6 +1699,57 @@ function hasServingNutrientData(nutriments) {
   return nutriments.proteins_serving != null
     || nutriments.sugars_serving != null
     || nutriments.sodium_serving != null;
+}
+
+// Convert a per-100g nutrient to per-serving. Never disguise per-100g as serving.
+function toServing(val100g, servingVal, servingQuantity) {
+  if (val100g === null) return null;
+  if (servingVal != null) return servingVal;
+  if (servingQuantity) return val100g * servingQuantity / 100;
+  return null;
+}
+
+// Threshold values are unchanged — only which figure they are applied to.
+function computeNutrientTiers(sugarVal, sodiumVal, proteinVal) {
+  const sugar = sugarVal ?? 0;
+  const sodium = sodiumVal ?? 0;
+  const protein = proteinVal ?? 0;
+  return {
+    sugarTier: sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low',
+    sodiumTier: sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low',
+    proteinTier: protein >= 10 ? 'high' : 'low',
+  };
+}
+
+// Shared by /scan and /search so tiers and servingKnown stay aligned.
+function resolveFoodServingNutrition(nutriments, servingQuantityRaw) {
+  const servingQuantity = parseServingQuantity(servingQuantityRaw);
+  const servingKnown = hasServingNutrientData(nutriments) || servingQuantity != null;
+  const proteinRaw = nutriments?.proteins_100g ?? null;
+  const sugarRaw = nutriments?.sugars_100g ?? null;
+  const sodiumRaw = nutriments?.sodium_100g ?? null;
+  const proteinDisplay = toServing(proteinRaw, nutriments?.proteins_serving, servingQuantity);
+  const sugarDisplay = toServing(sugarRaw, nutriments?.sugars_serving, servingQuantity);
+  const sodiumDisplay = toServing(sodiumRaw, nutriments?.sodium_serving, servingQuantity);
+  // Tiers share a basis with the numbers shown: per-serving when known, else per-100g.
+  const tiers = computeNutrientTiers(
+    servingKnown ? sugarDisplay : sugarRaw,
+    servingKnown ? sodiumDisplay : sodiumRaw,
+    servingKnown ? proteinDisplay : proteinRaw,
+  );
+  return {
+    servingQuantity,
+    servingKnown,
+    proteinRaw,
+    sugarRaw,
+    sodiumRaw,
+    proteinDisplay,
+    sugarDisplay,
+    sodiumDisplay,
+    sugarTier: tiers.sugarTier,
+    sodiumTier: tiers.sodiumTier,
+    proteinTier: tiers.proteinTier,
+  };
 }
 
 function formatGrams(val) {
@@ -2214,6 +2271,7 @@ function buildFoodExplanationPrompt({
   novaGroup,
   ingredients,
   nutriScoreGrade,
+  basisLabel = 'per serving',
 }) {
   const grade = String(nutriScoreGrade || 'c').toLowerCase();
   const nutriGuidance =
@@ -2224,7 +2282,7 @@ function buildFoodExplanationPrompt({
         : 'The nutritional grade behind most of this score is relatively strong. You may mention a genuine benefit when supported by the data. Never say "Nutri-Score" or the letter grade.';
 
   return `Always write in the first-person plural ("we" / "we've" / "our"). Never use first-person singular ("I" / "I've" / "I'm" / "my").
-Product data: sugar ${sugar} per serving (${sugarTier} tier), sodium ${sodium} per serving (${sodiumTier} tier), protein ${protein} per serving, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}.
+Product data: sugar ${sugar} ${basisLabel} (${sugarTier} tier), sodium ${sodium} ${basisLabel} (${sodiumTier} tier), protein ${protein} ${basisLabel}, ${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}.
 Score context: ${nutriGuidance}
 In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The explanation must not contradict the score shown beside it. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration." PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters. Do not restate an overall product score or Excellent/Good/Poor/Bad tier.`;
 }
@@ -2272,6 +2330,12 @@ function fallbackExplanationForProductType(productType) {
   return FOOD_NO_INGREDIENTS_EXPLANATION;
 }
 
+function formatNutrientForPrompt(gramsVal, kind) {
+  if (gramsVal === null || gramsVal === undefined) return 'N/A';
+  if (kind === 'sodium') return `${Math.round(gramsVal * 1000)}mg`;
+  return `${Math.round(gramsVal * 10) / 10}g`;
+}
+
 async function generateFoodExplanation({
   sugarDisplay,
   sodiumDisplay,
@@ -2283,15 +2347,16 @@ async function generateFoodExplanation({
   novaGroup,
   ingredients,
   nutriScoreGrade,
+  basisLabel = 'per serving',
 }) {
   const hasIngredients = hasUsableIngredientText(ingredients);
   const additivesPhrase = !hasIngredients
     ? 'additives not known'
     : `${additivesCount} additives`;
   const prompt = buildFoodExplanationPrompt({
-    sugar: `${Math.round(sugarDisplay * 10) / 10}g`,
-    sodium: `${Math.round(sodiumDisplay * 1000)}mg`,
-    protein: `${Math.round(proteinDisplay * 10) / 10}g`,
+    sugar: formatNutrientForPrompt(sugarDisplay, 'sugar'),
+    sodium: formatNutrientForPrompt(sodiumDisplay, 'sodium'),
+    protein: formatNutrientForPrompt(proteinDisplay, 'protein'),
     sugarTier,
     sodiumTier,
     additivesPhrase,
@@ -2299,6 +2364,7 @@ async function generateFoodExplanation({
     novaGroup,
     ingredients,
     nutriScoreGrade,
+    basisLabel,
   });
   const explanation = await requestFoodExplanation(prompt);
   if (!hasUsableExplanation({ explanation })) {
@@ -2356,10 +2422,15 @@ async function generateExplanationFromCached(cached) {
     ? (() => { try { return JSON.parse(cached.scoreBreakdown || '{}'); } catch (_) { return {}; } })()
     : (cached.scoreBreakdown || {});
   const nutriScoreGrade = cached.nutriScore || breakdown.nutriScoreGrade || 'c';
+  // Match the number's basis: per-serving when known, otherwise the per-100g fields.
+  const basisLabel = cached.servingKnown ? 'per serving' : 'per 100g';
+  const sugar = cached.servingKnown ? cached.sugar : (cached.sugar100g || cached.sugar);
+  const sodium = cached.servingKnown ? cached.sodium : (cached.sodium100g || cached.sodium);
+  const protein = cached.servingKnown ? cached.protein : (cached.protein100g || cached.protein);
   const prompt = buildFoodExplanationPrompt({
-    sugar: cached.sugar,
-    sodium: cached.sodium,
-    protein: cached.protein,
+    sugar,
+    sodium,
+    protein,
     sugarTier: cached.sugarTier,
     sodiumTier: cached.sodiumTier,
     additivesPhrase,
@@ -2367,6 +2438,7 @@ async function generateExplanationFromCached(cached) {
     novaGroup: cached.novaGroup,
     ingredients: cached.ingredients || '',
     nutriScoreGrade,
+    basisLabel,
   });
   const explanation = await requestFoodExplanation(prompt);
   if (!hasUsableExplanation({ explanation })) {
@@ -2595,9 +2667,11 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
       sugarTier: null,
       sodiumTier: null,
       proteinTier: null,
+      nutriScoreKnown: !!(product.nutriscore_grade),
       score: null,
       scoreBreakdown: JSON.stringify({
         nutriScoreGrade: 'unknown',
+        nutriScoreKnown: !!(product.nutriscore_grade),
         nutriPts: null, nutriMax: 60,
         additivesCount: 0,
         additiveRisk: 'none',
@@ -2618,7 +2692,10 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     };
   }
 
-  const nutriScore = product.nutriscore_grade || 'c';
+  // Do not silently coerce missing Nutri-Score to 'c' before scoring — leave
+  // calculateScore's ?? 40 in place and surface the assumption via nutriScoreKnown.
+  const nutriScore = product.nutriscore_grade || null;
+  const nutriScoreKnown = !!nutriScore;
   const novaGroup = product.nova_group || 3;
   const additiveTags = extractAdditiveCodes(product);
   const additivesCount = additiveTags.length;
@@ -2641,22 +2718,26 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
 
   const organicStatus = resolveOrganicStatus(product.labels_tags);
   const isOrganicForScore = organicStatus === 'yes';
-  // Use null to distinguish "genuinely missing data" from "verified zero".
-  // The || 0 fallback caused missing values to display as "0g"/"0mg" which
-  // is misleading — someone with dietary restrictions could act on a false zero.
-  const proteinRaw = product.nutriments?.proteins_100g ?? null;
-  const sugarRaw = product.nutriments?.sugars_100g ?? null;
-  const sodiumRaw = product.nutriments?.sodium_100g ?? null;
+  const servingNutrition = resolveFoodServingNutrition(product.nutriments, product.serving_quantity);
+  const {
+    servingQuantity,
+    servingKnown,
+    proteinRaw,
+    sugarRaw,
+    sodiumRaw,
+    proteinDisplay,
+    sugarDisplay,
+    sodiumDisplay,
+    sugarTier,
+    sodiumTier,
+    proteinTier,
+  } = servingNutrition;
   // For scoring purposes, fall back to 0 when data is missing
   const protein = proteinRaw ?? 0;
   const sugar = sugarRaw ?? 0;
   const sodium = sodiumRaw ?? 0;
-  const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList);
+  const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList, barcode);
   const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList);
-
-  const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
-  const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
-  const proteinTier = protein >= 10 ? 'high' : 'low';
 
   let alternatives = [];
   if (score < 50) {
@@ -2669,19 +2750,6 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
 
   console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${organicStatus} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
 
-  const servingQuantity = parseServingQuantity(product.serving_quantity);
-  const servingKnown = hasServingNutrientData(product.nutriments) || servingQuantity != null;
-  const toServing = (val100g, servingVal) => {
-    if (val100g === null) return null;
-    if (servingVal != null) return servingVal;
-    if (servingQuantity) return val100g * servingQuantity / 100;
-    // Fallback keeps prior behaviour (may be per-100g disguised as serving).
-    return val100g;
-  };
-  const proteinDisplay = toServing(proteinRaw, product.nutriments?.proteins_serving);
-  const sugarDisplay = toServing(sugarRaw, product.nutriments?.sugars_serving);
-  const sodiumDisplay = toServing(sodiumRaw, product.nutriments?.sodium_serving);
-
   // Format display values — show "N/A" when data is genuinely missing
   const fmtProtein = formatGrams(proteinDisplay);
   const fmtSugar = formatGrams(sugarDisplay);
@@ -2690,6 +2758,12 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   const fmtSugar100g = formatGrams(sugarRaw);
   const fmtSodium100g = formatSodiumMg(sodiumRaw);
 
+  // Explanation numbers must share a basis with their tiers.
+  const basisLabel = servingKnown ? 'per serving' : 'per 100g';
+  const explainSugar = servingKnown ? sugarDisplay : sugarRaw;
+  const explainSodium = servingKnown ? sodiumDisplay : sodiumRaw;
+  const explainProtein = servingKnown ? proteinDisplay : proteinRaw;
+
   let explanation = null;
   const noIngredientData = !hasUsableIngredientText(ingredients);
   if (noIngredientData) {
@@ -2697,9 +2771,9 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     explanation = FOOD_NO_INGREDIENTS_EXPLANATION;
   } else if (!skipExplanation) {
     explanation = await generateFoodExplanation({
-      sugarDisplay,
-      sodiumDisplay,
-      proteinDisplay,
+      sugarDisplay: explainSugar,
+      sodiumDisplay: explainSodium,
+      proteinDisplay: explainProtein,
       sugarTier,
       sodiumTier,
       additivesCount,
@@ -2707,6 +2781,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
       novaGroup,
       ingredients,
       nutriScoreGrade: nutriScore,
+      basisLabel,
     });
   }
 
@@ -2720,6 +2795,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     additiveList: JSON.stringify(additiveList),
     ingredients: ingredients,
     nutriScore,
+    nutriScoreKnown,
     novaGroup,
     additivesCount: formatAdditivesCountDisplay(additivesCount, ingredients),
     isOrganic: formatOrganicDisplay(organicStatus),
@@ -4201,9 +4277,20 @@ app.get('/search', async (req, res) => {
         const additivesCount = searchAdditiveCodes.length;
         const organicStatus = resolveOrganicStatus(p.labels_tags);
         const isOrganicForScore = organicStatus === 'yes';
-        const proteinRaw = p.nutriments?.proteins_100g ?? null;
-        const sugarRaw = p.nutriments?.sugars_100g ?? null;
-        const sodiumRaw = p.nutriments?.sodium_100g ?? null;
+        const servingNutrition = resolveFoodServingNutrition(p.nutriments, p.serving_quantity);
+        const {
+          servingQuantity,
+          servingKnown,
+          proteinRaw,
+          sugarRaw,
+          sodiumRaw,
+          proteinDisplay,
+          sugarDisplay,
+          sodiumDisplay,
+          sugarTier,
+          sodiumTier,
+          proteinTier,
+        } = servingNutrition;
         const protein = proteinRaw ?? 0;
         const sugar = sugarRaw ?? 0;
         const sodium = sodiumRaw ?? 0;
@@ -4215,22 +4302,6 @@ app.get('/search', async (req, res) => {
         const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, searchAdditiveList);
         const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
         const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
-
-        const sugarTier = sugar >= 22.5 ? 'high' : sugar >= 5 ? 'medium' : 'low';
-        const sodiumTier = sodium >= 0.6 ? 'high' : sodium >= 0.12 ? 'medium' : 'low';
-        const proteinTier = protein >= 10 ? 'high' : 'low';
-
-        const servingQuantity = parseServingQuantity(p.serving_quantity);
-        const servingKnown = hasServingNutrientData(p.nutriments) || servingQuantity != null;
-        const toServing = (val100g, servingVal) => {
-          if (val100g === null) return null;
-          if (servingVal != null) return servingVal;
-          if (servingQuantity) return val100g * servingQuantity / 100;
-          return val100g;
-        };
-        const proteinDisplay = toServing(proteinRaw, p.nutriments?.proteins_serving);
-        const sugarDisplay = toServing(sugarRaw, p.nutriments?.sugars_serving);
-        const sodiumDisplay = toServing(sodiumRaw, p.nutriments?.sodium_serving);
 
         const dietWarnings = healthProfile ? detectDietWarnings(p, healthProfile) : '';
 
