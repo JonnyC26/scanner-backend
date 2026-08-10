@@ -165,11 +165,48 @@ function startRateLimitSweeper(intervalMs = 10 * 60 * 1000) {
 function normalizeBarcode(raw) {
   const barcode = String(raw == null ? '' : raw).trim();
   if (!/^\d{4,18}$/.test(barcode)) return null;
+  // UPC-A (12 digits) → EAN-13 by left-padding one zero (OFF canonical form).
+  // Do not pad EAN-8 or any other length; do not strip leading zeros.
+  if (barcode.length === 12) return `0${barcode}`;
   return barcode;
 }
 
 function isValidBarcode(raw) {
   return normalizeBarcode(raw) != null;
+}
+
+// Legacy unpadded key for a canonical 13-digit code that starts with 0
+// (the pre-Batch-3 UPC-A form). Null when there is no legacy counterpart.
+function legacyUnpaddedBarcode(canonical) {
+  if (typeof canonical !== 'string') return null;
+  if (canonical.length === 13 && canonical.charAt(0) === '0') {
+    return canonical.slice(1);
+  }
+  return null;
+}
+
+// Read productCache / productImages by canonical key. On a miss only, look for
+// a legacy 12-digit doc, copy it forward, delete the old key, and return the
+// migrated snapshot. Cache hits never touch the legacy key.
+async function getDocWithBarcodeMigration(collectionName, canonical) {
+  const canonicalRef = db.collection(collectionName).doc(canonical);
+  const canonicalDoc = await canonicalRef.get();
+  if (canonicalDoc.exists) return canonicalDoc;
+
+  const legacy = legacyUnpaddedBarcode(canonical);
+  if (!legacy) return canonicalDoc;
+
+  const legacyRef = db.collection(collectionName).doc(legacy);
+  const legacyDoc = await legacyRef.get();
+  if (!legacyDoc.exists) return canonicalDoc;
+
+  const data = legacyDoc.data();
+  await canonicalRef.set(data);
+  await legacyRef.delete();
+  console.log(
+    `[BARCODE MIGRATE] legacy=${legacy} canonical=${canonical} collection=${collectionName}`
+  );
+  return canonicalRef.get();
 }
 
 function stripDataUrlBase64(imageBase64) {
@@ -2570,7 +2607,7 @@ function ensureExplanation(barcode, cached) {
     try {
       // Re-read in case another path already filled the cache.
       try {
-        const fresh = await db.collection(CACHE_COLLECTION).doc(barcode).get();
+        const fresh = await getDocWithBarcodeMigration(CACHE_COLLECTION, barcode);
         if (fresh.exists && hasUsableExplanation(fresh.data())) {
           return fresh.data().explanation;
         }
@@ -3091,7 +3128,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
 
   if (!skipCacheCheck) {
     try {
-      const cacheDoc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
+      const cacheDoc = await getDocWithBarcodeMigration(CACHE_COLLECTION, barcode);
       if (cacheDoc.exists) {
         const cached = cacheDoc.data();
         const age = Date.now() - (cached.cachedAt || 0);
@@ -3345,7 +3382,10 @@ app.get('/scan/:barcode', async (req, res) => {
   try {
     if (!enforceIpRateLimit(req, res, '/scan', RATE_LIMIT_SCAN_SEARCH_PER_IP)) return;
 
-    const { barcode } = req.params;
+    const barcode = normalizeBarcode(req.params.barcode);
+    if (!barcode) {
+      return res.status(400).json({ error: 'Invalid barcode' });
+    }
     const deferExplanation = req.query.deferExplanation === '1';
 
     // Try to get the user's health profile from their Firestore document.
@@ -3527,7 +3567,7 @@ async function storeProductFrontImage({ barcode, frontImageBase64, frontMediaTyp
 
   const docRef = db.collection(PRODUCT_IMAGES_COLLECTION).doc(code);
   try {
-    const existingDoc = await docRef.get();
+    const existingDoc = await getDocWithBarcodeMigration(PRODUCT_IMAGES_COLLECTION, code);
     const existing = existingDoc.exists ? existingDoc.data() : null;
     if (!shouldWriteProductImage(existing)) {
       console.log(`[PRODUCT IMAGE KEPT EXISTING] barcode=${code} bytes=${existing.bytes}`);
@@ -3593,6 +3633,11 @@ async function applyProductImageReport({ barcode, uid }) {
     let alreadyReported = false;
     let missing = false;
     let reportCount = 0;
+
+    // Heal legacy 12-digit keys before the transaction so the report lands
+    // on the canonical productImages / productCache docs.
+    await getDocWithBarcodeMigration(PRODUCT_IMAGES_COLLECTION, code);
+    await getDocWithBarcodeMigration(CACHE_COLLECTION, code);
 
     await db.runTransaction(async (tx) => {
       const imageRef = db.collection(PRODUCT_IMAGES_COLLECTION).doc(code);
@@ -4024,7 +4069,7 @@ app.get('/image/:barcode', async (req, res) => {
     return res.status(400).json({ error: 'Invalid barcode' });
   }
   try {
-    const doc = await db.collection(PRODUCT_IMAGES_COLLECTION).doc(barcode).get();
+    const doc = await getDocWithBarcodeMigration(PRODUCT_IMAGES_COLLECTION, barcode);
     if (!doc.exists) {
       return res.status(404).json({ error: 'Not found' });
     }
@@ -4104,7 +4149,7 @@ app.post('/image/:barcode', photoJsonParser, async (req, res) => {
 
   try {
     // Short-circuit before spending vision when an acceptable image already exists.
-    const existingImageDoc = await db.collection(PRODUCT_IMAGES_COLLECTION).doc(barcode).get();
+    const existingImageDoc = await getDocWithBarcodeMigration(PRODUCT_IMAGES_COLLECTION, barcode);
     const existingImage = existingImageDoc.exists ? existingImageDoc.data() : null;
     if (!shouldWriteProductImage(existingImage)) {
       console.log(
@@ -4325,7 +4370,10 @@ app.get('/explain/:barcode', async (req, res) => {
   if (!enforceIpRateLimit(req, res, '/explain', RATE_LIMIT_SCAN_SEARCH_PER_IP)) return;
 
   const started = Date.now();
-  const { barcode } = req.params;
+  const barcode = normalizeBarcode(req.params.barcode);
+  if (!barcode) {
+    return res.status(400).json({ error: 'Invalid barcode' });
+  }
 
   // Same best-effort auth as /scan — never blocks the explain path.
   try {
@@ -4339,7 +4387,7 @@ app.get('/explain/:barcode', async (req, res) => {
   }
 
   try {
-    const cacheDoc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
+    const cacheDoc = await getDocWithBarcodeMigration(CACHE_COLLECTION, barcode);
     if (!cacheDoc.exists) {
       return res.status(404).json({ error: 'Not cached' });
     }
@@ -4573,12 +4621,12 @@ app.get('/admin/prescore', (req, res) => {
 
 // Admin repair: inspect / delete a permanent cache entry (photo or upstream).
 app.get('/admin/cache/inspect', async (req, res) => {
-  const barcode = String(req.query.barcode || '').trim();
+  const barcode = normalizeBarcode(req.query.barcode);
   if (!barcode) {
     return res.status(400).json({ error: 'Missing barcode' });
   }
   try {
-    const doc = await db.collection(CACHE_COLLECTION).doc(barcode).get();
+    const doc = await getDocWithBarcodeMigration(CACHE_COLLECTION, barcode);
     if (!doc.exists) {
       return res.status(404).json({ error: 'Not cached', barcode });
     }
@@ -4590,13 +4638,19 @@ app.get('/admin/cache/inspect', async (req, res) => {
 });
 
 app.post('/admin/cache/delete', async (req, res) => {
-  const barcode = String(req.query.barcode || '').trim();
+  const barcode = normalizeBarcode(req.query.barcode);
   if (!barcode) {
     return res.status(400).json({ error: 'Missing barcode' });
   }
   const keepImage = req.query.keepImage === '1';
   try {
     const deleted = { productCache: false, productImages: false };
+
+    // Heal legacy keys first so delete targets the canonical docs.
+    await getDocWithBarcodeMigration(CACHE_COLLECTION, barcode);
+    if (!keepImage) {
+      await getDocWithBarcodeMigration(PRODUCT_IMAGES_COLLECTION, barcode);
+    }
 
     const cacheRef = db.collection(CACHE_COLLECTION).doc(barcode);
     const cacheDoc = await cacheRef.get();
@@ -4699,6 +4753,9 @@ app.post('/admin/image/delete', async (req, res) => {
   }
   try {
     const deleted = { productImages: false, cacheImageUrlCleared: false };
+    await getDocWithBarcodeMigration(PRODUCT_IMAGES_COLLECTION, barcode);
+    await getDocWithBarcodeMigration(CACHE_COLLECTION, barcode);
+
     const imageRef = db.collection(PRODUCT_IMAGES_COLLECTION).doc(barcode);
     const imageDoc = await imageRef.get();
     if (imageDoc.exists) {

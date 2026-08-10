@@ -1802,15 +1802,20 @@ assert(g.PRODUCT_IMAGE_MAX_BYTES === 200 * 1024);
   assert(Buffer.byteLength(capped.payload, 'utf8') <= g.FAILED_WRITES_PAYLOAD_MAX_BYTES);
 }
 
-// Barcode validation — digits only, OFF/OBF-ish lengths.
+// Barcode validation — digits only, OFF/OBF-ish lengths; UPC-A → EAN-13 pad.
 assert(g.normalizeBarcode(' 3017620422003 ') === '3017620422003');
+assert(g.normalizeBarcode('030772011584') === '0030772011584', '12→13 pad');
+assert(g.normalizeBarcode('0030772011584') === '0030772011584', 'already EAN-13');
+assert(g.normalizeBarcode('12345670') === '12345670', 'EAN-8 not padded');
 assert(g.normalizeBarcode('1234') === '1234');
 assert(g.normalizeBarcode('123') === null, 'too short');
 assert(g.normalizeBarcode('abc') === null);
+assert(g.normalizeBarcode('a/b/c') === null, 'path-injection rejected');
 assert(g.normalizeBarcode('../etc') === null);
 assert(g.normalizeBarcode('') === null);
 assert(g.normalizeBarcode(null) === null);
 assert(g.isValidBarcode('3017620422003') === true);
+assert(g.isValidBarcode('030772011584') === true);
 assert(g.isValidBarcode('nope') === false);
 
 assert(g.stripDataUrlBase64('data:image/jpeg;base64,abc') === 'abc');
@@ -4347,6 +4352,347 @@ const ADMIN_ROUTES = [
     print(proc.stdout.strip())
 
 
+def test_batch3_barcode_normalisation():
+    """UPC-A→EAN-13 pad, route validation, legacy productCache/productImages migrate."""
+    script = r"""
+const http = require('http');
+const path = require('path');
+const Module = require('module');
+const fs = require('fs');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+// --- Unit: normalizeBarcode ---
+{
+  const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+  const start = src.indexOf('function normalizeBarcode(raw)');
+  const end = src.indexOf('function stripDataUrlBase64');
+  assert(start >= 0 && end > start, 'locate normalizeBarcode');
+  const block = `${src.slice(start, end)}\nmodule.exports = { normalizeBarcode, legacyUnpaddedBarcode };`;
+  fs.writeFileSync('/tmp/batch3_barcode_helpers.js', block);
+  delete require.cache['/tmp/batch3_barcode_helpers.js'];
+  const g = require('/tmp/batch3_barcode_helpers.js');
+
+  assert(g.normalizeBarcode('030772011584') === '0030772011584');
+  assert(g.normalizeBarcode('0030772011584') === '0030772011584');
+  assert(g.normalizeBarcode('12345670') === '12345670');
+  assert(g.normalizeBarcode('abc') === null);
+  assert(g.normalizeBarcode('a/b/c') === null);
+  assert(g.legacyUnpaddedBarcode('0030772011584') === '030772011584');
+  assert(g.legacyUnpaddedBarcode('3017620422003') === null, 'non-leading-zero EAN-13 has no legacy');
+  assert(g.legacyUnpaddedBarcode('12345670') === null);
+}
+
+// --- Integration with mocked Firestore ---
+const productCache = new Map();
+const productImages = new Map();
+const collectionGets = []; // { collection, id } in order
+
+function docSnap(data) {
+  return {
+    exists: data !== undefined,
+    data: () => (data === undefined ? undefined : data),
+  };
+}
+
+function makeDoc(collectionName, id) {
+  const store = collectionName === 'productImages' ? productImages
+    : collectionName === 'productCache' ? productCache
+    : null;
+  return {
+    async get() {
+      collectionGets.push({ collection: collectionName, id: String(id) });
+      if (!store) return docSnap(undefined);
+      return docSnap(store.get(String(id)));
+    },
+    async set(data) {
+      if (!store) return;
+      store.set(String(id), { ...(typeof data === 'object' && data ? data : {}) });
+    },
+    async delete() {
+      if (!store) return;
+      store.delete(String(id));
+    },
+    async update(data) {
+      if (!store) return;
+      const prev = store.get(String(id)) || {};
+      store.set(String(id), { ...prev, ...data });
+    },
+  };
+}
+
+const mockFirestore = {
+  collection(name) {
+    return {
+      doc(id) {
+        return makeDoc(name, String(id));
+      },
+      limit() {
+        return {
+          async get() {
+            return { empty: true, docs: [] };
+          },
+        };
+      },
+      orderBy() { return this; },
+      async add() { return { id: 'x' }; },
+      async get() { return { empty: true, docs: [] }; },
+    };
+  },
+};
+mockFirestore.FieldValue = {
+  serverTimestamp: () => 'SERVER_TS',
+  increment: (n) => n,
+};
+
+const mockAdmin = {
+  initializeApp() {},
+  credential: { cert() { return {}; } },
+  auth() {
+    return { async verifyIdToken() { return { uid: 'u-batch3' }; } };
+  },
+  firestore() { return mockFirestore; },
+};
+mockAdmin.firestore.FieldValue = mockFirestore.FieldValue;
+
+const origRequire = Module.prototype.require;
+Module.prototype.require = function (id) {
+  if (id === 'firebase-admin') return mockAdmin;
+  return origRequire.apply(this, arguments);
+};
+
+process.env.FIREBASE_SERVICE_ACCOUNT = JSON.stringify({
+  project_id: 'demo',
+  client_email: 'demo@demo.iam.gserviceaccount.com',
+  private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg==\n-----END PRIVATE KEY-----\n',
+});
+process.env.ANTHROPIC_API_KEY = 'test-key';
+process.env.PRESCORE_SECRET = 'batch3-secret';
+delete process.env.PUBLIC_BASE_URL;
+
+// Avoid real OFF lookups during /scan migration tests.
+global.fetch = async function mockFetch(url) {
+  const err = new Error('upstream blocked in batch3 test: ' + url);
+  err.statusCode = 503;
+  throw err;
+};
+
+const appPath = path.join(process.cwd(), 'index.js');
+delete require.cache[appPath];
+const app = require(appPath);
+
+function withServer(fn) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, '127.0.0.1', async () => {
+      try {
+        const { port } = server.address();
+        const result = await fn(port);
+        server.close(() => resolve(result));
+      } catch (err) {
+        server.close(() => reject(err));
+      }
+    });
+  });
+}
+
+function request(port, method, urlPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, path: urlPath, method },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try { json = text ? JSON.parse(text) : null; } catch (_) { json = text; }
+          resolve({ status: res.statusCode, json });
+        });
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function resetStores() {
+  productCache.clear();
+  productImages.clear();
+  collectionGets.length = 0;
+}
+
+(async () => {
+  // 5. /scan/abc returns 400, not a Firestore write
+  {
+    resetStores();
+    await withServer(async (port) => {
+      const res = await request(port, 'GET', '/scan/abc');
+      assert(res.status === 400, '/scan/abc → 400, got ' + res.status);
+      assert(res.json && res.json.error === 'Invalid barcode');
+      assert(productCache.size === 0, 'invalid barcode must not write productCache');
+      const slash = await request(port, 'GET', '/scan/a%2Fb%2Fc');
+      assert(slash.status === 400, '/scan/a%2Fb%2Fc → 400, got ' + slash.status);
+      assert(productCache.size === 0);
+      const explain = await request(port, 'GET', '/explain/abc');
+      assert(explain.status === 400, '/explain/abc → 400, got ' + explain.status);
+    });
+  }
+
+  // 6. Legacy productCache migrates forward on canonical lookup
+  {
+    resetStores();
+    const legacy = '030772011584';
+    const canonical = '0030772011584';
+    productCache.set(legacy, {
+      productName: 'Dawn',
+      productType: 'household',
+      score: null,
+      explanation: 'Legacy household entry',
+      explanationPending: false,
+      cachedAt: Date.now(),
+      scanLogicVersion: '7',
+      source: 'off',
+    });
+
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => { logs.push(args.join(' ')); originalLog(...args); };
+
+    await withServer(async (port) => {
+      const res = await request(
+        port,
+        'GET',
+        `/admin/cache/inspect?secret=batch3-secret&barcode=${canonical}`
+      );
+      assert(res.status === 200, 'inspect after migrate → 200, got ' + res.status);
+      assert(res.json && res.json.barcode === canonical);
+      assert(res.json.cached && res.json.cached.productName === 'Dawn');
+    });
+
+    console.log = originalLog;
+    assert(productCache.has(canonical), 'canonical productCache must exist');
+    assert(!productCache.has(legacy), 'legacy productCache must be deleted');
+    assert(
+      logs.some(l => l.includes('[BARCODE MIGRATE]') && l.includes(`legacy=${legacy}`) &&
+        l.includes(`canonical=${canonical}`) && l.includes('collection=productCache')),
+      'must log BARCODE MIGRATE for productCache'
+    );
+  }
+
+  // 7. Legacy productImages migrates forward on canonical lookup
+  {
+    resetStores();
+    const legacy = '030772011584';
+    const canonical = '0030772011584';
+    // Minimal valid JPEG-ish base64 so GET /image can return bytes.
+    const data = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+    productImages.set(legacy, {
+      data,
+      bytes: 4,
+      mediaType: 'image/jpeg',
+      suppressed: false,
+    });
+
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => { logs.push(args.join(' ')); originalLog(...args); };
+
+    await withServer(async (port) => {
+      const res = await request(port, 'GET', `/image/${canonical}`);
+      assert(res.status === 200, 'GET /image after migrate → 200, got ' + res.status);
+    });
+
+    console.log = originalLog;
+    assert(productImages.has(canonical), 'canonical productImages must exist');
+    assert(!productImages.has(legacy), 'legacy productImages must be deleted');
+    assert(
+      logs.some(l => l.includes('[BARCODE MIGRATE]') && l.includes('collection=productImages')),
+      'must log BARCODE MIGRATE for productImages'
+    );
+  }
+
+  // 8. Cache hit on already-canonical key does NOT trigger a legacy lookup
+  {
+    resetStores();
+    const canonical = '0030772011584';
+    const legacy = '030772011584';
+    productCache.set(canonical, {
+      productName: 'Dawn Canonical',
+      productType: 'household',
+      score: null,
+      explanation: 'Already canonical',
+      explanationPending: false,
+      cachedAt: Date.now(),
+      scanLogicVersion: '7',
+      source: 'off',
+    });
+    // Poison legacy — must never be read on a canonical hit.
+    productCache.set(legacy, { productName: 'SHOULD NOT READ' });
+
+    await withServer(async (port) => {
+      const res = await request(
+        port,
+        'GET',
+        `/admin/cache/inspect?secret=batch3-secret&barcode=${canonical}`
+      );
+      assert(res.status === 200);
+      assert(res.json.cached.productName === 'Dawn Canonical');
+    });
+
+    const legacyGets = collectionGets.filter(
+      g => g.collection === 'productCache' && g.id === legacy
+    );
+    assert(legacyGets.length === 0, 'canonical hit must not get legacy key, got ' + legacyGets.length);
+    assert(productCache.has(legacy), 'legacy doc must remain untouched on canonical hit');
+  }
+
+  // Admin delete with 12-digit query normalises and removes canonical (after migrate)
+  {
+    resetStores();
+    const legacy = '030772011584';
+    const canonical = '0030772011584';
+    productCache.set(legacy, {
+      productName: 'Dawn',
+      cachedAt: Date.now(),
+      scanLogicVersion: '7',
+    });
+    await withServer(async (port) => {
+      const res = await request(
+        port,
+        'POST',
+        `/admin/cache/delete?secret=batch3-secret&barcode=${legacy}&keepImage=1`
+      );
+      assert(res.status === 200, 'delete via 12-digit → 200, got ' + res.status);
+      assert(res.json && res.json.barcode === canonical);
+      assert(res.json.deleted && res.json.deleted.productCache === true);
+    });
+    assert(!productCache.has(legacy));
+    assert(!productCache.has(canonical));
+  }
+
+  console.log('batch3 barcode normalisation ok');
+})().catch((err) => {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"batch3 barcode assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def test_batch2_classification():
     """Photo/search must not assume productType; food photo unscored; search uses tags."""
     script = r"""
@@ -4590,6 +4936,7 @@ def main() -> int:
         test_phase0_grading_honesty,
         test_batch1_security,
         test_batch2_classification,
+        test_batch3_barcode_normalisation,
     ]
     failed = 0
     for test in tests:
