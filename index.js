@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '6';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '7';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -920,6 +920,53 @@ function buildHouseholdScanResponse({
   };
 }
 
+// Fixed copy when a food label is photographed — ingredients alone cannot score food.
+const FOOD_PHOTO_EXPLANATION =
+  "We read the ingredients from your photo, but we can't score a food product from its label alone — we need nutrition information too.";
+
+function buildFoodPhotoScanResponse({
+  productName = 'Scanned label',
+  imageUrl = '',
+  ingredients = '',
+  extras = {},
+} = {}) {
+  return {
+    productType: 'food',
+    productName,
+    additiveNames: null,
+    additiveList: JSON.stringify([]),
+    ingredients,
+    nutriScore: null,
+    novaGroup: null,
+    additivesCount: null,
+    isOrganic: null,
+    protein: null,
+    sugar: null,
+    sodium: null,
+    sugarTier: null,
+    sodiumTier: null,
+    proteinTier: null,
+    score: null,
+    scoreBreakdown: JSON.stringify({}),
+    alternatives: JSON.stringify([]),
+    explanation: FOOD_PHOTO_EXPLANATION,
+    scoreColor: '#9E9E9E',
+    imageUrl,
+    scoreLabel: 'Not enough data',
+    coverageMatched: 0,
+    coverageTotal: 0,
+    assessedCount: 0,
+    recognisedCount: 0,
+    totalCount: 0,
+    noIngredientData: false,
+    ingredientFindings: JSON.stringify([]),
+    ingredientList: JSON.stringify([]),
+    tableVersion: COSMETIC_TABLE_VERSION,
+    scanLogicVersion: SCAN_LOGIC_VERSION,
+    ...extras,
+  };
+}
+
 function scoreCosmeticProduct(product) {
   const { items: rawParsedItems, drugFactsMarker } = parseCosmeticIngredientList(product);
   // Rejoin comma-split INCI fragments before coverage is counted.
@@ -1516,6 +1563,15 @@ function tagIndicatesHousehold(tag) {
 function hasHouseholdCategory(product) {
   const tags = (product && product.categories_tags) || [];
   return tags.some(tagIndicatesHousehold);
+}
+
+// Search candidates: classify from OFF category tags only (no upstream fetch).
+// Household wins over cosmetic, matching resolveProductType. No tags → food.
+function classifySearchProductType(categoriesTags) {
+  const tags = Array.isArray(categoriesTags) ? categoriesTags : [];
+  if (tags.some(tagIndicatesHousehold)) return 'household';
+  if (tags.some(tagIndicatesCosmetic)) return 'cosmetic';
+  return 'food';
 }
 
 async function resolveProductType(barcode) {
@@ -2421,7 +2477,9 @@ async function generateExplanationFromCached(cached) {
   }
 
   // Food — null score from missing energy/proteins/sodium|salt: fixed copy, never Haiku.
+  // Photo-rescued food keeps its own fixed sentence (label alone cannot score food).
   if (cached.score == null && cached.scoreLabel === 'Not enough data') {
+    if (cached.source === 'photo') return FOOD_PHOTO_EXPLANATION;
     return FOOD_NO_NUTRITION_EXPLANATION;
   }
 
@@ -2862,6 +2920,31 @@ function rescorePhotoCachedDocument(cached) {
   const ingredientsText = String((cached && cached.ingredients) || '').trim();
   if (!ingredientsText) return null;
 
+  const scoredStub = {
+    score: null,
+    coverageMatched: 0,
+    coverageTotal: 0,
+    unparseableCount: 0,
+    drugFactsMarker: null,
+    unmatchedNames: [],
+  };
+
+  // Food photo entries must not be re-scored as cosmetics on a table/logic bump.
+  if (cached.productType === 'food') {
+    const food = buildFoodPhotoScanResponse({
+      productName: cached.productName || 'Scanned label',
+      imageUrl: cached.imageUrl || '',
+      ingredients: ingredientsText,
+      extras: {
+        source: 'photo',
+        photoParsedCount: cached.photoParsedCount,
+        photoCapturedAt: cached.photoCapturedAt,
+        photoCapturedBy: cached.photoCapturedBy,
+      },
+    });
+    return { responseData: food, scored: scoredStub, unmatchedNames: [] };
+  }
+
   // Household labels must not be re-scored as cosmetics on a table bump.
   if (looksLikeHouseholdProduct(ingredientsText) || cached.productType === 'household') {
     const household = buildHouseholdScanResponse({
@@ -2875,14 +2958,6 @@ function rescorePhotoCachedDocument(cached) {
         photoCapturedBy: cached.photoCapturedBy,
       },
     });
-    const scoredStub = {
-      score: null,
-      coverageMatched: 0,
-      coverageTotal: 0,
-      unparseableCount: 0,
-      drugFactsMarker: null,
-      unmatchedNames: [],
-    };
     return { responseData: household, scored: scoredStub, unmatchedNames: [] };
   }
 
@@ -3639,15 +3714,6 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     }
 
     const vision = await readCosmeticLabelFromPhoto(imageBase64, mediaType);
-    // Photo scans have no upstream DB payload — keep the vision transcription.
-    recordRawObservation({
-      barcode: normalizedBarcode || null,
-      productType: 'cosmetic',
-      source: 'photo',
-      payload: vision,
-      tableVersion: COSMETIC_TABLE_VERSION,
-      photoCapturedBy,
-    });
 
     const ingredientNames = Array.isArray(vision.ingredients)
       ? vision.ingredients.map(n => String(n || '').trim()).filter(Boolean)
@@ -3659,31 +3725,75 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     }
 
     const ingredientsText = ingredientNames.join(', ');
-    const isHousehold = looksLikeHouseholdProduct(ingredientsText);
+
+    // Classify when a barcode is supplied — never assume cosmetic for known foods.
+    // No barcode (original not-found flow) keeps the cosmetic path.
+    let resolvedType = null;
+    let upstreamProduct = null;
+    let productName = '';
+    let imageUrl = '';
+    if (normalizedBarcode) {
+      try {
+        const resolved = await resolveProductType(String(normalizedBarcode));
+        resolvedType = resolved.productType || null;
+        upstreamProduct = resolved.product || null;
+        if (upstreamProduct) {
+          const upstreamName = String(upstreamProduct.product_name || '').trim();
+          if (upstreamName) productName = upstreamName;
+          imageUrl = upstreamProduct.image_front_url || upstreamProduct.image_url || '';
+        }
+      } catch (upstreamLookupErr) {
+        console.log(`[PHOTO SCAN UPSTREAM LOOKUP] barcode=${normalizedBarcode} ${upstreamLookupErr.message}`);
+      }
+    }
+
+    const isFoodPhoto = resolvedType === 'food';
+    // Resolved household wins; otherwise EPA-label heuristic (no-barcode / cosmetic path).
+    const isHousehold = resolvedType === 'household'
+      || (!isFoodPhoto && looksLikeHouseholdProduct(ingredientsText));
+    // Cosmetic path: resolved cosmetic, unknown/not-found, or no barcode.
+    const isCosmeticPhoto = !isFoodPhoto && !isHousehold;
+
+    // Photo scans have no upstream DB payload — keep the vision transcription.
+    const observationType = isFoodPhoto
+      ? 'food'
+      : (isHousehold ? 'household' : 'cosmetic');
+    recordRawObservation({
+      barcode: normalizedBarcode || null,
+      productType: observationType,
+      source: 'photo',
+      payload: vision,
+      tableVersion: COSMETIC_TABLE_VERSION,
+      photoCapturedBy,
+    });
+
     const product = { ingredients_text: ingredientsText };
-    // Household: skip cosmetic scoring entirely (empty ingredientList, fixed copy).
-    const scored = isHousehold ? null : scoreCosmeticProduct(product);
+    // Food / household: skip cosmetic scoring entirely (empty ingredientList, fixed copy).
+    const scored = isCosmeticPhoto ? scoreCosmeticProduct(product) : null;
 
     // Cache below-gate photo rescues too — transcribed ingredients are valuable
     // even when score is null. Never cache a zero-ingredient parse.
-    // Household results cache with an empty ingredientList so rescans are instant.
-    const photoParsedCount = isHousehold
-      ? 0
-      : (Array.isArray(scored.ingredientList) ? scored.ingredientList.length : 0);
-    const canCache = !!normalizedBarcode && (isHousehold || photoParsedCount > 0);
+    // Food/household results cache with an empty ingredientList so rescans are instant.
+    const photoParsedCount = isCosmeticPhoto
+      ? (Array.isArray(scored.ingredientList) ? scored.ingredientList.length : 0)
+      : 0;
+    const canCache = !!normalizedBarcode && (isHousehold || isFoodPhoto || photoParsedCount > 0);
     // Ignore defer when we are not caching — there is no doc for /explain to fill.
-    // Household explanations are a fixed string; never defer or call Haiku.
-    const skipExplanation = !isHousehold && deferExplanation && canCache;
+    // Food/household explanations are fixed strings; never defer or call Haiku.
+    const skipExplanation = isCosmeticPhoto && deferExplanation && canCache;
 
     let explanation = null;
     if (isHousehold) {
       explanation = HOUSEHOLD_EXPLANATION;
       console.log(`[HOUSEHOLD] barcode=${normalizedBarcode || 'none'} photo=true`);
+    } else if (isFoodPhoto) {
+      explanation = FOOD_PHOTO_EXPLANATION;
+      console.log(`[FOOD PHOTO] barcode=${normalizedBarcode || 'none'} — skipping score`);
     } else if (!skipExplanation) {
       explanation = await generateCosmeticExplanation(scored, ingredientsText);
     }
 
-    if (!isHousehold) {
+    if (isCosmeticPhoto) {
       const unmatchedNames = scored.unmatchedNames || [];
       const namesJoined = unmatchedNames.map(unmatchedNameLabel).join('|');
       const namesTruncated = namesJoined.length > 200
@@ -3694,23 +3804,6 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       console.log(`[UNPARSEABLE] barcode=${normalizedBarcode || 'none'} count=${scored.unparseableCount || 0}`);
       if (scored.drugFactsMarker) {
         console.log(`[DRUG FACTS TRUNCATED] barcode=${normalizedBarcode || 'none'} marker=${scored.drugFactsMarker}`);
-      }
-    }
-
-    // Prefer upstream product name + image when the barcode exists in OFF/OBF
-    // (common: product known, ingredients missing). Ingredients stay from photo.
-    let productName = '';
-    let imageUrl = '';
-    if (normalizedBarcode) {
-      try {
-        const resolved = await resolveProductType(String(normalizedBarcode));
-        if (resolved.product) {
-          const upstreamName = String(resolved.product.product_name || '').trim();
-          if (upstreamName) productName = upstreamName;
-          imageUrl = resolved.product.image_front_url || resolved.product.image_url || '';
-        }
-      } catch (upstreamLookupErr) {
-        console.log(`[PHOTO SCAN UPSTREAM LOOKUP] barcode=${normalizedBarcode} ${upstreamLookupErr.message}`);
       }
     }
 
@@ -3777,64 +3870,69 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
 
     const photoCapturedAt = Date.now();
     let persisted = false;
-    const responseData = isHousehold
-      ? buildHouseholdScanResponse({
-          productName,
-          imageUrl,
-          ingredients: ingredientsText,
-          extras: {
-            source: 'photo',
-            photoParsedCount,
-            photoCapturedAt,
-            photoCapturedBy,
-            dietWarnings: '',
-            imageStored,
-            imageSkipReason,
-            persisted,
-          },
-        })
-      : {
-          productType: 'cosmetic',
-          productName,
-          additiveNames: null,
-          additiveList: JSON.stringify([]),
-          ingredients: ingredientsText,
-          nutriScore: null,
-          novaGroup: null,
-          additivesCount: null,
-          isOrganic: null,
-          protein: null,
-          sugar: null,
-          sodium: null,
-          sugarTier: null,
-          sodiumTier: null,
-          proteinTier: null,
-          score: scored.score,
-          scoreBreakdown: JSON.stringify(scored.scoreBreakdown),
-          alternatives: JSON.stringify([]),
-          explanation,
-          scoreColor: scored.scoreColor,
-          imageUrl,
-          scoreLabel: scored.scoreLabel,
-          coverageMatched: scored.coverageMatched,
-          coverageTotal: scored.coverageTotal,
-          assessedCount: scored.assessedCount,
-          recognisedCount: scored.recognisedCount,
-          totalCount: scored.totalCount,
-          noIngredientData: !!scored.noIngredientData,
-          ingredientFindings: JSON.stringify(scored.ingredientFindings),
-          ingredientList: JSON.stringify(scored.ingredientList || []),
-          tableVersion: COSMETIC_TABLE_VERSION,
-          scanLogicVersion: SCAN_LOGIC_VERSION,
-          source: 'photo',
-          photoParsedCount,
-          photoCapturedAt,
-          photoCapturedBy,
-          dietWarnings: '',
-          imageStored,
-          imageSkipReason,
-          persisted,
-        };
+    const photoExtras = {
+      source: 'photo',
+      photoParsedCount,
+      photoCapturedAt,
+      photoCapturedBy,
+      dietWarnings: '',
+      imageStored,
+      imageSkipReason,
+      persisted,
+    };
+    let responseData;
+    if (isHousehold) {
+      responseData = buildHouseholdScanResponse({
+        productName,
+        imageUrl,
+        ingredients: ingredientsText,
+        extras: photoExtras,
+      });
+    } else if (isFoodPhoto) {
+      responseData = buildFoodPhotoScanResponse({
+        productName,
+        imageUrl,
+        ingredients: ingredientsText,
+        extras: photoExtras,
+      });
+    } else {
+      // Cosmetic path — no barcode, not-found, or resolved cosmetic.
+      responseData = {
+        productType: 'cosmetic',
+        productName,
+        additiveNames: null,
+        additiveList: JSON.stringify([]),
+        ingredients: ingredientsText,
+        nutriScore: null,
+        novaGroup: null,
+        additivesCount: null,
+        isOrganic: null,
+        protein: null,
+        sugar: null,
+        sodium: null,
+        sugarTier: null,
+        sodiumTier: null,
+        proteinTier: null,
+        score: scored.score,
+        scoreBreakdown: JSON.stringify(scored.scoreBreakdown),
+        alternatives: JSON.stringify([]),
+        explanation,
+        scoreColor: scored.scoreColor,
+        imageUrl,
+        scoreLabel: scored.scoreLabel,
+        coverageMatched: scored.coverageMatched,
+        coverageTotal: scored.coverageTotal,
+        assessedCount: scored.assessedCount,
+        recognisedCount: scored.recognisedCount,
+        totalCount: scored.totalCount,
+        noIngredientData: !!scored.noIngredientData,
+        ingredientFindings: JSON.stringify(scored.ingredientFindings),
+        ingredientList: JSON.stringify(scored.ingredientList || []),
+        tableVersion: COSMETIC_TABLE_VERSION,
+        scanLogicVersion: SCAN_LOGIC_VERSION,
+        ...photoExtras,
+      };
+    }
     if (skipExplanation) {
       responseData.explanationPending = true;
     }
@@ -3847,11 +3945,11 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         const incomingMeta = {
           source: 'photo',
           photoParsedCount,
-          coverageMatched: isHousehold ? 0 : scored.coverageMatched,
+          coverageMatched: isCosmeticPhoto ? scored.coverageMatched : 0,
         };
 
         let writePhotoCache = true;
-        if (existing && existing.source !== 'photo' && !isHousehold) {
+        if (existing && existing.source !== 'photo' && isCosmeticPhoto) {
           // Unscoreable upstream (e.g. food-no-nutrition misclassified cosmetic)
           // must not block a photo result that has a real score/ingredients.
           if (isUnscoreableCacheEntry(existing)) {
@@ -3862,7 +3960,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
             persisted = true;
           }
         } else if (
-          !isHousehold &&
+          isCosmeticPhoto &&
           existing &&
           !shouldReplaceWithPhotoCache(existing, incomingMeta)
         ) {
@@ -3876,7 +3974,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         if (writePhotoCache) {
           const { dietWarnings: _dietWarnings, persisted: _p, imageStored: _is, imageSkipReason: _isr, ...cachePayload } = responseData;
           cachePayload.ingredientList = stringifyIngredientListForCache(
-            isHousehold ? [] : scored.ingredientList,
+            isCosmeticPhoto ? scored.ingredientList : [],
             normalizedBarcode
           );
           const wrote = await writeProductCacheWithRetry(
@@ -3898,13 +3996,13 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
           capturedBy: photoCapturedBy,
         });
       }
-    } else if (normalizedBarcode && photoParsedCount === 0 && !isHousehold) {
+    } else if (normalizedBarcode && photoParsedCount === 0 && isCosmeticPhoto) {
       console.log(`[PHOTO SCAN NOT CACHED] barcode=${normalizedBarcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
     }
     responseData.persisted = persisted;
 
-    const matchedLog = isHousehold ? 0 : scored.coverageMatched;
-    console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${matchedLog} household=${isHousehold} front=${hasFrontImage ? 'yes' : 'no'} persisted=${persisted} imageStored=${imageStored} ms=${Date.now() - started}`);
+    const matchedLog = isCosmeticPhoto ? scored.coverageMatched : 0;
+    console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${matchedLog} type=${observationType} front=${hasFrontImage ? 'yes' : 'no'} persisted=${persisted} imageStored=${imageStored} ms=${Date.now() - started}`);
     res.json(responseData);
 
     if (skipExplanation && responseData.explanationPending) {
@@ -4285,7 +4383,7 @@ app.get('/search', async (req, res) => {
   }
 
   try {
-    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,image_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,ingredients,labels_tags,nutriments,serving_quantity,ingredients_text,allergens_tags,traces_tags&page_size=20&json=1`;
+    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,image_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,ingredients,labels_tags,nutriments,serving_quantity,ingredients_text,allergens_tags,traces_tags,categories_tags&page_size=20&json=1`;
     const response = await fetch(searchUrl);
     if (!response.ok) {
       console.error(`Search-a-licious returned ${response.status}`);
@@ -4296,6 +4394,7 @@ app.get('/search', async (req, res) => {
     const products = (data.hits || data.products || [])
       .filter(p => p.code && p.product_name)
       .map(p => {
+        const productType = classifySearchProductType(p.categories_tags);
         const nutriScore = p.nutriscore_grade;
         const novaGroup = p.nova_group;
         const searchAdditiveCodes = extractAdditiveCodes(p);
@@ -4324,9 +4423,19 @@ app.get('/search', async (req, res) => {
           return { riskLevel: details?.riskLevel || 'safe' };
         });
 
-        const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, searchAdditiveList);
-        const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
-        const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
+        // Cosmetic/household must not receive a Nutri-Score food score.
+        let score;
+        let scoreColor;
+        let scoreLabel;
+        if (productType === 'household' || productType === 'cosmetic') {
+          score = null;
+          scoreColor = '#9E9E9E';
+          scoreLabel = 'Not enough data';
+        } else {
+          score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, searchAdditiveList);
+          scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
+          scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
+        }
 
         const dietWarnings = healthProfile ? detectDietWarnings(p, healthProfile) : '';
 
@@ -4336,6 +4445,7 @@ app.get('/search', async (req, res) => {
           brand: Array.isArray(p.brands) ? p.brands[0] || '' : (p.brands || ''),
           quantity: p.quantity || '',
           imageUrl: p.image_front_thumb_url || p.image_url || '',
+          productType,
           score,
           scoreColor,
           scoreLabel,
