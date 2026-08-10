@@ -2878,7 +2878,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '5', 'SCAN_LOGIC_VERSION must be 5, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '6', 'SCAN_LOGIC_VERSION must be 6, got ' + SCAN_LOGIC_VERSION);
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -2949,7 +2949,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '5', 'exported SCAN_LOGIC_VERSION must be 5');
+assert(g.SCAN_LOGIC_VERSION === '6', 'exported SCAN_LOGIC_VERSION must be 6');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3004,7 +3004,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '5', 'normal food stamps logic version 5');
+  assert(result.scanLogicVersion === '6', 'normal food stamps logic version 6');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -3049,7 +3049,7 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '5', 'Dawn stamps logic version 5');
+  assert(result.scanLogicVersion === '6', 'Dawn stamps logic version 6');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3115,7 +3115,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '5', 'SCAN_LOGIC_VERSION must be 5, got ' + logicMatch[1]);
+assert(logicMatch[1] === '6', 'SCAN_LOGIC_VERSION must be 6, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -3613,6 +3613,410 @@ console.log('phase0 batch c ok');
     print(proc.stdout.strip())
 
 
+def test_phase0_grading_honesty():
+    """Serving/tier basis alignment, toServing null fallback, Nutri-Score instrumentation."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+const SCAN_LOGIC_VERSION = logicMatch[1];
+assert(SCAN_LOGIC_VERSION === '6', 'SCAN_LOGIC_VERSION must be 6, got ' + SCAN_LOGIC_VERSION);
+
+// ?? 40 must remain — instrumentation only, no score redesign.
+assert(/nutriPoints\[nutriScore\?\.toLowerCase\(\)\]/.test(src) ||
+  /mappedNutriPts \?\? 40/.test(src),
+  'Nutri-Score ?? 40 fallback must remain');
+assert(src.includes('[NUTRI FALLBACK]'), 'must log NUTRI FALLBACK');
+assert(src.includes('nutriScoreKnown'), 'must expose nutriScoreKnown');
+assert(src.includes("basisLabel") && src.includes('per 100g'),
+  'prompt must support per 100g basis label');
+
+const nutStart = src.indexOf('function productHasNutriments');
+const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
+if (nutStart < 0 || nutEnd < 0) throw new Error('could not locate nutriment helpers');
+
+const scoreStart = src.indexOf('function calculateScore');
+const scoreEnd = src.indexOf('// OFF labels_tags is crowd-entered');
+if (scoreStart < 0 || scoreEnd < 0) throw new Error('could not locate calculateScore block');
+
+const fmtStart = src.indexOf('function parseServingQuantity');
+const fmtEnd = src.indexOf('const additiveMap');
+if (fmtStart < 0 || fmtEnd < 0) throw new Error('could not locate serving/format helpers');
+
+const addDispStart = src.indexOf('function formatAdditivesCountDisplay');
+const foodExplainStart = src.indexOf('async function generateFoodExplanation');
+const foodExplainEnd = src.indexOf('// Rebuild a Haiku explanation from a productCache document');
+if (addDispStart < 0 || foodExplainStart < 0 || foodExplainEnd < 0) {
+  throw new Error('could not locate food explanation helpers');
+}
+
+const foodFnStart = src.indexOf('async function scanAndCacheFood');
+const foodFnEnd = src.indexOf('// Photo-rescued cache docs have no upstream');
+if (foodFnStart < 0 || foodFnEnd < 0) throw new Error('could not locate scanAndCacheFood');
+
+const cosStart = src.indexOf('const cosmeticTable = JSON.parse');
+const cosEnd = src.indexOf('// Firestore docs are size-capped');
+if (cosStart < 0 || cosEnd < 0) throw new Error('could not locate cosmetic block');
+
+const orgStart = src.indexOf('function resolveOrganicStatus');
+const orgEnd = src.indexOf('function parseServingQuantity');
+if (orgStart < 0 || orgEnd < 0) throw new Error('could not locate organic helpers');
+
+const extractStart = src.indexOf("// OFF's additives_tags is a curated subset");
+const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
+if (extractStart < 0 || extractEnd < 0) throw new Error('could not locate extractAdditiveCodes helpers');
+
+const promptStart = src.indexOf('function isKnownNutrientForPrompt');
+const promptEnd = src.indexOf('async function requestFoodExplanation');
+if (promptStart < 0 || promptEnd < 0) throw new Error('could not locate food explanation prompt helpers');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = process.cwd();
+function recordRawObservation() {}
+async function getCategoryAlternatives() { return []; }
+async function requestFoodExplanation(prompt) { return 'We noted the numbers in the data.'; }
+function hasUsableIngredientText(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  const letters = (t.match(/[A-Za-z\\u00C0-\\u024F]/g) || []).length;
+  return letters >= 3;
+}
+function hasUsableExplanation() { return true; }
+const additiveMap = {};
+const additiveDetails = {};
+const SCAN_LOGIC_VERSION = '${SCAN_LOGIC_VERSION}';
+${src.slice(cosStart, cosEnd).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(nutStart, nutEnd)}
+${src.slice(scoreStart, scoreEnd)}
+${src.slice(orgStart, orgEnd)}
+${src.slice(fmtStart, fmtEnd)}
+${src.slice(extractStart, extractEnd)}
+${src.slice(promptStart, promptEnd)}
+${src.slice(addDispStart, foodExplainStart)}
+${src.slice(foodExplainStart, foodExplainEnd)}
+${src.slice(foodFnStart, foodFnEnd)}
+module.exports = {
+  toServing,
+  computeNutrientTiers,
+  resolveFoodServingNutrition,
+  parseServingQuantity,
+  calculateScore,
+  getScoreBreakdown,
+  buildFoodExplanationPrompt,
+  generateFoodExplanation,
+  scanAndCacheFood,
+  SCAN_LOGIC_VERSION,
+};
+`;
+fs.writeFileSync('/tmp/grading_honesty_helpers.js', block);
+delete require.cache['/tmp/grading_honesty_helpers.js'];
+const g = require('/tmp/grading_honesty_helpers.js');
+
+const logs = [];
+const origLog = console.log;
+console.log = (...args) => { logs.push(args.join(' ')); origLog(...args); };
+
+function clearLogs() { logs.length = 0; }
+function loggedNutriFallback(barcode) {
+  return logs.some(l => l.includes('[NUTRI FALLBACK]') && l.includes('barcode=' + barcode) && l.includes('assumed 40'));
+}
+
+(async () => {
+// 1. Product WITH serving data → tiers from per-serving values
+{
+  // Liquid I.V.–shaped: 3.85g sodium / 100g, but 0.5g (500mg) per 16g serving.
+  const n = g.resolveFoodServingNutrition({
+    proteins_100g: 0,
+    sugars_100g: 0,
+    sodium_100g: 3.85,
+    proteins_serving: 0,
+    sugars_serving: 0,
+    sodium_serving: 0.5,
+  }, 16);
+  assert(n.servingKnown === true, 'serving known when *_serving present');
+  assert(n.sodiumDisplay === 0.5, 'sodium display is per-serving 0.5g');
+  assert(n.sodiumTier === 'medium', '0.5g/serving is medium, not high from 3.85/100g, got ' + n.sodiumTier);
+  assert(n.sugarTier === 'low', '0g sugar/serving is low');
+  assert(n.proteinTier === 'low', '0g protein/serving is low');
+
+  const viaQty = g.resolveFoodServingNutrition({
+    proteins_100g: 20,
+    sugars_100g: 30,
+    sodium_100g: 1.0,
+  }, 50);
+  assert(viaQty.servingKnown === true, 'serving_quantity alone marks servingKnown');
+  assert(viaQty.proteinDisplay === 10, 'protein 20/100g * 50g serving = 10');
+  assert(viaQty.sugarDisplay === 15, 'sugar 30/100g * 50 = 15');
+  assert(viaQty.sodiumDisplay === 0.5, 'sodium 1.0/100g * 50 = 0.5');
+  assert(viaQty.sugarTier === 'medium', '15g sugar/serving is medium (not high from 30/100g)');
+  assert(viaQty.sodiumTier === 'medium', '0.5g sodium/serving is medium');
+  assert(viaQty.proteinTier === 'high', '10g protein/serving is high');
+}
+
+// 2. Product WITHOUT serving data → null nutrients, servingKnown false, prompt per 100g
+{
+  const n = g.resolveFoodServingNutrition({
+    proteins_100g: 4,
+    sugars_100g: 12,
+    sodium_100g: 0.8,
+  }, null);
+  assert(n.servingKnown === false, 'no serving data → servingKnown false');
+  assert(n.proteinDisplay === null, 'protein display null when serving unknown');
+  assert(n.sugarDisplay === null, 'sugar display null when serving unknown');
+  assert(n.sodiumDisplay === null, 'sodium display null when serving unknown');
+  assert(n.sugarTier === 'medium', 'tiers still from per-100g when serving unknown');
+  assert(n.sodiumTier === 'high', '0.8g/100g sodium is high');
+
+  const result = await g.scanAndCacheFood('no-serve-1', {
+    product_name: 'US Bar',
+    ingredients_text: 'Oats, sugar, salt',
+    nutriscore_grade: 'c',
+    nova_group: 4,
+    additives_tags: [],
+    labels_tags: [],
+    nutriments: {
+      'energy-kcal_100g': 400,
+      proteins_100g: 4,
+      sugars_100g: 12,
+      sodium_100g: 0.8,
+    },
+  }, { skipExplanation: true });
+  assert(result.servingKnown === false, 'scan servingKnown false');
+  assert(result.protein === 'N/A', 'scan protein N/A without serving, got ' + result.protein);
+  assert(result.sugar === 'N/A', 'scan sugar N/A without serving');
+  assert(result.sodium === 'N/A', 'scan sodium N/A without serving');
+  assert(result.protein100g === '4g', 'per-100g protein still shown');
+  assert(result.sugarTier === 'medium', 'scan sugarTier from 100g');
+  assert(result.sodiumTier === 'high', 'scan sodiumTier from 100g');
+
+  const prompt = g.buildFoodExplanationPrompt({
+    sugar: '12g', sodium: '800mg', protein: '4g',
+    sugarTier: 'medium', sodiumTier: 'high',
+    additivesPhrase: '0 additives', isOrganic: 'unknown',
+    novaGroup: 4, ingredients: 'Oats', nutriScoreGrade: 'c',
+    basisLabel: 'per 100g',
+  });
+  assert(prompt.includes('per 100g'), 'prompt labels per 100g when serving unknown');
+  assert(!/per serving/.test(prompt), 'prompt must not say per serving when basis is per 100g');
+}
+
+// 3. serving_quantity 0 or "abc" → treated as missing
+{
+  assert(g.parseServingQuantity(0) === null, '0 → null');
+  assert(g.parseServingQuantity('0') === null, 'string 0 → null');
+  assert(g.parseServingQuantity('abc') === null, 'abc → null');
+  assert(g.toServing(3.85, null, g.parseServingQuantity(0)) === null, 'qty 0 → toServing null');
+  assert(g.toServing(3.85, null, g.parseServingQuantity('abc')) === null, 'qty abc → toServing null');
+  const n = g.resolveFoodServingNutrition({ sodium_100g: 3.85, sugars_100g: 1, proteins_100g: 1 }, 'abc');
+  assert(n.servingKnown === false, 'unparseable qty → servingKnown false');
+  assert(n.sodiumDisplay === null, 'unparseable qty → sodiumDisplay null');
+}
+
+// 4. No Nutri-Score → nutriScoreKnown false + fallback logged; score still uses 40
+{
+  clearLogs();
+  const result = await g.scanAndCacheFood('nutri-missing', {
+    product_name: 'Liquid IV style',
+    ingredients_text: 'Sugar, salt, vitamins',
+    // nutriscore_grade absent
+    nova_group: 4,
+    additives_tags: [],
+    labels_tags: [],
+    serving_quantity: 16,
+    nutriments: {
+      'energy-kcal_100g': 250,
+      proteins_100g: 0,
+      sugars_100g: 0,
+      sodium_100g: 3.85,
+      sodium_serving: 0.5,
+      sugars_serving: 0,
+      proteins_serving: 0,
+    },
+  }, { skipExplanation: true });
+  assert(result.nutriScoreKnown === false, 'nutriScoreKnown false when missing');
+  assert(result.nutriScore == null, 'nutriScore null when missing, got ' + result.nutriScore);
+  const breakdown = JSON.parse(result.scoreBreakdown);
+  assert(breakdown.nutriScoreKnown === false, 'breakdown nutriScoreKnown false');
+  assert(breakdown.nutriPts === 40, 'fallback still awards 40 points');
+  assert(loggedNutriFallback('nutri-missing'), 'must log NUTRI FALLBACK for missing grade');
+  // Tiers from per-serving (honesty fix 1 still applies)
+  assert(result.sodiumTier === 'medium', 'serving sodium tier medium, got ' + result.sodiumTier);
+  assert(result.servingKnown === true, 'serving known for Liquid IV shape');
+}
+
+// 5. With Nutri-Score → nutriScoreKnown true, no log line
+{
+  clearLogs();
+  const result = await g.scanAndCacheFood('nutri-known', {
+    product_name: 'Yogurt',
+    ingredients_text: 'Milk',
+    nutriscore_grade: 'b',
+    nova_group: 3,
+    additives_tags: [],
+    labels_tags: ['en:organic'],
+    serving_quantity: 100,
+    nutriments: {
+      'energy-kcal_100g': 80,
+      proteins_100g: 4,
+      sugars_100g: 4,
+      sodium_100g: 0.05,
+    },
+  }, { skipExplanation: true });
+  assert(result.nutriScoreKnown === true, 'nutriScoreKnown true');
+  assert(result.nutriScore === 'b', 'nutriScore preserved');
+  const breakdown = JSON.parse(result.scoreBreakdown);
+  assert(breakdown.nutriScoreKnown === true, 'breakdown nutriScoreKnown true');
+  assert(breakdown.nutriPts === 50, 'grade B → 50 pts');
+  assert(!loggedNutriFallback('nutri-known'), 'must not log fallback when grade known');
+}
+
+// 6. /search path uses the same helper → same tiers and servingKnown
+{
+  assert(src.includes('resolveFoodServingNutrition(p.nutriments, p.serving_quantity)'),
+    'search path must call resolveFoodServingNutrition');
+  assert(src.includes('resolveFoodServingNutrition(product.nutriments, product.serving_quantity)'),
+    'scan path must call resolveFoodServingNutrition');
+  const scanN = g.resolveFoodServingNutrition({
+    proteins_100g: 10, sugars_100g: 25, sodium_100g: 0.7,
+  }, 40);
+  // Identical call is what search uses — same object shape guarantees parity.
+  const searchN = g.resolveFoodServingNutrition({
+    proteins_100g: 10, sugars_100g: 25, sodium_100g: 0.7,
+  }, 40);
+  assert(scanN.servingKnown === searchN.servingKnown, 'servingKnown parity');
+  assert(scanN.sugarTier === searchN.sugarTier, 'sugarTier parity');
+  assert(scanN.sodiumTier === searchN.sodiumTier, 'sodiumTier parity');
+  assert(scanN.proteinTier === searchN.proteinTier, 'proteinTier parity');
+  assert(scanN.sugarDisplay === searchN.sugarDisplay, 'sugarDisplay parity');
+}
+
+// Prompt with serving: still says per serving
+{
+  const prompt = await g.generateFoodExplanation({
+    sugarDisplay: 15,
+    sodiumDisplay: 0.5,
+    proteinDisplay: 10,
+    sugarTier: 'medium',
+    sodiumTier: 'medium',
+    proteinTier: 'high',
+    additivesCount: 0,
+    isOrganic: 'no',
+    novaGroup: 4,
+    ingredients: 'Oats, sugar',
+    nutriScoreGrade: 'c',
+    basisLabel: 'per serving',
+  });
+  // generateFoodExplanation returns model text; check the prompt builder instead
+  const built = g.buildFoodExplanationPrompt({
+    sugar: '15g', sodium: '500mg', protein: '10g',
+    sugarTier: 'medium', sodiumTier: 'medium', proteinTier: 'high',
+    additivesPhrase: '0 additives', isOrganic: 'no',
+    novaGroup: 4, ingredients: 'Oats', nutriScoreGrade: 'c',
+    basisLabel: 'per serving',
+  });
+  assert(built.includes('per serving'), 'serving basis labeled per serving');
+  assert(typeof prompt === 'string' && prompt.length > 0, 'explanation generated');
+}
+
+// Null nutrient → unknown tier (not low); omitted from explanation prompt
+{
+  const tiers = g.computeNutrientTiers(null, null, 12);
+  assert(tiers.sugarTier === 'unknown', 'null sugar → unknown, got ' + tiers.sugarTier);
+  assert(tiers.sodiumTier === 'unknown', 'null sodium → unknown, got ' + tiers.sodiumTier);
+  assert(tiers.proteinTier === 'high', '12g protein still high');
+  // Verified zero remains low — only null is unknown.
+  const zeroTiers = g.computeNutrientTiers(0, 0, 0);
+  assert(zeroTiers.sugarTier === 'low', '0g sugar is low, not unknown');
+  assert(zeroTiers.sodiumTier === 'low', '0g sodium is low, not unknown');
+  assert(zeroTiers.proteinTier === 'low', '0g protein is low, not unknown');
+
+  // Serving known but sodium missing → sodiumTier unknown, display null
+  const partial = g.resolveFoodServingNutrition({
+    proteins_100g: 10,
+    sugars_100g: 8,
+    // sodium_100g absent
+    proteins_serving: 5,
+    sugars_serving: 4,
+  }, null);
+  assert(partial.servingKnown === true, 'partial serving still known');
+  assert(partial.sodiumDisplay === null, 'missing sodium display null');
+  assert(partial.sodiumTier === 'unknown', 'missing sodium tier unknown, got ' + partial.sodiumTier);
+  assert(partial.sugarTier === 'low', '4g sugar/serving is low');
+
+  const omitPrompt = g.buildFoodExplanationPrompt({
+    sugar: '4g',
+    sodium: null,
+    protein: '5g',
+    sugarTier: 'low',
+    sodiumTier: 'unknown',
+    proteinTier: 'low',
+    additivesPhrase: '0 additives',
+    isOrganic: 'no',
+    novaGroup: 4,
+    ingredients: 'Oats',
+    nutriScoreGrade: 'c',
+    basisLabel: 'per serving',
+  });
+  assert(omitPrompt.includes('sugar 4g per serving (low tier)'), 'known sugar kept in prompt');
+  assert(omitPrompt.includes('protein 5g per serving'), 'known protein kept in prompt');
+  const omitDataLine = omitPrompt.split('\n').find(l => l.startsWith('Product data:'));
+  assert(omitDataLine && !/sodium/.test(omitDataLine),
+    'null/unknown sodium must be omitted from Product data line: ' + omitDataLine);
+  assert(!/N\/A/.test(omitDataLine), 'prompt must not say N/A for omitted nutrient');
+  assert(!/unknown tier/.test(omitDataLine), 'prompt must not state unknown tier');
+
+  const naPrompt = g.buildFoodExplanationPrompt({
+    sugar: 'N/A',
+    sodium: '500mg',
+    protein: 'N/A',
+    sugarTier: 'unknown',
+    sodiumTier: 'medium',
+    proteinTier: 'unknown',
+    additivesPhrase: '1 additives',
+    isOrganic: 'no',
+    novaGroup: 4,
+    ingredients: 'Salt',
+    nutriScoreGrade: 'd',
+    basisLabel: 'per serving',
+  });
+  const naDataLine = naPrompt.split('\n').find(l => l.startsWith('Product data:'));
+  assert(naDataLine.includes('sodium 500mg per serving (medium tier)'), 'known sodium kept');
+  assert(!/\bsugar\b/.test(naDataLine), 'N/A sugar omitted from Product data');
+  assert(!/\bprotein\b/.test(naDataLine), 'N/A protein omitted from Product data');
+}
+
+console.log = origLog;
+console.log('phase0 grading honesty ok');
+})().catch((err) => {
+  console.log = origLog;
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"phase0 grading honesty assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -3640,6 +4044,7 @@ def main() -> int:
         test_phase0_no_nutrition,
         test_additives_universal_extraction,
         test_phase0_batch_c,
+        test_phase0_grading_honesty,
     ]
     failed = 0
     for test in tests:
