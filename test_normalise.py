@@ -2992,7 +2992,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '7', 'SCAN_LOGIC_VERSION must be 7, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '8', 'SCAN_LOGIC_VERSION must be 8, got ' + SCAN_LOGIC_VERSION);
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -3063,7 +3063,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '7', 'exported SCAN_LOGIC_VERSION must be 7');
+assert(g.SCAN_LOGIC_VERSION === '8', 'exported SCAN_LOGIC_VERSION must be 8');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3118,7 +3118,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '7', 'normal food stamps logic version 7');
+  assert(result.scanLogicVersion === '8', 'normal food stamps logic version 8');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -3163,7 +3163,7 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '7', 'Dawn stamps logic version 7');
+  assert(result.scanLogicVersion === '8', 'Dawn stamps logic version 8');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3229,15 +3229,15 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '7', 'SCAN_LOGIC_VERSION must be 7, got ' + logicMatch[1]);
+assert(logicMatch[1] === '8', 'SCAN_LOGIC_VERSION must be 8, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
 if (mapStart < 0 || extractEnd < 0) throw new Error('could not locate additive helpers');
 
-const dietStart = src.indexOf('function detectDietWarnings');
+const dietStart = src.indexOf('// Token-aware diet term matching');
 const dietEnd = src.indexOf('// Core scan logic, extracted so both the /scan route');
-if (dietStart < 0 || dietEnd < 0) throw new Error('could not locate detectDietWarnings');
+if (dietStart < 0 || dietEnd < 0) throw new Error('could not locate detectDietWarnings helpers');
 
 // Sites 4/5 must request ingredients so the helper has data to union.
 assert(
@@ -3258,15 +3258,29 @@ assert(calcBody.includes('riskLevel'), 'calculateScore must use risk levels');
 assert(!/additivesCount\s*[<>]=?/.test(calcBody),
   'calculateScore must not threshold on raw additivesCount');
 
+// Must not use raw substring includes() for animal/meat diet terms.
+const dietBody = src.slice(dietStart, dietEnd);
+assert(dietBody.includes('findDietTermMatch'), 'must use findDietTermMatch');
+assert(dietBody.includes('PLANT_QUALIFIERS'), 'must define PLANT_QUALIFIERS');
+assert(!/animalTerms\.find\s*\(\s*t\s*=>\s*ingredients\.includes/.test(dietBody),
+  'must not substring-match animalTerms');
+assert(!/meatTerms\.find\s*\(\s*t\s*=>\s*ingredients\.includes/.test(dietBody),
+  'must not substring-match meatTerms');
+assert(!/lactoseTerms\.find\s*\(\s*t\s*=>\s*ingredients\.includes/.test(dietBody),
+  'must not substring-match lactoseTerms');
+
 const block = `
 ${src.slice(mapStart, extractEnd)}
 ${src.slice(dietStart, dietEnd)}
 module.exports = {
   extractAdditiveCodes,
   resolveAdditiveLookupKey,
+  pickPreferredAdditiveRawCode,
   additiveDisplayName,
   additiveRiskDetails,
   detectDietWarnings,
+  findDietTermMatch,
+  tokenizeDietIngredients,
   additiveMap,
   additiveDetails,
 };
@@ -3276,6 +3290,17 @@ delete require.cache['/tmp/additives_universal_helpers.js'];
 const g = require('/tmp/additives_universal_helpers.js');
 
 function sorted(arr) { return [...arr].sort(); }
+
+function dietProduct(ingredientsText, extra) {
+  return Object.assign({
+    additives_tags: [],
+    ingredients: [],
+    ingredients_text: ingredientsText,
+    labels_tags: [],
+    allergens_tags: [],
+    traces_tags: [],
+  }, extra || {});
+}
 
 // 1. Liquid I.V. shape — tags subset + ingredient taxonomy → 6 unique codes
 {
@@ -3405,6 +3430,180 @@ function sorted(arr) { return [...arr].sort(); }
     throw new Error('malformed items must not throw: ' + err.message);
   }
   assert(codes.length === 1 && codes[0] === 'e211', 'malformed items → tags fallback');
+}
+
+// 10. Resolved-key dedupe — e340 + e340ii → one row (base e340; e340ii not in map)
+{
+  const codes = g.extractAdditiveCodes({
+    additives_tags: ['en:e340', 'en:e330', 'en:e340ii'],
+    ingredients: [],
+  });
+  assert(codes.length === 2, 'e340/e340ii must collapse to 2 codes, got ' + codes.length + ': ' + codes);
+  assert(codes.join(',') === 'e340,e330', 'order + preferred base: ' + codes.join(','));
+  assert(codes.filter(c => g.resolveAdditiveLookupKey(c) === 'e340').length === 1,
+    'only one resolved e340 entry');
+  // Reverse encounter order still prefers base when suffix not in map.
+  const codes2 = g.extractAdditiveCodes({
+    additives_tags: ['en:e340ii', 'en:e330', 'en:e340'],
+  });
+  assert(codes2.join(',') === 'e340,e330', 'suffix-first still keeps base e340: ' + codes2.join(','));
+}
+
+// 11. Single suffixed code alone is preserved (no forced collapse to base)
+{
+  const codes = g.extractAdditiveCodes({ additives_tags: ['en:e332ii'] });
+  assert(codes.length === 1 && codes[0] === 'e332ii', 'lone e332ii stays e332ii, got ' + codes);
+}
+
+// --- Diet term matching: plant compounds must NOT warn; real animal must ---
+
+const noVeganPlant = [
+  'oat milk',
+  'oatmilk',
+  'Oat Milk',
+  'almond milk',
+  'soymilk',
+  'coconut milk',
+  'macadamia milk',
+  'eggplant',
+  'peanut butter',
+  'shea butter',
+  'cocoa butter',
+  'coconut cream',
+  'oat-milk',
+  "oat milk.",
+  'water, oat milk, salt',
+];
+for (const text of noVeganPlant) {
+  const w = g.detectDietWarnings(dietProduct(text), 'vegan');
+  assert(!w, 'plant/joined compound must not vegan-warn for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(w));
+}
+
+const yesVeganAnimal = [
+  'milk',
+  "cow's milk",
+  "cow’s milk",
+  'whole milk',
+  'buttermilk',
+  'butter',
+  'dairy butter',
+  'cream',
+  'egg',
+  'eggs',
+  'honey',
+  'whey protein',
+  'casein',
+  'Water, milk, sugar',
+  'MILK',
+  'butter - unsalted',
+];
+for (const text of yesVeganAnimal) {
+  const w = g.detectDietWarnings(dietProduct(text), 'vegan');
+  assert(w && /not compatible with vegan/i.test(w),
+    'animal ingredient must vegan-warn for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(w));
+}
+
+// Eggplant vs egg
+{
+  const eggW = g.detectDietWarnings(dietProduct('egg'), 'vegan');
+  assert(/egg/i.test(eggW), 'bare egg must warn, got: ' + eggW);
+  const plantW = g.detectDietWarnings(dietProduct('eggplant'), 'vegan');
+  assert(!plantW, 'eggplant must not egg-warn, got: ' + JSON.stringify(plantW));
+}
+
+// Punctuation / hyphens / apostrophes
+{
+  assert(!g.detectDietWarnings(dietProduct('almond-milk; water'), 'vegan'), 'almond-milk');
+  assert(!g.detectDietWarnings(dietProduct('(coconut milk)'), 'vegan'), 'paren coconut milk');
+  const cow = g.detectDietWarnings(dietProduct("cow's-milk"), 'vegan');
+  assert(cow && /milk/i.test(cow), "cow's-milk must warn, got: " + cow);
+}
+
+// Qualifier must not cross ingredient separators; plurals ok inside a phrase
+{
+  const sepWarn = [
+    'Sugar, Cocoa, Milk',
+    'Water, Coconut, Milk',
+    'Chocolate (Cocoa, Milk)',
+    'Oats, Milk',
+  ];
+  for (const text of sepWarn) {
+    const w = g.detectDietWarnings(dietProduct(text), 'vegan');
+    assert(w && /milk/i.test(w), 'separator must not suppress dairy for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(w));
+    const lf = g.detectDietWarnings(dietProduct(text), 'lactose-free');
+    // First and last also required for lactose-free; check all sep cases for lactose too.
+    assert(lf && /lactose-free/i.test(lf), 'separator lactose warn for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(lf));
+  }
+  assert(!g.detectDietWarnings(dietProduct('Water, Oat Milk, Salt'), 'vegan'), 'Water, Oat Milk, Salt vegan');
+  assert(!g.detectDietWarnings(dietProduct('Almonds Milk'), 'vegan'), 'Almonds Milk vegan');
+  assert(!g.detectDietWarnings(dietProduct('Water, Oat Milk, Salt'), 'lactose-free'), 'Water, Oat Milk, Salt lactose');
+  assert(!g.detectDietWarnings(dietProduct('Almonds Milk'), 'lactose-free'), 'Almonds Milk lactose');
+  // Explicit first/last lactose-free pair from the follow-up
+  assert(g.detectDietWarnings(dietProduct('Sugar, Cocoa, Milk'), 'lactose-free'), 'Sugar, Cocoa, Milk lactose');
+  assert(!g.detectDietWarnings(dietProduct('Almonds Milk'), 'lactose-free'), 'Almonds Milk lactose again');
+}
+
+// "-free" negations — term immediately followed by free is skipped
+{
+  assert(!g.detectDietWarnings(dietProduct('dairy-free almond drink'), 'vegan'),
+    'dairy-free almond drink must not vegan-warn');
+  assert(!g.detectDietWarnings(dietProduct('gluten-free oats'), 'gluten-free'),
+    'gluten-free oats must not gluten-warn');
+  const mixed = g.detectDietWarnings(dietProduct('dairy free chocolate, milk'), 'vegan');
+  assert(mixed && /milk/i.test(mixed),
+    'dairy free chocolate, milk must still warn on real milk, got: ' + JSON.stringify(mixed));
+}
+
+// Seafood terms restored; -free still suppresses
+{
+  const shellHitV = g.detectDietWarnings(dietProduct('shellfish extract'), 'vegan');
+  assert(shellHitV && /shellfish/i.test(shellHitV), 'shellfish extract must vegan-warn, got: ' + shellHitV);
+  const shellHitVg = g.detectDietWarnings(dietProduct('shellfish extract'), 'vegetarian');
+  assert(shellHitVg && /shellfish/i.test(shellHitVg), 'shellfish extract must vegetarian-warn, got: ' + shellHitVg);
+  assert(!g.detectDietWarnings(dietProduct('shellfish-free seasoning blend'), 'vegan'),
+    'shellfish-free must not vegan-warn');
+  assert(!g.detectDietWarnings(dietProduct('shellfish-free seasoning blend'), 'vegetarian'),
+    'shellfish-free must not vegetarian-warn');
+  const crab = g.detectDietWarnings(dietProduct('crab meat'), 'vegan');
+  assert(crab && /crab|meat/i.test(crab), 'crab must vegan-warn');
+}
+
+// Vegetarian meatTerms — word-boundary (not substring)
+{
+  const fish = g.detectDietWarnings(dietProduct('tuna, salt'), 'vegetarian');
+  assert(fish && /tuna|fish/i.test(fish), 'tuna must vegetarian-warn, got: ' + fish);
+  const gel = g.detectDietWarnings(dietProduct('gelatin'), 'vegetarian');
+  assert(gel && /gelatin/i.test(gel), 'gelatin must vegetarian-warn');
+  const chicken = g.detectDietWarnings(dietProduct('chicken broth'), 'vegetarian');
+  assert(chicken && /chicken/i.test(chicken), 'chicken must warn');
+}
+
+// Gluten joined compounds vs maltodextrin
+{
+  const ww = g.detectDietWarnings(dietProduct('wholewheat flour'), 'gluten-free');
+  assert(ww && /wheat/i.test(ww), 'wholewheat must gluten-warn, got: ' + ww);
+  assert(!g.detectDietWarnings(dietProduct('maltodextrin'), 'gluten-free'),
+    'maltodextrin must not gluten-warn');
+  const malt = g.detectDietWarnings(dietProduct('malt extract'), 'gluten-free');
+  assert(malt && /malt/i.test(malt), 'malt extract must gluten-warn, got: ' + malt);
+}
+
+// Lactose-free shares plant-qualified dairy rule
+{
+  assert(!g.detectDietWarnings(dietProduct('oat milk'), 'lactose-free'), 'oat milk lactose');
+  assert(!g.detectDietWarnings(dietProduct('cocoa butter'), 'lactose-free'), 'cocoa butter lactose');
+  const milk = g.detectDietWarnings(dietProduct('whole milk'), 'lactose-free');
+  assert(milk && /lactose-free/i.test(milk), 'whole milk lactose warn');
+  const bm = g.detectDietWarnings(dietProduct('buttermilk'), 'lactose-free');
+  assert(bm && /buttermilk|lactose-free/i.test(bm), 'buttermilk lactose warn');
+}
+
+// Allergen tags still exact-match (OFF tags are discrete)
+{
+  const w = g.detectDietWarnings(dietProduct('oat drink', {
+    allergens_tags: ['en:milk'],
+  }), 'vegan');
+  assert(w && /milk/i.test(w), 'allergen tag milk must still warn');
 }
 
 console.log('additives universal extraction ok');
@@ -3741,7 +3940,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '7', 'SCAN_LOGIC_VERSION must be 7, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '8', 'SCAN_LOGIC_VERSION must be 8, got ' + SCAN_LOGIC_VERSION);
 
 // ?? 40 must remain — instrumentation only, no score redesign.
 assert(/nutriPoints\[nutriScore\?\.toLowerCase\(\)\]/.test(src) ||
@@ -4706,7 +4905,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '7', 'SCAN_LOGIC_VERSION must be 7, got ' + logicMatch[1]);
+assert(logicMatch[1] === '8', 'SCAN_LOGIC_VERSION must be 8, got ' + logicMatch[1]);
 
 // --- Source: /scan/photo resolves type before scoring ---
 const photoStart = src.indexOf("app.post('/scan/photo'");
@@ -4756,7 +4955,7 @@ const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
-const SCAN_LOGIC_VERSION = '7';
+const SCAN_LOGIC_VERSION = '8';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 ${src.slice(helperStart, helperEnd)}
