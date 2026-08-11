@@ -3519,6 +3519,55 @@ for (const text of yesVeganAnimal) {
   assert(cow && /milk/i.test(cow), "cow's-milk must warn, got: " + cow);
 }
 
+// Qualifier must not cross ingredient separators; plurals ok inside a phrase
+{
+  const sepWarn = [
+    'Sugar, Cocoa, Milk',
+    'Water, Coconut, Milk',
+    'Chocolate (Cocoa, Milk)',
+    'Oats, Milk',
+  ];
+  for (const text of sepWarn) {
+    const w = g.detectDietWarnings(dietProduct(text), 'vegan');
+    assert(w && /milk/i.test(w), 'separator must not suppress dairy for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(w));
+    const lf = g.detectDietWarnings(dietProduct(text), 'lactose-free');
+    // First and last also required for lactose-free; check all sep cases for lactose too.
+    assert(lf && /lactose-free/i.test(lf), 'separator lactose warn for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(lf));
+  }
+  assert(!g.detectDietWarnings(dietProduct('Water, Oat Milk, Salt'), 'vegan'), 'Water, Oat Milk, Salt vegan');
+  assert(!g.detectDietWarnings(dietProduct('Almonds Milk'), 'vegan'), 'Almonds Milk vegan');
+  assert(!g.detectDietWarnings(dietProduct('Water, Oat Milk, Salt'), 'lactose-free'), 'Water, Oat Milk, Salt lactose');
+  assert(!g.detectDietWarnings(dietProduct('Almonds Milk'), 'lactose-free'), 'Almonds Milk lactose');
+  // Explicit first/last lactose-free pair from the follow-up
+  assert(g.detectDietWarnings(dietProduct('Sugar, Cocoa, Milk'), 'lactose-free'), 'Sugar, Cocoa, Milk lactose');
+  assert(!g.detectDietWarnings(dietProduct('Almonds Milk'), 'lactose-free'), 'Almonds Milk lactose again');
+}
+
+// "-free" negations — term immediately followed by free is skipped
+{
+  assert(!g.detectDietWarnings(dietProduct('dairy-free almond drink'), 'vegan'),
+    'dairy-free almond drink must not vegan-warn');
+  assert(!g.detectDietWarnings(dietProduct('gluten-free oats'), 'gluten-free'),
+    'gluten-free oats must not gluten-warn');
+  const mixed = g.detectDietWarnings(dietProduct('dairy free chocolate, milk'), 'vegan');
+  assert(mixed && /milk/i.test(mixed),
+    'dairy free chocolate, milk must still warn on real milk, got: ' + JSON.stringify(mixed));
+}
+
+// Seafood terms restored; -free still suppresses
+{
+  const shellHitV = g.detectDietWarnings(dietProduct('shellfish extract'), 'vegan');
+  assert(shellHitV && /shellfish/i.test(shellHitV), 'shellfish extract must vegan-warn, got: ' + shellHitV);
+  const shellHitVg = g.detectDietWarnings(dietProduct('shellfish extract'), 'vegetarian');
+  assert(shellHitVg && /shellfish/i.test(shellHitVg), 'shellfish extract must vegetarian-warn, got: ' + shellHitVg);
+  assert(!g.detectDietWarnings(dietProduct('shellfish-free seasoning blend'), 'vegan'),
+    'shellfish-free must not vegan-warn');
+  assert(!g.detectDietWarnings(dietProduct('shellfish-free seasoning blend'), 'vegetarian'),
+    'shellfish-free must not vegetarian-warn');
+  const crab = g.detectDietWarnings(dietProduct('crab meat'), 'vegan');
+  assert(crab && /crab|meat/i.test(crab), 'crab must vegan-warn');
+}
+
 // Vegetarian meatTerms — word-boundary (not substring)
 {
   const fish = g.detectDietWarnings(dietProduct('tuna, salt'), 'vegetarian');
@@ -3527,9 +3576,16 @@ for (const text of yesVeganAnimal) {
   assert(gel && /gelatin/i.test(gel), 'gelatin must vegetarian-warn');
   const chicken = g.detectDietWarnings(dietProduct('chicken broth'), 'vegetarian');
   assert(chicken && /chicken/i.test(chicken), 'chicken must warn');
-  // Joined compound must not false-positive on a meat term substring.
-  const shell = g.detectDietWarnings(dietProduct('shellfish-free seasoning blend'), 'vegetarian');
-  assert(!shell, 'shellfish must not match meat term fish via substring, got: ' + JSON.stringify(shell));
+}
+
+// Gluten joined compounds vs maltodextrin
+{
+  const ww = g.detectDietWarnings(dietProduct('wholewheat flour'), 'gluten-free');
+  assert(ww && /wheat/i.test(ww), 'wholewheat must gluten-warn, got: ' + ww);
+  assert(!g.detectDietWarnings(dietProduct('maltodextrin'), 'gluten-free'),
+    'maltodextrin must not gluten-warn');
+  const malt = g.detectDietWarnings(dietProduct('malt extract'), 'gluten-free');
+  assert(malt && /malt/i.test(malt), 'malt extract must gluten-warn, got: ' + malt);
 }
 
 // Lactose-free shares plant-qualified dairy rule

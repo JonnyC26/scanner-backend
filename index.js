@@ -2212,12 +2212,18 @@ const PLANT_QUALIFIABLE_TERMS = new Set([
   'milk', 'cream', 'butter', 'cheese', 'yogurt', 'dairy', 'egg', 'eggs',
 ]);
 
+// Separators between ingredient phrases. Must not let a plant qualifier on one
+// side suppress a dairy/egg term on the other ("Sugar, Cocoa, Milk").
+const DIET_PHRASE_BOUNDARY = '\x1e';
+
 function normalizeDietIngredientText(text) {
   return String(text || '')
     .toLowerCase()
     .replace(/[\u2018\u2019\u0060\u00b4]/g, "'") // curly / grave / acute → '
     .replace(/[-–—/\\]+/g, ' ')
-    .replace(/[^a-z0-9'\s]+/g, ' ')
+    // Phrase boundaries stay as sentinels so qualifiers cannot cross them.
+    .replace(/[,;()\[\].:]/g, ` ${DIET_PHRASE_BOUNDARY} `)
+    .replace(new RegExp(`[^a-z0-9'\\s${DIET_PHRASE_BOUNDARY}]+`, 'g'), ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -2226,31 +2232,76 @@ function tokenizeDietIngredients(text) {
   if (!text) return [];
   return normalizeDietIngredientText(text)
     .split(' ')
-    .map(t => t.replace(/^'+|'+$/g, ''))
+    .map(t => (t === DIET_PHRASE_BOUNDARY ? t : t.replace(/^'+|'+$/g, '')))
     .filter(Boolean);
+}
+
+function isDietPhraseBoundary(token) {
+  return token === DIET_PHRASE_BOUNDARY;
+}
+
+// Singular / plural / possessive forms of a plant qualifier within one phrase.
+function isPlantQualifierToken(token) {
+  if (!token || isDietPhraseBoundary(token)) return false;
+  if (PLANT_QUALIFIERS.has(token)) return true;
+  if (token.endsWith("'s") && PLANT_QUALIFIERS.has(token.slice(0, -2))) return true;
+  // oats → oat, almonds → almond, coconuts → coconut (not ss endings)
+  if (token.length > 3 && token.endsWith('s') && !token.endsWith('ss') &&
+      PLANT_QUALIFIERS.has(token.slice(0, -1))) {
+    return true;
+  }
+  return false;
+}
+
+function isNegatedByFree(tokens, index) {
+  // "dairy-free" / "gluten free" → term immediately followed by "free"
+  return tokens[index + 1] === 'free';
 }
 
 // Match diet terms on whole tokens (word boundaries). When applyPlantQualifier
 // is true, a dairy/egg term is ignored if the immediately preceding token is
-// a plant qualifier ("oat milk", "cocoa butter"). Multi-token animal compounds
-// like "buttermilk" are listed as their own terms so boundary matching does
-// not create false negatives.
-function findDietTermMatch(ingredientsText, terms, tagList, { applyPlantQualifier = false } = {}) {
+// a plant qualifier in the SAME phrase ("oat milk", "cocoa butter") — not
+// across commas/parens ("Sugar, Cocoa, Milk"). substringTerms (gluten path)
+// also match when the term appears inside a token (wholewheat → wheat).
+// Multi-token animal compounds like "buttermilk" are listed as their own
+// terms so boundary matching does not create false negatives.
+function findDietTermMatch(ingredientsText, terms, tagList, {
+  applyPlantQualifier = false,
+  substringTerms = null,
+} = {}) {
   const tags = tagList || [];
   for (const term of terms) {
     if (tags.includes(term)) return term;
   }
 
+  const sub = substringTerms instanceof Set
+    ? substringTerms
+    : (substringTerms ? new Set(substringTerms) : null);
+
   const tokens = tokenizeDietIngredients(ingredientsText);
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
+    if (isDietPhraseBoundary(token)) continue;
+
     for (const term of terms) {
-      if (token !== term) continue;
+      const isSub = sub && sub.has(term);
+      const matched = isSub ? token.includes(term) : token === term;
+      if (!matched) continue;
+      if (isNegatedByFree(tokens, i)) continue;
+      // "gluten-free oats" — oats are the subject of the gluten-free claim in
+      // the same phrase, not a separate gluten hit.
+      if (
+        (term === 'oat' || term === 'oats') &&
+        tokens[i - 1] === 'free' &&
+        tokens[i - 2] === 'gluten'
+      ) {
+        continue;
+      }
       if (
         applyPlantQualifier &&
         PLANT_QUALIFIABLE_TERMS.has(term) &&
         i > 0 &&
-        PLANT_QUALIFIERS.has(tokens[i - 1])
+        isPlantQualifierToken(tokens[i - 1])
       ) {
         continue;
       }
@@ -2286,9 +2337,14 @@ function detectDietWarnings(product, healthProfile) {
     } else if (!isVegan) {
       // buttermilk is animal-derived and must remain a whole-token hit even
       // though boundary matching no longer treats it as "butter"/"milk".
+      // Seafood names that used to match only as substrings of "fish" are listed
+      // explicitly so token matching does not drop them.
       const animalTerms = ['buttermilk', 'milk', 'dairy', 'cheese', 'butter', 'cream', 'egg', 'eggs', 'honey',
         'meat', 'beef', 'pork', 'chicken', 'fish', 'gelatin', 'gelatine', 'lard', 'whey',
-        'casein', 'lactose', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn'];
+        'casein', 'lactose', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn',
+        'shellfish', 'crab', 'lobster', 'oyster', 'clam', 'mussel', 'scallop', 'squid',
+        'octopus', 'krill', 'cod', 'sardine', 'mackerel', 'herring', 'crustacean',
+        'mollusc', 'mollusk'];
       const found = findDietTermMatch(ingredientsText, animalTerms, allergens, { applyPlantQualifier: true });
       if (found) warnings.push(`Contains ${found} — not compatible with vegan diet`);
       // Animal-derived additives (e.g. E120 carmine) often appear only in
@@ -2310,7 +2366,10 @@ function detectDietWarnings(product, healthProfile) {
       warnings.push('Not compatible with vegetarian diet');
     } else if (!isVeg) {
       const meatTerms = ['meat', 'beef', 'pork', 'chicken', 'turkey', 'lamb', 'veal',
-        'fish', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn', 'gelatin', 'gelatine', 'lard'];
+        'fish', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn', 'gelatin', 'gelatine', 'lard',
+        'shellfish', 'crab', 'lobster', 'oyster', 'clam', 'mussel', 'scallop', 'squid',
+        'octopus', 'krill', 'cod', 'sardine', 'mackerel', 'herring', 'crustacean',
+        'mollusc', 'mollusk'];
       const found = findDietTermMatch(ingredientsText, meatTerms, allergens, { applyPlantQualifier: true });
       if (found) warnings.push(`Contains ${found} — not compatible with vegetarian diet`);
       else {
@@ -2326,8 +2385,16 @@ function detectDietWarnings(product, healthProfile) {
   if (prefs.has('gluten-free')) {
     const isGF = labels.includes('en:gluten-free');
     if (!isGF) {
-      const glutenTerms = ['wheat', 'gluten', 'barley', 'rye', 'spelt', 'oats', 'oat', 'malt'];
-      const found = findDietTermMatch(ingredientsText, glutenTerms, [...allergens, ...traces]);
+      // Joined compounds (wholewheat, wheatgerm) need substring hits for the
+      // cereal terms; malt/oat/oats stay whole-token so maltodextrin is clean.
+      const glutenSubstringTerms = ['wheat', 'gluten', 'barley', 'rye', 'spelt'];
+      const glutenTokenTerms = ['oats', 'oat', 'malt'];
+      const found = findDietTermMatch(
+        ingredientsText,
+        [...glutenSubstringTerms, ...glutenTokenTerms],
+        [...allergens, ...traces],
+        { substringTerms: glutenSubstringTerms }
+      );
       if (found) warnings.push(`Contains ${found} — may not be suitable for gluten-free diet`);
     }
   }
@@ -2345,12 +2412,20 @@ function detectDietWarnings(product, healthProfile) {
   if (prefs.has('soy-free')) {
     // Token match plus compounds where soy/soya is joined (soymilk) — those
     // are real soy, so a bare word-boundary check would wrongly miss them.
+    // "soy-free" / "soy free" must not count (negated by following "free").
     const soyTokens = tokenizeDietIngredients(ingredientsText);
     const hasSoyTag = allergens.includes('soybeans') || allergens.includes('soy') || allergens.includes('soya');
-    const hasSoyToken = soyTokens.some(t =>
-      t === 'soy' || t === 'soya' || t === 'tofu' || t === 'soybeans' || t === 'soybean' ||
-      t.startsWith('soy') || t.startsWith('soya')
-    );
+    let hasSoyToken = false;
+    for (let i = 0; i < soyTokens.length; i++) {
+      const t = soyTokens[i];
+      if (isDietPhraseBoundary(t)) continue;
+      const isSoy = t === 'soy' || t === 'soya' || t === 'tofu' || t === 'soybeans' || t === 'soybean' ||
+        t.startsWith('soy') || t.startsWith('soya');
+      if (isSoy && !isNegatedByFree(soyTokens, i)) {
+        hasSoyToken = true;
+        break;
+      }
+    }
     if (hasSoyTag || hasSoyToken) warnings.push('Contains soy — not compatible with soy-free diet');
   }
 
