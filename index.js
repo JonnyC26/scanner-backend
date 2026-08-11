@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '7';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '8';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1967,13 +1967,21 @@ const additiveDetails = {
 
 // OFF's additives_tags is a curated subset. Its per-ingredient taxonomy IDs
 // carry E-numbers it omits from that field (vitamins, some salts). Union both.
+// Dedupe on the resolved lookup key so e340 + e340ii do not become two rows
+// that both render as "Potassium Phosphate".
 function extractAdditiveCodes(product) {
-  const codes = new Set();
+  const rawOrdered = [];
+  const seenRaw = new Set();
+
+  function addRaw(key) {
+    if (!key || seenRaw.has(key)) return;
+    seenRaw.add(key);
+    rawOrdered.push(key);
+  }
 
   for (const tag of (product && product.additives_tags) || []) {
     if (tag == null) continue;
-    const key = String(tag).replace(/^en:/i, '').toLowerCase();
-    if (key) codes.add(key);
+    addRaw(String(tag).replace(/^en:/i, '').toLowerCase());
   }
 
   function walk(items) {
@@ -1982,7 +1990,7 @@ function extractAdditiveCodes(product) {
       if (!item || typeof item !== 'object') continue;
       const id = item.id;
       if (typeof id === 'string' && /^en:e\d+/i.test(id)) {
-        codes.add(id.replace(/^en:/i, '').toLowerCase());
+        addRaw(id.replace(/^en:/i, '').toLowerCase());
       }
       if (item.ingredients) walk(item.ingredients);
     }
@@ -1994,7 +2002,42 @@ function extractAdditiveCodes(product) {
     // Malformed ingredients must never break additive extraction.
   }
 
-  return [...codes];
+  // Group by resolved key, preserving first-seen order of each group.
+  const groups = new Map(); // resolvedKey -> raw codes in encounter order
+  for (const raw of rawOrdered) {
+    const resolved = resolveAdditiveLookupKey(raw);
+    let list = groups.get(resolved);
+    if (!list) {
+      list = [];
+      groups.set(resolved, list);
+    }
+    list.push(raw);
+  }
+
+  const result = [];
+  for (const [resolved, raws] of groups) {
+    result.push(pickPreferredAdditiveRawCode(raws, resolved));
+  }
+  return result;
+}
+
+// When several raw codes collapse to one lookup key, prefer a more-specific
+// form that exists in additiveMap; otherwise keep the base (resolved) code.
+function pickPreferredAdditiveRawCode(rawCodes, resolvedKey) {
+  if (!rawCodes || rawCodes.length === 0) return resolvedKey;
+  if (rawCodes.length === 1) return rawCodes[0];
+
+  const inMap = rawCodes.filter(c => additiveMap[c] || additiveDetails[c]);
+  if (inMap.length > 0) {
+    // Longer code ≈ more specific suffix (e340ii > e340i > e340).
+    let best = inMap[0];
+    for (let i = 1; i < inMap.length; i++) {
+      if (inMap[i].length > best.length) best = inMap[i];
+    }
+    return best;
+  }
+  if (rawCodes.includes(resolvedKey)) return resolvedKey;
+  return resolvedKey;
 }
 
 // OFF emits sub-forms (e332ii, e160ai). Prefer the exact code when named;
@@ -2155,6 +2198,68 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   return scored.slice(0, 2);
 }
 
+// Token-aware diet term matching — avoids substring false positives such as
+// "milk" inside "oatmilk" / "egg" inside "eggplant", and plant-qualified
+// compounds such as "oat milk" / "peanut butter" / "coconut cream".
+const PLANT_QUALIFIERS = new Set([
+  'oat', 'almond', 'soy', 'soya', 'coconut', 'cashew', 'rice', 'hemp', 'pea',
+  'peanut', 'sunflower', 'shea', 'cocoa', 'macadamia', 'hazelnut', 'walnut',
+  'pecan', 'pistachio', 'flax', 'sesame', 'potato', 'apple', 'nut', 'plant', 'vegan',
+]);
+
+// Dairy/egg terms that are often plant-qualified when preceded by a plant token.
+const PLANT_QUALIFIABLE_TERMS = new Set([
+  'milk', 'cream', 'butter', 'cheese', 'yogurt', 'dairy', 'egg', 'eggs',
+]);
+
+function normalizeDietIngredientText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u0060\u00b4]/g, "'") // curly / grave / acute → '
+    .replace(/[-–—/\\]+/g, ' ')
+    .replace(/[^a-z0-9'\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeDietIngredients(text) {
+  if (!text) return [];
+  return normalizeDietIngredientText(text)
+    .split(' ')
+    .map(t => t.replace(/^'+|'+$/g, ''))
+    .filter(Boolean);
+}
+
+// Match diet terms on whole tokens (word boundaries). When applyPlantQualifier
+// is true, a dairy/egg term is ignored if the immediately preceding token is
+// a plant qualifier ("oat milk", "cocoa butter"). Multi-token animal compounds
+// like "buttermilk" are listed as their own terms so boundary matching does
+// not create false negatives.
+function findDietTermMatch(ingredientsText, terms, tagList, { applyPlantQualifier = false } = {}) {
+  const tags = tagList || [];
+  for (const term of terms) {
+    if (tags.includes(term)) return term;
+  }
+
+  const tokens = tokenizeDietIngredients(ingredientsText);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    for (const term of terms) {
+      if (token !== term) continue;
+      if (
+        applyPlantQualifier &&
+        PLANT_QUALIFIABLE_TERMS.has(term) &&
+        i > 0 &&
+        PLANT_QUALIFIERS.has(tokens[i - 1])
+      ) {
+        continue;
+      }
+      return term;
+    }
+  }
+  return null;
+}
+
 // Diet warning detection — checks a product against the user's dietary
 // preferences and returns a human-readable warning string, or empty string
 // if no conflicts. Uses OFF's labels_tags, ingredients_text, and additive codes
@@ -2165,7 +2270,8 @@ function detectDietWarnings(product, healthProfile) {
   if (prefs.size === 0) return '';
 
   const labels = product.labels_tags || [];
-  const ingredients = (product.ingredients_text || '').toLowerCase();
+  const ingredientsText = product.ingredients_text || '';
+  const ingredientsLower = ingredientsText.toLowerCase();
   const additives = extractAdditiveCodes(product);
   const allergens = (product.allergens_tags || []).map(a => a.replace('en:', '').toLowerCase());
   const traces = (product.traces_tags || []).map(t => t.replace('en:', '').toLowerCase());
@@ -2178,11 +2284,12 @@ function detectDietWarnings(product, healthProfile) {
     if (isNotVegan) {
       warnings.push('Not compatible with vegan diet');
     } else if (!isVegan) {
-      // Check ingredients for common animal products
-      const animalTerms = ['milk', 'dairy', 'cheese', 'butter', 'cream', 'egg', 'eggs', 'honey',
+      // buttermilk is animal-derived and must remain a whole-token hit even
+      // though boundary matching no longer treats it as "butter"/"milk".
+      const animalTerms = ['buttermilk', 'milk', 'dairy', 'cheese', 'butter', 'cream', 'egg', 'eggs', 'honey',
         'meat', 'beef', 'pork', 'chicken', 'fish', 'gelatin', 'gelatine', 'lard', 'whey',
         'casein', 'lactose', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn'];
-      const found = animalTerms.find(t => ingredients.includes(t) || allergens.includes(t));
+      const found = findDietTermMatch(ingredientsText, animalTerms, allergens, { applyPlantQualifier: true });
       if (found) warnings.push(`Contains ${found} — not compatible with vegan diet`);
       // Animal-derived additives (e.g. E120 carmine) often appear only in
       // ingredients[] taxonomy IDs, not additives_tags — check both via helper.
@@ -2204,7 +2311,7 @@ function detectDietWarnings(product, healthProfile) {
     } else if (!isVeg) {
       const meatTerms = ['meat', 'beef', 'pork', 'chicken', 'turkey', 'lamb', 'veal',
         'fish', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn', 'gelatin', 'gelatine', 'lard'];
-      const found = meatTerms.find(t => ingredients.includes(t) || allergens.includes(t));
+      const found = findDietTermMatch(ingredientsText, meatTerms, allergens, { applyPlantQualifier: true });
       if (found) warnings.push(`Contains ${found} — not compatible with vegetarian diet`);
       else {
         const animalAdd = findAnimalDerivedAdditive(additives);
@@ -2220,7 +2327,7 @@ function detectDietWarnings(product, healthProfile) {
     const isGF = labels.includes('en:gluten-free');
     if (!isGF) {
       const glutenTerms = ['wheat', 'gluten', 'barley', 'rye', 'spelt', 'oats', 'oat', 'malt'];
-      const found = glutenTerms.find(t => ingredients.includes(t) || allergens.includes(t) || traces.includes(t));
+      const found = findDietTermMatch(ingredientsText, glutenTerms, [...allergens, ...traces]);
       if (found) warnings.push(`Contains ${found} — may not be suitable for gluten-free diet`);
     }
   }
@@ -2228,34 +2335,41 @@ function detectDietWarnings(product, healthProfile) {
   if (prefs.has('lactose-free')) {
     const isLF = labels.includes('en:lactose-free') || labels.includes('en:dairy-free');
     if (!isLF) {
-      const lactoseTerms = ['milk', 'dairy', 'lactose', 'whey', 'casein', 'cheese', 'butter', 'cream', 'yogurt'];
-      const found = lactoseTerms.find(t => ingredients.includes(t) || allergens.includes(t));
+      // Same plant-qualified dairy compounds as vegan (oat milk, cocoa butter…).
+      const lactoseTerms = ['buttermilk', 'milk', 'dairy', 'lactose', 'whey', 'casein', 'cheese', 'butter', 'cream', 'yogurt'];
+      const found = findDietTermMatch(ingredientsText, lactoseTerms, allergens, { applyPlantQualifier: true });
       if (found) warnings.push(`Contains ${found} — not compatible with lactose-free diet`);
     }
   }
 
   if (prefs.has('soy-free')) {
-    const hasSoy = allergens.includes('soybeans') || allergens.includes('soy') ||
-      ingredients.includes('soy') || ingredients.includes('soya') || ingredients.includes('tofu');
-    if (hasSoy) warnings.push('Contains soy — not compatible with soy-free diet');
+    // Token match plus compounds where soy/soya is joined (soymilk) — those
+    // are real soy, so a bare word-boundary check would wrongly miss them.
+    const soyTokens = tokenizeDietIngredients(ingredientsText);
+    const hasSoyTag = allergens.includes('soybeans') || allergens.includes('soy') || allergens.includes('soya');
+    const hasSoyToken = soyTokens.some(t =>
+      t === 'soy' || t === 'soya' || t === 'tofu' || t === 'soybeans' || t === 'soybean' ||
+      t.startsWith('soy') || t.startsWith('soya')
+    );
+    if (hasSoyTag || hasSoyToken) warnings.push('Contains soy — not compatible with soy-free diet');
   }
 
   if (prefs.has('pork-free')) {
     const porkTerms = ['pork', 'lard', 'bacon', 'ham', 'gelatin', 'gelatine'];
-    const found = porkTerms.find(t => ingredients.includes(t) || allergens.includes(t));
+    const found = findDietTermMatch(ingredientsText, porkTerms, allergens);
     if (found) warnings.push(`Contains ${found} — not compatible with pork-free diet`);
   }
 
   if (prefs.has('palm-oil-free')) {
-    const hasPalm = ingredients.includes('palm oil') || ingredients.includes('palm kernel') ||
-      labels.includes('en:palm-oil-free') === false && ingredients.includes('palm');
+    const hasPalm = ingredientsLower.includes('palm oil') || ingredientsLower.includes('palm kernel') ||
+      labels.includes('en:palm-oil-free') === false && ingredientsLower.includes('palm');
     if (hasPalm) warnings.push('Contains palm oil');
   }
 
   if (prefs.has('sulfite-free')) {
     const sulfiteAdditives = ['e220', 'e221', 'e222', 'e223', 'e224', 'e225', 'e226', 'e227', 'e228'];
     const hasSulfite = additives.some(a => sulfiteAdditives.includes(a)) ||
-      ingredients.includes('sulfite') || ingredients.includes('sulphite') || ingredients.includes('sulfit');
+      ingredientsLower.includes('sulfite') || ingredientsLower.includes('sulphite') || ingredientsLower.includes('sulfit');
     if (hasSulfite) warnings.push('Contains sulfites — not compatible with sulfite-free diet');
   }
 
