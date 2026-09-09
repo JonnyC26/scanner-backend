@@ -1849,6 +1849,9 @@ async function resolveProductType(barcode) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda`);
       return { productType: 'food', product: usdaProduct };
     }
+    if (usdaProduct) {
+      console.log(`[USDA SKIP] barcode=${barcode} reason=no_ingredients`);
+    }
   } catch (err) {
     console.log(`[USDA LOOKUP] barcode=${barcode} ${err.message}`);
   }

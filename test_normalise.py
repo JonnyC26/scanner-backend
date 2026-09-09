@@ -5147,8 +5147,6 @@ const foodFnStart = src.indexOf('async function scanAndCacheFood');
 const foodFnEnd = src.indexOf('// Photo-rescued cache docs have no upstream');
 if (foodFnStart < 0 || foodFnEnd < 0) throw new Error('could not locate scanAndCacheFood');
 
-const nutStart = src.indexOf('function productHasNutriments');
-const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
 const scoreStart = src.indexOf('function calculateScore');
 const scoreEnd = src.indexOf('// OFF labels_tags is crowd-entered');
 const orgStart = src.indexOf('function resolveOrganicStatus');
@@ -5172,7 +5170,6 @@ const additiveDetails = {};
 const SCAN_LOGIC_VERSION = '${logicMatch[1]}';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(prodStart, resolveEnd)}
-${src.slice(nutStart, nutEnd)}
 ${src.slice(scoreStart, scoreEnd)}
 ${src.slice(orgStart, orgEnd)}
 ${src.slice(fmtStart, fmtEnd)}
