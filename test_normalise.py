@@ -2992,7 +2992,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '8', 'SCAN_LOGIC_VERSION must be 8, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '9', 'SCAN_LOGIC_VERSION must be 9, got ' + SCAN_LOGIC_VERSION);
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -3063,7 +3063,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '8', 'exported SCAN_LOGIC_VERSION must be 8');
+assert(g.SCAN_LOGIC_VERSION === '9', 'exported SCAN_LOGIC_VERSION must be 9');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3118,7 +3118,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '8', 'normal food stamps logic version 8');
+  assert(result.scanLogicVersion === '9', 'normal food stamps logic version 9');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -3163,7 +3163,7 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '8', 'Dawn stamps logic version 8');
+  assert(result.scanLogicVersion === '9', 'Dawn stamps logic version 9');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3229,7 +3229,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '8', 'SCAN_LOGIC_VERSION must be 8, got ' + logicMatch[1]);
+assert(logicMatch[1] === '9', 'SCAN_LOGIC_VERSION must be 9, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -3940,7 +3940,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '8', 'SCAN_LOGIC_VERSION must be 8, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '9', 'SCAN_LOGIC_VERSION must be 9, got ' + SCAN_LOGIC_VERSION);
 
 // ?? 40 must remain — instrumentation only, no score redesign.
 assert(/nutriPoints\[nutriScore\?\.toLowerCase\(\)\]/.test(src) ||
@@ -4905,7 +4905,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '8', 'SCAN_LOGIC_VERSION must be 8, got ' + logicMatch[1]);
+assert(logicMatch[1] === '9', 'SCAN_LOGIC_VERSION must be 9, got ' + logicMatch[1]);
 
 // --- Source: /scan/photo resolves type before scoring ---
 const photoStart = src.indexOf("app.post('/scan/photo'");
@@ -4955,7 +4955,7 @@ const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
-const SCAN_LOGIC_VERSION = '8';
+const SCAN_LOGIC_VERSION = '9';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 ${src.slice(helperStart, helperEnd)}
@@ -5105,6 +5105,303 @@ console.log('batch2 classification ok');
     print(proc.stdout.strip())
 
 
+def test_usda_food_lookup():
+    """USDA is primary food lookup; OFF fallback; source stamped; barcode pad unchanged."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+assert(logicMatch[1] === '9', 'SCAN_LOGIC_VERSION must be 9, got ' + logicMatch[1]);
+
+const normStart = src.indexOf('function normalizeBarcode(raw)');
+const normBody = src.slice(normStart, src.indexOf('function isValidBarcode'));
+assert(normBody.includes("if (barcode.length === 12) return `0${barcode}`"),
+  'UPC-A → EAN-13 padding must stay in normalizeBarcode');
+assert(!normBody.includes('USDA'), 'normalizeBarcode must not mention USDA');
+
+assert(src.includes('async function usdaLookup(barcode)'), 'usdaLookup must exist');
+assert(src.includes('process.env.USDA_API_KEY'), 'API key must come from USDA_API_KEY');
+assert(!src.includes("USDA_API_KEY = '") && !src.includes('USDA_API_KEY = "'),
+  'USDA API key must not be hardcoded');
+assert(src.includes('AbortSignal.timeout'), 'USDA lookup must time out');
+assert(src.includes("dataType: ['Branded']") || src.includes('dataType: ["Branded"]'),
+  'USDA search must filter to Branded');
+assert(src.includes('reason=usda'), 'resolveProductType must prefer USDA food hits');
+
+const start = src.indexOf('const cosmeticTable = JSON.parse');
+const end = src.indexOf('// Firestore docs are size-capped');
+if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
+
+const prodStart = src.indexOf('async function fetchProductFromFacts');
+const resolveEnd = src.indexOf('function calculateScore');
+if (prodStart < 0 || resolveEnd < 0) throw new Error('could not locate product/resolve block');
+
+const foodFnStart = src.indexOf('async function scanAndCacheFood');
+const foodFnEnd = src.indexOf('// Photo-rescued cache docs have no upstream');
+if (foodFnStart < 0 || foodFnEnd < 0) throw new Error('could not locate scanAndCacheFood');
+
+const scoreStart = src.indexOf('function calculateScore');
+const scoreEnd = src.indexOf('// OFF labels_tags is crowd-entered');
+const orgStart = src.indexOf('function resolveOrganicStatus');
+const orgEnd = src.indexOf('function parseServingQuantity');
+const fmtStart = src.indexOf('function parseServingQuantity');
+const fmtEnd = src.indexOf('const additiveMap');
+const extractStart = src.indexOf("// OFF's additives_tags is a curated subset");
+const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
+const addDispStart = src.indexOf('function formatAdditivesCountDisplay');
+const foodExplainStart = src.indexOf('async function generateFoodExplanation');
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = process.cwd();
+function recordRawObservation() {}
+async function getCategoryAlternatives() { return []; }
+async function generateFoodExplanation() { return 'ok'; }
+const additiveMap = {};
+const additiveDetails = {};
+const SCAN_LOGIC_VERSION = '${logicMatch[1]}';
+${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(prodStart, resolveEnd)}
+${src.slice(scoreStart, scoreEnd)}
+${src.slice(orgStart, orgEnd)}
+${src.slice(fmtStart, fmtEnd)}
+${src.slice(extractStart, extractEnd)}
+${src.slice(addDispStart, foodExplainStart)}
+${src.slice(foodFnStart, foodFnEnd)}
+module.exports = {
+  usdaGtinMatches,
+  usdaGtinQueryCandidates,
+  mapUsdaFoodToProduct,
+  pickUsdaGtinMatch,
+  usdaLookup,
+  resolveProductType,
+  productHasIngredients,
+  scanAndCacheFood,
+  SCAN_LOGIC_VERSION,
+};
+`;
+fs.writeFileSync('/tmp/usda_lookup_helpers.js', block);
+delete require.cache['/tmp/usda_lookup_helpers.js'];
+const g = require('/tmp/usda_lookup_helpers.js');
+
+const fettuccine = {
+  fdcId: 2419828,
+  description: 'ORGANIC FETTUCCINE',
+  dataType: 'Branded',
+  gtinUpc: '099482431112',
+  publishedDate: '2022-12-22',
+  brandOwner: 'Whole Foods Market, Inc.',
+  brandName: '365 WHOLE FOODS MARKET',
+  ingredients: 'ORGANIC DURUM WHEAT SEMOLINA.',
+  servingSizeUnit: 'g',
+  servingSize: 56.0,
+  foodNutrients: [
+    { nutrientId: 1003, nutrientName: 'Protein', unitName: 'G', value: 10.7 },
+    { nutrientId: 1008, nutrientName: 'Energy', unitName: 'KCAL', value: 357 },
+    { nutrientId: 2000, nutrientName: 'Total Sugars', unitName: 'G', value: 3.57 },
+    { nutrientId: 1093, nutrientName: 'Sodium, Na', unitName: 'MG', value: 0.0 },
+  ],
+};
+
+(async () => {
+  assert(g.usdaGtinMatches('099482431112', '099482431112') === true, '12=12');
+  assert(g.usdaGtinMatches('0099482431112', '099482431112') === true, '13 padded matches 12');
+  assert(g.usdaGtinMatches('099482431112', '00099482431112') === true, '12 matches GTIN-14');
+  assert(g.usdaGtinMatches('099482431112', '099482400026') === false, 'different UPC');
+  assert(g.usdaGtinMatches('0000000000000', '0099447210127') === false, 'all-zero must not match');
+  assert(g.usdaGtinMatches('0000000000000', '0000000000000') === false, 'all-zero vs all-zero');
+
+  const candidates = g.usdaGtinQueryCandidates('0099482431112');
+  assert(candidates[0] === '099482431112', 'canonical EAN-13 must query 12-digit UPC first, got ' + JSON.stringify(candidates));
+  assert(candidates.includes('0099482431112'), '13-digit remains a fallback query');
+
+  const mapped = g.mapUsdaFoodToProduct(fettuccine, '0099482431112');
+  assert(mapped.source === 'usda', 'mapped source');
+  assert(mapped.product_name === 'ORGANIC FETTUCCINE', 'name from description');
+  assert(mapped.brands.includes('365 WHOLE FOODS MARKET'), 'brand mapped');
+  assert(mapped.ingredients_text === 'ORGANIC DURUM WHEAT SEMOLINA.', 'ingredients text');
+  assert(mapped.nutriments.proteins_100g === 10.7, 'protein per 100g');
+  assert(mapped.nutriments['energy-kcal_100g'] === 357, 'energy kcal per 100g');
+  assert(mapped.nutriments.sugars_100g === 3.57, 'sugars per 100g');
+  assert(mapped.nutriments.sodium_100g === 0, 'sodium MG → grams');
+  assert(mapped.serving_quantity === 56, 'serving grams');
+  assert(Array.isArray(mapped.additives_tags) && mapped.additives_tags.length === 0, 'no invented additives');
+  assert(g.productHasIngredients(mapped) === true, 'mapped ingredients are usable');
+
+  const fuzzy = g.pickUsdaGtinMatch([
+    { gtinUpc: '0099447210127', description: 'CHICKEN NUGGETS', fdcId: 1 },
+  ], '0000000000000');
+  assert(fuzzy === null, 'fuzzy search hit with different gtin must be rejected');
+
+  const prevKey = process.env.USDA_API_KEY;
+  delete process.env.USDA_API_KEY;
+  let fetches = [];
+  global.fetch = async (url) => {
+    fetches.push(String(url));
+    throw new Error('network should not be used without a key');
+  };
+  const skipped = await g.usdaLookup('0099482431112');
+  assert(skipped === null, 'missing key returns null');
+  assert(fetches.length === 0, 'missing key must not fetch');
+
+  process.env.USDA_API_KEY = 'test-key-not-real';
+
+  global.fetch = async () => {
+    const err = new Error('aborted');
+    err.name = 'TimeoutError';
+    throw err;
+  };
+  const timedOut = await g.usdaLookup('0099482431112');
+  assert(timedOut === null, 'timeout returns null');
+
+  global.fetch = async (url, opts) => {
+    fetches.push(String(url));
+    const body = JSON.parse(opts.body);
+    assert(body.dataType && body.dataType[0] === 'Branded', 'Branded filter');
+    assert(body.query === '099482431112', 'must search 12-digit form, got ' + body.query);
+    return {
+      ok: true,
+      json: async () => ({ totalHits: 1, foods: [fettuccine] }),
+    };
+  };
+  fetches = [];
+  const hit = await g.usdaLookup('0099482431112');
+  assert(hit && hit.source === 'usda', 'usdaLookup source');
+  assert(hit.product_name === 'ORGANIC FETTUCCINE');
+  assert(hit.fdcId === 2419828);
+
+  fetches = [];
+  global.fetch = async (url) => {
+    const u = String(url);
+    fetches.push(u);
+    if (u.includes('api.nal.usda.gov')) {
+      return { ok: true, json: async () => ({ foods: [fettuccine] }) };
+    }
+    throw new Error('OFF/OBF must not be called on USDA hit: ' + u);
+  };
+  const resolved = await g.resolveProductType('0099482431112');
+  assert(resolved.productType === 'food', 'USDA hit is food');
+  assert(resolved.product.source === 'usda', 'resolved source usda');
+  assert(fetches.every(u => u.includes('api.nal.usda.gov')), 'only USDA fetched');
+
+  const offProduct = {
+    product_name: 'OFF Fettuccine',
+    ingredients_text: 'Durum wheat semolina',
+    categories_tags: ['en:pastas'],
+    nutriments: { 'energy-kcal_100g': 350, proteins_100g: 12, sodium_100g: 0.01 },
+  };
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('api.nal.usda.gov')) {
+      return { ok: true, json: async () => ({ foods: [] }) };
+    }
+    if (u.includes('openfoodfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: offProduct }) };
+    }
+    return { ok: false };
+  };
+  const fallback = await g.resolveProductType('0099482431112');
+  assert(fallback.productType === 'food', 'OFF fallback food');
+  assert(fallback.product.source === 'off', 'OFF source stamped');
+  assert(fallback.product.product_name === 'OFF Fettuccine');
+
+  const emptyUsda = Object.assign({}, fettuccine, { ingredients: '' });
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('api.nal.usda.gov')) {
+      return { ok: true, json: async () => ({ foods: [emptyUsda] }) };
+    }
+    if (u.includes('openfoodfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: offProduct }) };
+    }
+    return { ok: false };
+  };
+  const noIng = await g.resolveProductType('0099482431112');
+  assert(noIng.product.source === 'off', 'no usable USDA ingredients → OFF');
+
+  const offCosmetic = {
+    product_name: 'Dove Whole Body',
+    ingredients_text: '.',
+    categories_tags: ['en:deodorants', 'en:hygiene'],
+    nutriments: {},
+  };
+  const obfProduct = {
+    product_name: 'Dove Whole Body Deodorant',
+    ingredients_text: 'Aqua, Glycerin, Parfum',
+    categories_tags: ['en:deodorants'],
+  };
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('api.nal.usda.gov')) {
+      return { ok: true, json: async () => ({ foods: [] }) };
+    }
+    if (u.includes('openfoodfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: offCosmetic }) };
+    }
+    if (u.includes('openbeautyfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: obfProduct }) };
+    }
+    return { ok: false };
+  };
+  const cosmetic = await g.resolveProductType('0000000000000');
+  assert(cosmetic.productType === 'cosmetic', 'cosmetic classification unchanged, got ' + cosmetic.productType);
+  assert(cosmetic.product.source === 'obf', 'OBF source stamped');
+
+  const scored = await g.scanAndCacheFood('0099482431112', mapped, { skipExplanation: true });
+  assert(scored.source === 'usda', 'scan response source usda, got ' + scored.source);
+  assert(typeof scored.score === 'number' && scored.score !== null, 'USDA mapped food must score');
+  assert(scored.productName === 'ORGANIC FETTUCCINE');
+  assert(scored.ingredients.includes('DURUM WHEAT SEMOLINA'));
+  assert(scored.scanLogicVersion === '9', 'logic version 9');
+
+  const offScored = await g.scanAndCacheFood('111', {
+    product_name: 'Yogurt',
+    ingredients_text: 'Milk, live cultures',
+    nutriscore_grade: 'b',
+    nova_group: 3,
+    additives_tags: [],
+    labels_tags: [],
+    nutriments: {
+      'energy-kcal_100g': 80,
+      proteins_100g: 4,
+      sodium_100g: 0.05,
+      sugars_100g: 4,
+    },
+  }, { skipExplanation: true });
+  assert(offScored.source === 'off', 'OFF default source on food response');
+
+  if (prevKey === undefined) delete process.env.USDA_API_KEY;
+  else process.env.USDA_API_KEY = prevKey;
+
+  console.log('usda food lookup ok');
+})().catch((err) => {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"usda food lookup assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -5136,6 +5433,7 @@ def main() -> int:
         test_batch1_security,
         test_batch2_classification,
         test_batch3_barcode_normalisation,
+        test_usda_food_lookup,
     ]
     failed = 0
     for test in tests:

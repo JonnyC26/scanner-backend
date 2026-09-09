@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '8';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '9';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1483,6 +1483,221 @@ async function fetchProductFromFacts(baseUrl, barcode) {
   return data.product;
 }
 
+// USDA FoodData Central — primary US branded-food lookup. OFF is the fallback.
+// Search is fuzzy and will happily return an unrelated branded food, so every
+// hit MUST have a verified gtinUpc (leading zeros ignored). US records store
+// UPC-A as 12 digits; our cache key is the padded EAN-13, so the search
+// query strips that one leading zero. normalizeBarcode itself is unchanged.
+const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
+const USDA_LOOKUP_TIMEOUT_MS = 4000;
+const USDA_USER_AGENT = 'DontWorryFoodScanner/1.0 (contact: app developer)';
+let usdaApiKeyMissingLogged = false;
+
+function digitsOnly(value) {
+  return String(value == null ? '' : value).replace(/\D/g, '');
+}
+
+function stripLeadingZeros(digits) {
+  const d = digitsOnly(digits);
+  const stripped = d.replace(/^0+/, '');
+  return stripped;
+}
+
+function usdaGtinMatches(barcode, gtinUpc) {
+  const a = stripLeadingZeros(barcode);
+  const b = stripLeadingZeros(gtinUpc);
+  // All-zero / empty after strip must never match a fuzzy search hit.
+  if (!a || !b) return false;
+  return a === b;
+}
+
+// Prefer the 12-digit UPC-A USDA actually indexes. Canonical 13-digit
+// (0 + UPC-A) is tried second so a 13-digit stored GTIN can still hit.
+function usdaGtinQueryCandidates(barcode) {
+  const digits = digitsOnly(barcode);
+  const candidates = [];
+  const add = (q) => {
+    if (q && !candidates.includes(q)) candidates.push(q);
+  };
+  if (digits.length === 13 && digits.charAt(0) === '0') {
+    add(digits.slice(1));
+    add(digits);
+  } else {
+    add(digits);
+    if (digits.length === 12) add(`0${digits}`);
+  }
+  return candidates;
+}
+
+function usdaNutrientId(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  if (entry.nutrientId != null) return Number(entry.nutrientId);
+  if (entry.nutrient && entry.nutrient.id != null) return Number(entry.nutrient.id);
+  return null;
+}
+
+function usdaNutrientAmount(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  if (typeof entry.value === 'number' && Number.isFinite(entry.value)) return entry.value;
+  if (typeof entry.amount === 'number' && Number.isFinite(entry.amount)) return entry.amount;
+  return null;
+}
+
+function usdaNutrientUnit(entry) {
+  const raw = (entry && (entry.unitName || (entry.nutrient && entry.nutrient.unitName))) || '';
+  return String(raw).trim().toUpperCase();
+}
+
+function usdaAmountToGrams(amount, unit) {
+  if (amount == null) return null;
+  if (unit === 'MG' || unit === 'MILLIGRAM') return amount / 1000;
+  return amount;
+}
+
+function mapUsdaNutrientsToOff(food) {
+  const nutriments = {};
+  const list = (food && food.foodNutrients) || [];
+  for (const entry of list) {
+    const id = usdaNutrientId(entry);
+    const amount = usdaNutrientAmount(entry);
+    if (id == null || amount == null) continue;
+    const unit = usdaNutrientUnit(entry);
+    if (id === 1008) {
+      // Energy, kcal per 100g (skip kJ sibling 1062).
+      if (unit && unit !== 'KCAL' && unit !== 'KCALS') continue;
+      nutriments['energy-kcal_100g'] = amount;
+      nutriments['energy-kcal'] = amount;
+    } else if (id === 1003) {
+      nutriments.proteins_100g = amount;
+      nutriments.proteins = amount;
+    } else if (id === 2000 || id === 1063) {
+      if (nutriments.sugars_100g == null || id === 2000) {
+        nutriments.sugars_100g = amount;
+        nutriments.sugars = amount;
+      }
+    } else if (id === 1093) {
+      const grams = usdaAmountToGrams(amount, unit || 'MG');
+      nutriments.sodium_100g = grams;
+      nutriments.sodium = grams;
+    }
+  }
+  return nutriments;
+}
+
+function mapUsdaServingQuantity(food) {
+  if (!food || food.servingSize == null) return null;
+  const size = parseFloat(food.servingSize);
+  if (!Number.isFinite(size) || size <= 0) return null;
+  const unit = String(food.servingSizeUnit || '').trim().toLowerCase();
+  if (unit === 'g' || unit === 'grm' || unit === 'gram' || unit === 'grams') return size;
+  if (unit === 'ml' || unit === 'mlt' || unit === 'milliliter' || unit === 'millilitre') return size;
+  return null;
+}
+
+function mapUsdaFoodToProduct(food, barcode) {
+  if (!food) return null;
+  const brandName = String(food.brandName || '').trim();
+  const brandOwner = String(food.brandOwner || '').trim();
+  const brands = [brandName, brandOwner].filter(Boolean).join(', ');
+  const ingredientsText = String(food.ingredients || '').trim();
+  return {
+    code: String(barcode || ''),
+    product_name: String(food.description || '').trim() || 'Unknown Product',
+    brands,
+    ingredients_text: ingredientsText,
+    ingredients: [],
+    additives_tags: [],
+    labels_tags: [],
+    allergens_tags: [],
+    traces_tags: [],
+    categories_tags: [],
+    nutriments: mapUsdaNutrientsToOff(food),
+    serving_quantity: mapUsdaServingQuantity(food),
+    nutriscore_grade: null,
+    nova_group: null,
+    image_front_url: '',
+    image_url: '',
+    source: 'usda',
+    fdcId: food.fdcId != null ? food.fdcId : null,
+  };
+}
+
+function pickUsdaGtinMatch(foods, barcode) {
+  const matches = (Array.isArray(foods) ? foods : []).filter(
+    (food) => food && usdaGtinMatches(barcode, food.gtinUpc)
+  );
+  if (matches.length === 0) return null;
+  matches.sort((a, b) => {
+    const dateA = String(a.publishedDate || '');
+    const dateB = String(b.publishedDate || '');
+    if (dateA !== dateB) return dateB.localeCompare(dateA);
+    return (Number(b.fdcId) || 0) - (Number(a.fdcId) || 0);
+  });
+  return matches[0];
+}
+
+async function usdaSearchBranded(query, apiKey) {
+  const url = `${USDA_SEARCH_URL}?${new URLSearchParams({ api_key: apiKey }).toString()}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': USDA_USER_AGENT,
+    },
+    body: JSON.stringify({
+      query,
+      dataType: ['Branded'],
+      pageSize: 25,
+      pageNumber: 1,
+    }),
+    signal: AbortSignal.timeout(USDA_LOOKUP_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    const err = new Error(`USDA search HTTP ${res.status}`);
+    err.statusCode = res.status;
+    throw err;
+  }
+  const data = await res.json();
+  return Array.isArray(data && data.foods) ? data.foods : [];
+}
+
+async function usdaLookup(barcode) {
+  const apiKey = process.env.USDA_API_KEY;
+  if (!apiKey) {
+    if (!usdaApiKeyMissingLogged) {
+      usdaApiKeyMissingLogged = true;
+      console.log('[USDA SKIP] USDA_API_KEY is not set — falling back to Open Food Facts');
+    }
+    return null;
+  }
+  const queries = usdaGtinQueryCandidates(barcode);
+  if (queries.length === 0) return null;
+
+  for (const query of queries) {
+    try {
+      const foods = await usdaSearchBranded(query, apiKey);
+      const match = pickUsdaGtinMatch(foods, barcode);
+      if (match) {
+        const product = mapUsdaFoodToProduct(match, barcode);
+        console.log(
+          `[USDA HIT] barcode=${barcode} fdcId=${product.fdcId} query=${query} gtin=${match.gtinUpc}`
+        );
+        return product;
+      }
+      console.log(`[USDA MISS] barcode=${barcode} query=${query} foods=${foods.length}`);
+    } catch (err) {
+      const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
+      if (timedOut) {
+        console.log(`[USDA TIMEOUT] barcode=${barcode} query=${query} — falling back to OFF`);
+        return null;
+      }
+      console.log(`[USDA LOOKUP] barcode=${barcode} query=${query} ${err.message}`);
+      return null;
+    }
+  }
+  return null;
+}
+
 function productHasIngredients(product) {
   if (!product) return false;
   if (Array.isArray(product.ingredients) && product.ingredients.length > 0) return true;
@@ -1611,6 +1826,12 @@ function classifySearchProductType(categoriesTags) {
   return 'food';
 }
 
+function attachProductSource(product, source) {
+  if (!product || typeof product !== 'object') return product;
+  if (!product.source) product.source = source;
+  return product;
+}
+
 async function resolveProductType(barcode) {
   // Classify by category (and OBF), not merely by which database answered first.
   // Toothpaste/soap/etc. often exist in OFF with ingredients and would otherwise
@@ -1619,15 +1840,37 @@ async function resolveProductType(barcode) {
   let foodProduct = null;
   let cosmeticProduct = null;
 
+  // USDA branded foods first (US GTINs). Cosmetic / household classification is
+  // unchanged: it still runs on the OFF/OBF path when USDA misses or has no
+  // usable ingredients. Scoring never branches on source.
   try {
-    foodProduct = await fetchProductFromFacts('https://world.openfoodfacts.org', barcode);
+    const usdaProduct = await usdaLookup(barcode);
+    if (usdaProduct && productHasIngredients(usdaProduct)) {
+      console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda`);
+      return { productType: 'food', product: usdaProduct };
+    }
+    if (usdaProduct) {
+      console.log(`[USDA SKIP] barcode=${barcode} reason=no_ingredients`);
+    }
+  } catch (err) {
+    console.log(`[USDA LOOKUP] barcode=${barcode} ${err.message}`);
+  }
+
+  try {
+    foodProduct = attachProductSource(
+      await fetchProductFromFacts('https://world.openfoodfacts.org', barcode),
+      'off'
+    );
   } catch (err) {
     console.log(`[OFF FETCH ERROR] barcode=${barcode} ${err.message}`);
   }
 
   if (!foodProduct) {
     try {
-      cosmeticProduct = await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode);
+      cosmeticProduct = attachProductSource(
+        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
+        'obf'
+      );
     } catch (err) {
       console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
     }
@@ -1652,7 +1895,10 @@ async function resolveProductType(barcode) {
   // Category says beauty/hygiene (optionally reinforced by missing nutriments).
   if (offCosmeticCategory) {
     try {
-      cosmeticProduct = await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode);
+      cosmeticProduct = attachProductSource(
+        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
+        'obf'
+      );
     } catch (err) {
       console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
     }
@@ -1675,7 +1921,10 @@ async function resolveProductType(barcode) {
   // OFF has no ingredients — try OBF (genuine beauty product missing from OFF text).
   if (!offHasIngredients) {
     try {
-      cosmeticProduct = await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode);
+      cosmeticProduct = attachProductSource(
+        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
+        'obf'
+      );
     } catch (err) {
       console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
     }
@@ -2828,23 +3077,30 @@ function scanAndCacheHousehold(barcode, product) {
   const productName = product.product_name || 'Unknown Product';
   const imageUrl = product.image_front_url || product.image_url || '';
   const ingredients = product.ingredients_text || '';
+  const source = (product && product.source) || 'off';
   recordRawObservation({
     barcode,
     productType: 'household',
-    source: 'off',
+    source,
     payload: product,
     tableVersion: null,
   });
   console.log(`[HOUSEHOLD] barcode=${barcode} — category household, skipping score`);
-  return buildHouseholdScanResponse({ productName, imageUrl, ingredients });
+  return buildHouseholdScanResponse({
+    productName,
+    imageUrl,
+    ingredients,
+    extras: { source },
+  });
 }
 
 async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false } = {}) {
   // Preserve the unmodified OBF product for future rescoring / analysis.
+  const source = (product && product.source) || 'obf';
   recordRawObservation({
     barcode,
     productType: 'cosmetic',
-    source: 'obf',
+    source,
     payload: product,
     tableVersion: COSMETIC_TABLE_VERSION,
   });
@@ -2917,6 +3173,7 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
     ingredientList: JSON.stringify(scored.ingredientList || []),
     tableVersion: COSMETIC_TABLE_VERSION,
     scanLogicVersion: SCAN_LOGIC_VERSION,
+    source,
   };
   if (skipExplanation && !scored.noIngredientData) {
     responseData.explanationPending = true;
@@ -2925,11 +3182,13 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
 }
 
 async function scanAndCacheFood(barcode, product, { skipExplanation = false } = {}) {
-  // Preserve the unmodified OFF product for future rescoring / analysis.
+  // Preserve the unmodified upstream product for future rescoring / analysis.
+  // Source is recorded for hit-rate measurement; scoring does not branch on it.
+  const source = (product && product.source) || 'off';
   recordRawObservation({
     barcode,
     productType: 'food',
-    source: 'off',
+    source,
     payload: product,
     tableVersion: null,
   });
@@ -2994,6 +3253,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
       ingredientFindings: null,
       noIngredientData: false,
       scanLogicVersion: SCAN_LOGIC_VERSION,
+      source,
     };
   }
 
@@ -3129,6 +3389,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     ingredientFindings: null,
     noIngredientData,
     scanLogicVersion: SCAN_LOGIC_VERSION,
+    source,
   };
   if (skipExplanation && !noIngredientData) {
     responseData.explanationPending = true;
