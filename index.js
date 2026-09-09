@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '9';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '10';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1429,7 +1429,8 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
       }
 
       if (!isNew) {
-        console.log(`[RAW] barcode=${barcode || 'none'} source=${source} bytes=${bytes} new=false`);
+        const sourceLog = typeof source === 'object' && source ? JSON.stringify(source) : source;
+        console.log(`[RAW] barcode=${barcode || 'none'} source=${sourceLog} bytes=${bytes} new=false`);
         return;
       }
 
@@ -1447,7 +1448,7 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
         doc.photoCapturedBy = photoCapturedBy || null;
       }
       await db.collection(RAW_COLLECTION).add(doc);
-      console.log(`[RAW] barcode=${barcode || 'none'} source=${source} bytes=${bytes} new=true`);
+      console.log(`[RAW] barcode=${barcode || 'none'} source=${typeof source === 'object' && source ? JSON.stringify(source) : source} bytes=${bytes} new=true`);
 
       if (barcode) {
         try {
@@ -1473,23 +1474,30 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
   })();
 }
 
-async function fetchProductFromFacts(baseUrl, barcode) {
-  const res = await fetch(`${baseUrl}/api/v2/product/${barcode}.json`, {
+const USDA_LOOKUP_TIMEOUT_MS = 4000; // abort USDA search; must not wait on OFF
+const OFF_LOOKUP_TIMEOUT_MS = 3000;  // abort the parallel food OFF barcode fetch only
+
+async function fetchProductFromFacts(baseUrl, barcode, timeoutMs) {
+  const opts = {
     headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
-  });
+  };
+  // Timeout only when the caller asks (parallel food OFF). OBF stays unbounded.
+  if (timeoutMs != null) {
+    opts.signal = AbortSignal.timeout(timeoutMs);
+  }
+  const res = await fetch(`${baseUrl}/api/v2/product/${barcode}.json`, opts);
   if (!res.ok) return null;
   const data = await res.json();
   if (data.status === 0 || !data.product) return null;
   return data.product;
 }
 
-// USDA FoodData Central — primary US branded-food lookup. OFF is the fallback.
+// USDA FoodData Central — queried in parallel with OFF, then merged field-by-field.
 // Search is fuzzy and will happily return an unrelated branded food, so every
 // hit MUST have a verified gtinUpc (leading zeros ignored). US records store
 // UPC-A as 12 digits; our cache key is the padded EAN-13, so the search
 // query strips that one leading zero. normalizeBarcode itself is unchanged.
 const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
-const USDA_LOOKUP_TIMEOUT_MS = 4000;
 const USDA_USER_AGENT = 'DontWorryFoodScanner/1.0 (contact: app developer)';
 let usdaApiKeyMissingLogged = false;
 
@@ -1666,36 +1674,36 @@ async function usdaLookup(barcode) {
   if (!apiKey) {
     if (!usdaApiKeyMissingLogged) {
       usdaApiKeyMissingLogged = true;
-      console.log('[USDA SKIP] USDA_API_KEY is not set — falling back to Open Food Facts');
+      console.log('[USDA SKIP] USDA_API_KEY is not set — Open Food Facts only');
     }
     return null;
   }
-  const queries = usdaGtinQueryCandidates(barcode);
-  if (queries.length === 0) return null;
+  // Exactly one USDA request per scan. Candidates[0] is the 12-digit UPC
+  // USDA indexes; do not retry the 13-digit form.
+  const query = usdaGtinQueryCandidates(barcode)[0];
+  if (!query) return null;
 
-  for (const query of queries) {
-    try {
-      const foods = await usdaSearchBranded(query, apiKey);
-      const match = pickUsdaGtinMatch(foods, barcode);
-      if (match) {
-        const product = mapUsdaFoodToProduct(match, barcode);
-        console.log(
-          `[USDA HIT] barcode=${barcode} fdcId=${product.fdcId} query=${query} gtin=${match.gtinUpc}`
-        );
-        return product;
-      }
-      console.log(`[USDA MISS] barcode=${barcode} query=${query} foods=${foods.length}`);
-    } catch (err) {
-      const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
-      if (timedOut) {
-        console.log(`[USDA TIMEOUT] barcode=${barcode} query=${query} — falling back to OFF`);
-        return null;
-      }
-      console.log(`[USDA LOOKUP] barcode=${barcode} query=${query} ${err.message}`);
+  try {
+    const foods = await usdaSearchBranded(query, apiKey);
+    const match = pickUsdaGtinMatch(foods, barcode);
+    if (match) {
+      const product = mapUsdaFoodToProduct(match, barcode);
+      console.log(
+        `[USDA HIT] barcode=${barcode} fdcId=${product.fdcId} query=${query} gtin=${match.gtinUpc}`
+      );
+      return product;
+    }
+    console.log(`[USDA MISS] barcode=${barcode} query=${query} foods=${foods.length}`);
+    return null;
+  } catch (err) {
+    const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    if (timedOut) {
+      console.log(`[USDA TIMEOUT] barcode=${barcode} query=${query}`);
       return null;
     }
+    console.log(`[USDA LOOKUP] barcode=${barcode} query=${query} ${err.message}`);
+    return null;
   }
-  return null;
 }
 
 function productHasIngredients(product) {
@@ -1832,6 +1840,146 @@ function attachProductSource(product, source) {
   return product;
 }
 
+// Non-empty for merge precedence: not null, undefined, empty string,
+// whitespace-only, or empty array. Numeric 0 is valid.
+function isMergeNonEmpty(value) {
+  if (value == null) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'number') return Number.isFinite(value);
+  return true;
+}
+
+function pickUsdaThenOff(usdaValue, offValue) {
+  if (isMergeNonEmpty(usdaValue)) return { value: usdaValue, source: 'usda' };
+  if (isMergeNonEmpty(offValue)) return { value: offValue, source: 'off' };
+  return { value: isMergeNonEmpty(usdaValue) ? usdaValue : (offValue == null ? '' : offValue), source: null };
+}
+
+// OFF barcode endpoint only. After a valid product object, compare product.code
+// to the scanned barcode via normalizeBarcode. Reject on mismatch.
+function offProductMatchesScannedBarcode(product, barcode) {
+  if (!product) return false;
+  const rawCode = product.code;
+  if (rawCode == null || String(rawCode).trim() === '') return true;
+  const returned = normalizeBarcode(rawCode);
+  const scanned = normalizeBarcode(barcode);
+  if (!returned || !scanned) return false;
+  return returned === scanned;
+}
+
+async function fetchOffFoodProduct(barcode) {
+  const product = await fetchProductFromFacts(
+    'https://world.openfoodfacts.org',
+    barcode,
+    OFF_LOOKUP_TIMEOUT_MS
+  );
+  if (!product) return null;
+  if (!offProductMatchesScannedBarcode(product, barcode)) {
+    console.log(`[OFF CODE MISMATCH] barcode=${barcode} product.code=${product.code}`);
+    return null;
+  }
+  return attachProductSource(product, 'off');
+}
+
+function mergeNutrimentMaps(usdaNutriments, offNutriments) {
+  const usda = usdaNutriments && typeof usdaNutriments === 'object' ? usdaNutriments : {};
+  const off = offNutriments && typeof offNutriments === 'object' ? offNutriments : {};
+  const merged = {};
+  let usedUsda = false;
+  let usedOff = false;
+  const keys = new Set([...Object.keys(off), ...Object.keys(usda)]);
+  for (const key of keys) {
+    if (isMergeNonEmpty(usda[key])) {
+      merged[key] = usda[key];
+      usedUsda = true;
+    } else if (isMergeNonEmpty(off[key])) {
+      merged[key] = off[key];
+      usedOff = true;
+    }
+  }
+  return { nutriments: merged, source: usedUsda ? 'usda' : (usedOff ? 'off' : null) };
+}
+
+// Merge USDA identity/nutrition with OFF additives / allergens / Nutri-Score / NOVA.
+// Never object-spread. USDA ingredients_text is DISPLAY ONLY — scoring still reads
+// nutriments (proteins/sugars/sodium/energy), nutriscore_grade, nova_group,
+// extractAdditiveCodes(additives_tags + ingredients[].id), and labels_tags.
+// Do not parse USDA ingredient strings for additives or allergens.
+function mergeUsdaAndOffProducts(barcode, usdaProduct, offProduct) {
+  if (usdaProduct && !offProduct) return usdaProduct;
+  if (!usdaProduct && offProduct) return offProduct;
+  if (!usdaProduct && !offProduct) return null;
+
+  const namePick = pickUsdaThenOff(usdaProduct.product_name, offProduct.product_name);
+  const brandPick = pickUsdaThenOff(usdaProduct.brands, offProduct.brands);
+  const ingPick = pickUsdaThenOff(usdaProduct.ingredients_text, offProduct.ingredients_text);
+  const nutriPick = mergeNutrimentMaps(usdaProduct.nutriments, offProduct.nutriments);
+  const servingPick = pickUsdaThenOff(usdaProduct.serving_quantity, offProduct.serving_quantity);
+
+  const merged = {
+    code: String(barcode || ''),
+    product_name: namePick.value || 'Unknown Product',
+    brands: brandPick.value || '',
+    ingredients_text: ingPick.value || '',
+    ingredients: Array.isArray(offProduct.ingredients) ? offProduct.ingredients : [],
+    additives_tags: Array.isArray(offProduct.additives_tags) ? offProduct.additives_tags : [],
+    labels_tags: Array.isArray(offProduct.labels_tags) ? offProduct.labels_tags : [],
+    allergens: offProduct.allergens,
+    allergens_tags: Array.isArray(offProduct.allergens_tags) ? offProduct.allergens_tags : [],
+    allergens_from_ingredients: offProduct.allergens_from_ingredients,
+    traces: offProduct.traces,
+    traces_tags: Array.isArray(offProduct.traces_tags) ? offProduct.traces_tags : [],
+    categories_tags: Array.isArray(offProduct.categories_tags) ? offProduct.categories_tags : [],
+    nutriments: nutriPick.nutriments,
+    serving_quantity: servingPick.source ? servingPick.value : (usdaProduct.serving_quantity != null ? usdaProduct.serving_quantity : offProduct.serving_quantity),
+    nutriscore_grade: offProduct.nutriscore_grade == null ? null : offProduct.nutriscore_grade,
+    nutriscore_score: offProduct.nutriscore_score,
+    nutrition_grade_fr: offProduct.nutrition_grade_fr,
+    nutrition_grades: offProduct.nutrition_grades,
+    nova_group: offProduct.nova_group == null ? null : offProduct.nova_group,
+    selected_images: offProduct.selected_images,
+    image_front_url: offProduct.image_front_url || '',
+    image_url: offProduct.image_url || '',
+    image_front_small_url: offProduct.image_front_small_url,
+    image_front_thumb_url: offProduct.image_front_thumb_url,
+    source: 'usda',
+    fdcId: usdaProduct.fdcId != null ? usdaProduct.fdcId : null,
+  };
+
+  const provenance = {
+    name: namePick.source,
+    brand: brandPick.source,
+    ingredients: ingPick.source,
+    nutrition: nutriPick.source,
+    additives: 'off',
+    allergens: 'off',
+    nutriscore: 'off',
+    nova: 'off',
+    image: 'off',
+  };
+  console.log(
+    `[LOOKUP FIELDS] barcode=${barcode} name=${provenance.name} brand=${provenance.brand} ingredients=${provenance.ingredients} nutrition=${provenance.nutrition} additives=${provenance.additives} allergens=${provenance.allergens} nutriscore=${provenance.nutriscore} nova=${provenance.nova} image=${provenance.image}`
+  );
+  return merged;
+}
+
+function lookupOutcome(settled, msFallback) {
+  if (!settled) return { product: null, ms: msFallback, error: null, timedOut: false };
+  if (settled.status === 'fulfilled') {
+    const value = settled.value || {};
+    return {
+      product: value.product || null,
+      ms: value.ms != null ? value.ms : msFallback,
+      error: null,
+      timedOut: false,
+    };
+  }
+  const err = settled.reason;
+  const timedOut = !!(err && (err.name === 'TimeoutError' || err.name === 'AbortError'));
+  return { product: null, ms: msFallback, error: err, timedOut };
+}
+
 async function resolveProductType(barcode) {
   // Classify by category (and OBF), not merely by which database answered first.
   // Toothpaste/soap/etc. often exist in OFF with ingredients and would otherwise
@@ -1840,32 +1988,47 @@ async function resolveProductType(barcode) {
   let foodProduct = null;
   let cosmeticProduct = null;
 
-  // USDA branded foods first (US GTINs). Cosmetic / household classification is
-  // unchanged: it still runs on the OFF/OBF path when USDA misses or has no
-  // usable ingredients. Scoring never branches on source.
-  try {
-    const usdaProduct = await usdaLookup(barcode);
-    if (usdaProduct && productHasIngredients(usdaProduct)) {
+  // USDA (4s abort) and OFF barcode (3s abort) in parallel. Timeouts must
+  // abort the request; allSettled only collects. Provider wait ≤ 4s.
+  const lookupStarted = Date.now();
+  const usdaStarted = Date.now();
+  const usdaPromise = usdaLookup(barcode).then((product) => ({
+    product,
+    ms: Date.now() - usdaStarted,
+  }));
+  const offStarted = Date.now();
+  const offPromise = fetchOffFoodProduct(barcode).then((product) => ({
+    product,
+    ms: Date.now() - offStarted,
+  }));
+  const [usdaSettled, offSettled] = await Promise.allSettled([usdaPromise, offPromise]);
+  const totalMs = Date.now() - lookupStarted;
+  const usdaOut = lookupOutcome(usdaSettled, Date.now() - usdaStarted);
+  const offOut = lookupOutcome(offSettled, Date.now() - offStarted);
+  const usdaProduct = usdaOut.product;
+  const offFetched = offOut.product;
+
+  if (usdaOut.error) {
+    console.log(`[USDA LOOKUP] barcode=${barcode} ${usdaOut.error.message}`);
+  }
+  if (offOut.error) {
+    console.log(`[OFF FETCH ERROR] barcode=${barcode} ${offOut.error.message}`);
+  }
+  console.log(
+    `[LOOKUP MERGE] barcode=${barcode} usda=${usdaProduct ? 'hit' : (usdaOut.timedOut ? 'timeout' : (usdaOut.error ? 'error' : 'miss'))} off=${offFetched ? 'hit' : (offOut.timedOut ? 'timeout' : (offOut.error ? 'error' : 'miss'))} usdaMs=${usdaOut.ms} offMs=${offOut.ms} totalMs=${totalMs}`
+  );
+
+  foodProduct = offFetched;
+
+  if (!foodProduct) {
+    // USDA hit + OFF miss → USDA only. Do not walk OBF when USDA already matched.
+    if (usdaProduct) {
+      console.log(
+        `[LOOKUP FIELDS] barcode=${barcode} name=usda brand=usda ingredients=usda nutrition=usda additives=none allergens=none nutriscore=none nova=none image=none`
+      );
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda`);
       return { productType: 'food', product: usdaProduct };
     }
-    if (usdaProduct) {
-      console.log(`[USDA SKIP] barcode=${barcode} reason=no_ingredients`);
-    }
-  } catch (err) {
-    console.log(`[USDA LOOKUP] barcode=${barcode} ${err.message}`);
-  }
-
-  try {
-    foodProduct = attachProductSource(
-      await fetchProductFromFacts('https://world.openfoodfacts.org', barcode),
-      'off'
-    );
-  } catch (err) {
-    console.log(`[OFF FETCH ERROR] barcode=${barcode} ${err.message}`);
-  }
-
-  if (!foodProduct) {
     try {
       cosmeticProduct = attachProductSource(
         await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
@@ -1883,6 +2046,7 @@ async function resolveProductType(barcode) {
   }
 
   // Household cleaning categories beat food and cosmetic (Dawn Ultra etc.).
+  // Do not overlay USDA food data onto a household OFF record.
   if (hasHouseholdCategory(foodProduct)) {
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=household reason=category_off`);
     return { productType: 'household', product: foodProduct };
@@ -1938,9 +2102,17 @@ async function resolveProductType(barcode) {
     }
   }
 
-  // Genuinely ambiguous — prefer food and make the choice visible.
-  console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=default_off_ambiguous`);
-  return { productType: 'food', product: foodProduct };
+  // USDA miss + OFF food hit → OFF only, unchanged. Both hits → merge.
+  if (!usdaProduct) {
+    console.log(
+      `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
+    );
+    console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=default_off_ambiguous`);
+    return { productType: 'food', product: foodProduct };
+  }
+  const merged = mergeUsdaAndOffProducts(barcode, usdaProduct, foodProduct);
+  console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda_off_merge`);
+  return { productType: 'food', product: merged };
 }
 
 function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, barcode) {
@@ -3183,7 +3355,7 @@ async function scanAndCacheCosmetic(barcode, product, { skipExplanation = false 
 
 async function scanAndCacheFood(barcode, product, { skipExplanation = false } = {}) {
   // Preserve the unmodified upstream product for future rescoring / analysis.
-  // Source is recorded for hit-rate measurement; scoring does not branch on it.
+  // Provenance is recorded for hit-rate measurement; scoring does not branch on it.
   const source = (product && product.source) || 'off';
   recordRawObservation({
     barcode,
