@@ -3253,8 +3253,13 @@ function ensureExplanation(barcode, cached) {
       // Re-read in case another path already filled the cache.
       try {
         const fresh = await getDocWithBarcodeMigration(CACHE_COLLECTION, barcode);
-        if (fresh.exists && hasUsableExplanation(fresh.data())) {
-          return fresh.data().explanation;
+        const freshData = fresh.exists ? fresh.data() : null;
+        // Same rule as stale-cache fallback / GET /explain: do not reattach an
+        // explanation generated under an older SCAN_LOGIC_VERSION.
+        if (freshData
+            && freshData.scanLogicVersion === SCAN_LOGIC_VERSION
+            && hasUsableExplanation(freshData)) {
+          return freshData.explanation;
         }
       } catch (_) { /* fall through to generate */ }
 
@@ -5059,7 +5064,9 @@ app.get('/explain/:barcode', async (req, res) => {
     }
 
     const cached = cacheDoc.data();
-    if (hasUsableExplanation(cached)) {
+    // Same rule as stale-cache fallback: an explanation generated under an
+    // older SCAN_LOGIC_VERSION is missing — generate via ensureExplanation.
+    if (cached.scanLogicVersion === SCAN_LOGIC_VERSION && hasUsableExplanation(cached)) {
       console.log(`[EXPLAIN] barcode=${barcode} source=cache ms=${Date.now() - started}`);
       return res.json({ explanation: cached.explanation, ready: true });
     }

@@ -5361,6 +5361,214 @@ function isCacheFresh(cached, nowMs) {
     print(proc.stdout.strip())
 
 
+def test_explain_version_mismatch_regenerates():
+    """GET /explain regenerates when cached scanLogicVersion is older than current."""
+    script = r"""
+const http = require('http');
+const path = require('path');
+const Module = require('module');
+const fs = require('fs');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+assert(logicMatch[1] === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + logicMatch[1]);
+
+const explainStart = src.indexOf("app.get('/explain/:barcode'");
+const explainEnd = src.indexOf("app.get('/search'");
+assert(explainStart >= 0 && explainEnd > explainStart, 'locate GET /explain');
+const explainSlice = src.slice(explainStart, explainEnd);
+assert(explainSlice.includes('scanLogicVersion === SCAN_LOGIC_VERSION'),
+  '/explain must require matching SCAN_LOGIC_VERSION before serving stored text');
+assert(explainSlice.includes('ensureExplanation'),
+  '/explain must still generate via ensureExplanation when version mismatches');
+
+const ensureStart = src.indexOf('function ensureExplanation(barcode, cached)');
+const ensureEnd = src.indexOf('function scanAndCacheHousehold');
+assert(ensureStart >= 0 && ensureEnd > ensureStart, 'locate ensureExplanation');
+const ensureSlice = src.slice(ensureStart, ensureEnd);
+assert(ensureSlice.includes('scanLogicVersion === SCAN_LOGIC_VERSION'),
+  'ensureExplanation must not reattach an older-version cached explanation');
+
+const STORED_V10 = "We've packed this product with 25.2g of sugar per serving.";
+const REGENERATED =
+  'This chocolate bar contains 25.2g of sugar per serving. Cadbury uses emulsifiers E442 and E476. Processing is high.';
+
+const productCache = new Map();
+function docSnap(data) {
+  return {
+    exists: data !== undefined,
+    data: () => (data === undefined ? undefined : data),
+  };
+}
+function makeDoc(id) {
+  return {
+    async get() { return docSnap(productCache.get(String(id))); },
+    async set(data, opts) {
+      const prev = productCache.get(String(id)) || {};
+      productCache.set(String(id), opts && opts.merge ? { ...prev, ...data } : { ...data });
+    },
+  };
+}
+const mockFirestore = {
+  collection(name) {
+    return {
+      doc(id) { return makeDoc(id); },
+      limit() { return { async get() { return { empty: true, docs: [] }; } }; },
+      orderBy() { return this; },
+      async add() { return { id: 'x' }; },
+      async get() { return { empty: true, docs: [] }; },
+    };
+  },
+};
+mockFirestore.FieldValue = { serverTimestamp: () => 'SERVER_TS', increment: (n) => n };
+const mockAdmin = {
+  initializeApp() {},
+  credential: { cert() { return {}; } },
+  auth() { return { async verifyIdToken() { return { uid: 'u' }; } }; },
+  firestore() { return mockFirestore; },
+};
+mockAdmin.firestore.FieldValue = mockFirestore.FieldValue;
+
+const origRequire = Module.prototype.require;
+Module.prototype.require = function (id) {
+  if (id === 'firebase-admin') return mockAdmin;
+  return origRequire.apply(this, arguments);
+};
+
+process.env.FIREBASE_SERVICE_ACCOUNT = JSON.stringify({
+  project_id: 'demo',
+  client_email: 'demo@demo.iam.gserviceaccount.com',
+  private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg==\n-----END PRIVATE KEY-----\n',
+});
+process.env.ANTHROPIC_API_KEY = 'test-key';
+
+let anthropicCalls = 0;
+const origFetch = global.fetch;
+global.fetch = async function (url, opts) {
+  if (String(url).includes('api.anthropic.com')) {
+    anthropicCalls += 1;
+    return {
+      ok: true,
+      async json() {
+        return { content: [{ text: REGENERATED }], stop_reason: 'end_turn' };
+      },
+    };
+  }
+  return origFetch.apply(this, arguments);
+};
+
+const appPath = path.join(process.cwd(), 'index.js');
+delete require.cache[appPath];
+const app = require(appPath);
+
+function withServer(fn) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, '127.0.0.1', async () => {
+      try {
+        const { port } = server.address();
+        const result = await fn(port);
+        server.close(() => resolve(result));
+      } catch (err) {
+        server.close(() => reject(err));
+      }
+    });
+  });
+}
+
+function request(port, method, urlPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: urlPath, method }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        let json = null;
+        try { json = text ? JSON.parse(text) : null; } catch (_) { json = text; }
+        resolve({ status: res.statusCode, json });
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+const v10Doc = {
+  productType: 'food',
+  productName: 'Cadbury Dairy Milk',
+  ingredients: 'Sugar, cocoa butter, emulsifiers (E442, E476)',
+  score: 35,
+  scoreLabel: 'Poor',
+  additivesCount: '2 additives',
+  isOrganic: 'no',
+  novaGroup: 4,
+  nutriScore: 'e',
+  sugar: '25.2g',
+  sodium: '80mg',
+  protein: '4g',
+  sugarTier: 'high',
+  sodiumTier: 'low',
+  proteinTier: 'low',
+  servingKnown: true,
+  explanation: STORED_V10,
+  explanationPending: false,
+  scanLogicVersion: '10',
+  cachedAt: Date.now(),
+  source: 'off',
+};
+
+(async () => {
+  await withServer(async (port) => {
+    const missing = await request(port, 'GET', '/explain/3017620422003');
+    assert(missing.status === 404, '/explain with no cache must stay 404, got ' + missing.status);
+
+    productCache.set('7622210100586', { ...v10Doc });
+    anthropicCalls = 0;
+    const stale = await request(port, 'GET', '/explain/7622210100586');
+    assert(stale.status === 200, 'version-mismatch /explain → 200, got ' + stale.status);
+    assert(stale.json && stale.json.ready === true, 'response shape must still include ready:true');
+    assert(stale.json.explanation === REGENERATED,
+      'version-mismatch /explain must regenerate, got: ' + (stale.json && stale.json.explanation));
+    assert(stale.json.explanation !== STORED_V10, 'must not serve stored v10 text');
+    assert(anthropicCalls >= 1, 'ensureExplanation must generate, anthropicCalls=' + anthropicCalls);
+
+    productCache.set('7622210100586', {
+      ...v10Doc,
+      scanLogicVersion: '11',
+      explanation: REGENERATED,
+    });
+    anthropicCalls = 0;
+    const fresh = await request(port, 'GET', '/explain/7622210100586');
+    assert(fresh.status === 200, 'matching-version /explain → 200, got ' + fresh.status);
+    assert(fresh.json && fresh.json.ready === true);
+    assert(fresh.json.explanation === REGENERATED, 'matching version must serve stored explanation');
+    assert(anthropicCalls === 0, 'matching version must not regenerate, calls=' + anthropicCalls);
+  });
+  console.log('explain version mismatch regenerates ok');
+})().catch((err) => {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"explain version mismatch assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def test_food_explanation_copy():
     """Food explanations: 3 complete sentences, decimal-safe trim, no composition we."""
     script = r"""
@@ -5513,6 +5721,7 @@ def main() -> int:
         test_batch2_classification,
         test_batch3_barcode_normalisation,
         test_scan_logic_v11_stale_explanation,
+        test_explain_version_mismatch_regenerates,
         test_food_explanation_copy,
         test_usda_food_lookup,
     ]
