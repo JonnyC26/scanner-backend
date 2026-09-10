@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '12';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '13';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -2139,7 +2139,15 @@ function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protei
   // 60% Purla nutrition subscore from per-100g nutrients (not OFF Nutri-Score).
   const nutrition = computeNutritionSubscore(nutriments, foodCategory);
   if (!nutrition.available && barcode != null) {
-    console.log(`[NUTRITION SUBSCORE UNAVAILABLE] barcode=${barcode} reason=${nutrition.reason || 'missing_unfavourable'}`);
+    const reason = nutrition.reason || 'missing_unfavourable';
+    const missing = ({
+      missing_energy: 'energy',
+      missing_sugars: 'sugars',
+      missing_saturated_fat: 'saturated fat',
+      missing_sodium: 'sodium',
+      missing_total_fat: 'total fat',
+    })[reason] || 'unknown';
+    console.log(`[NUTRITION SUBSCORE UNAVAILABLE] barcode=${barcode} reason=${reason} missing=${missing}`);
   }
 
   // 30% Additives — risk-weighted, not count-based
@@ -3308,7 +3316,63 @@ const FOOD_NO_NUTRITION_EXPLANATION =
   "We couldn't tell what kind of product this is. There's no nutrition information and no product category, so we can't score it. If it's a cleaning or household product, we don't assess those.";
 
 const FOOD_INCOMPLETE_NUTRITION_EXPLANATION =
-  "We found this product but some required nutrition values are missing, so we could not compute a nutrition score.";
+  "We found this product, but some required nutrition values are missing, so we can't calculate a score.";
+
+const INCOMPLETE_NUTRITION_REASON_NAMES = {
+  missing_energy: 'energy',
+  missing_sugars: 'sugars',
+  missing_saturated_fat: 'saturated fat',
+  missing_sodium: 'sodium',
+  missing_total_fat: 'total fat',
+};
+
+function incompleteNutritionNamesFromReason(reason) {
+  const codes = Array.isArray(reason)
+    ? reason
+    : String(reason == null ? '' : reason)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  const names = [];
+  for (const code of codes) {
+    const name = INCOMPLETE_NUTRITION_REASON_NAMES[code];
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+function joinIncompleteNutrientNames(names) {
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+function formatIncompleteNutritionExplanation(reason) {
+  const names = incompleteNutritionNamesFromReason(reason);
+  if (names.length === 0) return FOOD_INCOMPLETE_NUTRITION_EXPLANATION;
+  const noun = joinIncompleteNutrientNames(names);
+  const verb = names.length === 1 ? 'is' : 'are';
+  return `We found this product, but ${noun} data ${verb} missing, so we can't calculate a score.`;
+}
+
+function nutritionReasonFromCachedBreakdown(cached) {
+  if (!cached) return null;
+  let breakdown = cached.scoreBreakdown;
+  if (typeof breakdown === 'string') {
+    try { breakdown = JSON.parse(breakdown); } catch (_) { return null; }
+  }
+  if (!breakdown || typeof breakdown !== 'object') return null;
+  const reason = breakdown.nutritionReason;
+  if (typeof reason !== 'string' || !reason.trim()) return null;
+  return reason;
+}
+
+function explanationForUnscoredFood(cached) {
+  if (cached && cached.source === 'photo') return FOOD_PHOTO_EXPLANATION;
+  const reason = nutritionReasonFromCachedBreakdown(cached);
+  if (reason) return formatIncompleteNutritionExplanation(reason);
+  return FOOD_NO_NUTRITION_EXPLANATION;
+}
 
 // Fixed copy when a cosmetic explanation is unusable (refusal / malformed).
 const COSMETIC_NO_EXPLANATION =
@@ -3392,11 +3456,11 @@ async function generateExplanationFromCached(cached) {
     }, cached.ingredients || '');
   }
 
-  // Food — null score from missing energy/proteins/sodium|salt: fixed copy, never Haiku.
-  // Photo-rescued food keeps its own fixed sentence (label alone cannot score food).
+  // Food — null score: photo rescue, incomplete subscore, or no nutrition at all.
+  // Incomplete vs absent is distinguished by scoreBreakdown.nutritionReason,
+  // which getScoreBreakdown stores on every unavailable subscore.
   if (cached.score == null && cached.scoreLabel === 'Not enough data') {
-    if (cached.source === 'photo') return FOOD_PHOTO_EXPLANATION;
-    return FOOD_NO_NUTRITION_EXPLANATION;
+    return explanationForUnscoredFood(cached);
   }
 
   // Food — missing ingredients get the fixed sentence, never Haiku.
@@ -3778,7 +3842,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   let explanation = null;
   const noIngredientData = !hasUsableIngredientText(ingredients);
   if (score == null) {
-    explanation = FOOD_INCOMPLETE_NUTRITION_EXPLANATION;
+    explanation = formatIncompleteNutritionExplanation(scoreBreakdown.nutritionReason);
   } else if (noIngredientData) {
     // Fixed copy — do not call Haiku with an empty/junk ingredient list.
     explanation = FOOD_NO_INGREDIENTS_EXPLANATION;

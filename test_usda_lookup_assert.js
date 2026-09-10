@@ -8,7 +8,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
+assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
 
 const normStart = src.indexOf('function normalizeBarcode(raw)');
 const normBody = src.slice(normStart, src.indexOf('function isValidBarcode'));
@@ -523,7 +523,7 @@ const fettuccine = {
   assert(typeof scored.score === 'number' && scored.score !== null, 'merged food must score');
   assert(scored.productName === 'ORGANIC FETTUCCINE');
   assert(/ORGANIC DURUM WHEAT SEMOLINA/i.test(scored.ingredients), 'USDA ingredients displayed as-is');
-  assert(scored.scanLogicVersion === '12', 'logic version 12');
+  assert(scored.scanLogicVersion === '13', 'logic version 13');
 
   const offScored = await g.scanAndCacheFood('111', {
     product_name: 'Yogurt',
