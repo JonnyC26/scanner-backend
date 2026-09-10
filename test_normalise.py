@@ -820,6 +820,7 @@ global.fetch = async function (...args) {
     score: 90,
     tableVersion: '0.4',
     explanation: 'Kept on fallback path',
+    scanLogicVersion: '1',
     cachedAt: 1,
   };
   const fallback = staleCacheFallbackPayload(stale);
@@ -827,10 +828,53 @@ global.fetch = async function (...args) {
   assert(fallback.productName === 'Stale Rescue');
   assert(fallback.score === 90);
   assert(fallback.explanation === 'Kept on fallback path',
-    'stale FALLBACK deliberately keeps its old explanation');
+    'same-version stale FALLBACK keeps its explanation');
   assert(fallback.cachedAt === undefined, 'cachedAt must not leak into response');
   assert(staleCacheFallbackPayload(null) === null, 'no cache → no fallback');
   assert(staleCacheFallbackPayload(undefined) === null);
+
+  const mismatched = {
+    productType: 'food',
+    source: 'off',
+    productName: 'Cadbury Dairy Milk',
+    ingredients: 'Sugar, cocoa butter, emulsifiers (E442, E476)',
+    score: 35,
+    protein: '4g',
+    sugar: '25.2g',
+    sodium: '80mg',
+    protein100g: '5g',
+    sugar100g: '56g',
+    sodium100g: '180mg',
+    explanation: "We've packed this product with 25.2g of sugar per serving.",
+    scanLogicVersion: '10',
+    cachedAt: 1,
+  };
+  const mismatchFb = staleCacheFallbackPayload(mismatched);
+  assert(mismatchFb.productName === 'Cadbury Dairy Milk', 'mismatch fallback keeps product');
+  assert(mismatchFb.score === 35, 'mismatch fallback keeps score');
+  assert(mismatchFb.sugar === '25.2g', 'mismatch fallback keeps nutrition');
+  assert(mismatchFb.protein === '4g', 'mismatch fallback keeps protein');
+  assert(mismatchFb.sodium === '80mg', 'mismatch fallback keeps sodium');
+  assert(mismatchFb.explanation === undefined,
+    'version-mismatch fallback must omit the old explanation');
+  assert(mismatchFb.explanationPending === true,
+    'mismatch fallback must fall through to missing-explanation behaviour');
+  assert(!/we've packed/i.test(JSON.stringify(mismatchFb)),
+    'old we-voice must not appear anywhere on the mismatch payload');
+
+  const missingVersion = {
+    productType: 'food',
+    productName: 'Pre-version cache',
+    score: 50,
+    sugar: '10g',
+    explanation: "We've packed this product with sugar.",
+    cachedAt: 1,
+  };
+  const missingFb = staleCacheFallbackPayload(missingVersion);
+  assert(missingFb.productName === 'Pre-version cache');
+  assert(missingFb.score === 50);
+  assert(missingFb.explanation === undefined,
+    'docs without scanLogicVersion must omit explanation');
 
   // Simulate scanAndCache refresh failure path: prefer stale over propagating.
   function refreshOrFallback(staleCached, refreshFn) {
@@ -2992,7 +3036,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '10', 'SCAN_LOGIC_VERSION must be 10, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + SCAN_LOGIC_VERSION);
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -3063,7 +3107,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '10', 'exported SCAN_LOGIC_VERSION must be 10');
+assert(g.SCAN_LOGIC_VERSION === '11', 'exported SCAN_LOGIC_VERSION must be 11');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3118,7 +3162,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '10', 'normal food stamps logic version 10');
+  assert(result.scanLogicVersion === '11', 'normal food stamps logic version 11');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -3163,7 +3207,7 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '10', 'Dawn stamps logic version 10');
+  assert(result.scanLogicVersion === '11', 'Dawn stamps logic version 11');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3229,7 +3273,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '10', 'SCAN_LOGIC_VERSION must be 10, got ' + logicMatch[1]);
+assert(logicMatch[1] === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -3892,6 +3936,14 @@ assert(isCacheFresh({
   scanLogicVersion: '0',
 }, now) === false, 'mismatched scanLogicVersion must be stale');
 
+assert(g.SCAN_LOGIC_VERSION === '11', 'SCAN_LOGIC_VERSION must be 11 after explanation copy');
+assert(isCacheFresh({
+  productType: 'food',
+  cachedAt: now - 1000,
+  scanLogicVersion: '10',
+  explanation: "We've packed this product with 25.2g of sugar per serving.",
+}, now) === false, 'v10 cache must rescan after bump so the explanation regenerates');
+
 const scanStart = src.indexOf('async function scanAndCache(barcode');
 const scanSlice = src.slice(scanStart, scanStart + 2500);
 assert(scanSlice.includes('logicStale'), 'scanAndCache must check logicStale');
@@ -3946,7 +3998,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '10', 'SCAN_LOGIC_VERSION must be 10, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + SCAN_LOGIC_VERSION);
 
 // ?? 40 must remain — instrumentation only, no score redesign.
 assert(/nutriPoints\[nutriScore\?\.toLowerCase\(\)\]/.test(src) ||
@@ -4911,7 +4963,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '10', 'SCAN_LOGIC_VERSION must be 10, got ' + logicMatch[1]);
+assert(logicMatch[1] === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + logicMatch[1]);
 
 // --- Source: /scan/photo resolves type before scoring ---
 const photoStart = src.indexOf("app.post('/scan/photo'");
@@ -4961,7 +5013,7 @@ const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
-const SCAN_LOGIC_VERSION = '10';
+const SCAN_LOGIC_VERSION = '11';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 ${src.slice(helperStart, helperEnd)}
@@ -5111,6 +5163,204 @@ console.log('batch2 classification ok');
     print(proc.stdout.strip())
 
 
+def test_scan_logic_v11_stale_explanation():
+    """v11 bump regenerates explanations; version-mismatch stale fallback omits them."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+assert(logicMatch[1] === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + logicMatch[1]);
+
+const catchStart = src.indexOf('const fallback = staleCacheFallbackPayload(staleCached);');
+const catchEnd = src.indexOf('if (responseData.noIngredientData)');
+if (catchStart < 0 || catchEnd < 0) throw new Error('could not locate stale fallback catch');
+const catchSlice = src.slice(catchStart, catchEnd);
+assert(catchSlice.includes('logicMismatch'),
+  'stale fallback catch must detect SCAN_LOGIC_VERSION mismatch');
+assert(catchSlice.includes('!logicMismatch && !skipExplanation'),
+  'ensureExplanation must not run on a version-mismatched fallback');
+
+const fbStart = src.indexOf('function staleCacheFallbackPayload');
+const fbEnd = src.indexOf('async function scanAndCache(barcode');
+if (fbStart < 0 || fbEnd < 0) throw new Error('could not locate staleCacheFallbackPayload');
+
+const nutStart = src.indexOf('function productHasNutriments');
+const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
+const scoreStart = src.indexOf('function calculateScore');
+const scoreEnd = src.indexOf('// OFF labels_tags is crowd-entered');
+const fmtStart = src.indexOf('function parseServingQuantity');
+const fmtEnd = src.indexOf('const additiveMap');
+const orgStart = src.indexOf('function resolveOrganicStatus');
+const orgEnd = src.indexOf('function parseServingQuantity');
+const extractStart = src.indexOf("// OFF's additives_tags is a curated subset");
+const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
+const addDispStart = src.indexOf('function formatAdditivesCountDisplay');
+const foodExplainStart = src.indexOf('async function generateFoodExplanation');
+const foodFnStart = src.indexOf('async function scanAndCacheFood');
+const foodFnEnd = src.indexOf('// Photo-rescued cache docs have no upstream');
+const cosStart = src.indexOf('const cosmeticTable = JSON.parse');
+const cosEnd = src.indexOf('// Firestore docs are size-capped');
+if ([nutStart, nutEnd, scoreStart, scoreEnd, fmtStart, fmtEnd, orgStart, orgEnd,
+     extractStart, extractEnd, addDispStart, foodExplainStart, foodFnStart, foodFnEnd,
+     cosStart, cosEnd].some((n) => n < 0)) {
+  throw new Error('could not locate scanAndCacheFood extract bounds');
+}
+
+const REGENERATED =
+  'This chocolate bar contains 25.2g of sugar per serving. Cadbury uses emulsifiers E442 and E476. Processing is high.';
+
+const block = `
+const fs = require('fs');
+const path = require('path');
+const __cosmeticDir = process.cwd();
+function recordRawObservation() {}
+async function getCategoryAlternatives() { return []; }
+async function generateFoodExplanation() { return ${JSON.stringify(REGENERATED)}; }
+const additiveMap = {};
+const additiveDetails = {};
+const SCAN_LOGIC_VERSION = '${logicMatch[1]}';
+const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+${src.slice(fbStart, fbEnd)}
+${src.slice(cosStart, cosEnd).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
+${src.slice(nutStart, nutEnd)}
+${src.slice(scoreStart, scoreEnd)}
+${src.slice(orgStart, orgEnd)}
+${src.slice(fmtStart, fmtEnd)}
+${src.slice(extractStart, extractEnd)}
+${src.slice(addDispStart, foodExplainStart)}
+${src.slice(foodFnStart, foodFnEnd)}
+function hasUsableExplanation(data) {
+  return !!(data && data.explanation && String(data.explanation).trim());
+}
+module.exports = {
+  staleCacheFallbackPayload,
+  scanAndCacheFood,
+  SCAN_LOGIC_VERSION,
+  CACHE_TTL_MS,
+  hasUsableExplanation,
+};
+`;
+fs.writeFileSync('/tmp/scan_logic_v11_helpers.js', block);
+delete require.cache['/tmp/scan_logic_v11_helpers.js'];
+const g = require('/tmp/scan_logic_v11_helpers.js');
+
+const V10_WE_VOICE = "We've packed this product with 25.2g of sugar per serving.";
+
+function isCacheFresh(cached, nowMs) {
+  const age = nowMs - (cached.cachedAt || 0);
+  const logicStale = cached.scanLogicVersion !== g.SCAN_LOGIC_VERSION;
+  return age < g.CACHE_TTL_MS && !logicStale;
+}
+
+(async () => {
+  const now = Date.now();
+  const v10cached = {
+    productType: 'food',
+    productName: 'Cadbury Dairy Milk',
+    score: 35,
+    sugar: '25.2g',
+    protein: '4g',
+    sodium: '80mg',
+    explanation: V10_WE_VOICE,
+    scanLogicVersion: '10',
+    cachedAt: now - 1000,
+  };
+  assert(isCacheFresh(v10cached, now) === false,
+    'v10 cache must not be a hit after the bump');
+
+  const regenerated = await g.scanAndCacheFood('7622210100586', {
+    product_name: 'Cadbury Dairy Milk',
+    ingredients_text: 'Sugar, cocoa butter, emulsifiers (E442, E476)',
+    nutriscore_grade: 'e',
+    nova_group: 4,
+    additives_tags: ['en:e442', 'en:e476'],
+    labels_tags: [],
+    nutriments: {
+      'energy-kcal_100g': 530,
+      proteins_100g: 7.3,
+      sugars_100g: 56,
+      sodium_100g: 0.18,
+    },
+  }, { skipExplanation: false });
+  assert(regenerated.scanLogicVersion === '11', 'rescan stamps v11');
+  assert(regenerated.explanation === REGENERATED,
+    'successful rescan after bump must serve the regenerated explanation');
+  assert(!/we've packed/i.test(regenerated.explanation),
+    'regenerated explanation must not keep v10 we-voice');
+
+  const mismatchFb = g.staleCacheFallbackPayload({
+    ...v10cached,
+    cachedAt: 1,
+  });
+  assert(mismatchFb.productName === 'Cadbury Dairy Milk', 'fallback keeps product');
+  assert(mismatchFb.score === 35, 'fallback keeps score');
+  assert(mismatchFb.sugar === '25.2g' && mismatchFb.protein === '4g' && mismatchFb.sodium === '80mg',
+    'fallback keeps nutrition');
+  assert(mismatchFb.explanation === undefined, 'mismatch fallback omits explanation');
+  assert(mismatchFb.explanationPending === true, 'mismatch fallback is explanation-pending');
+
+  let ensureCalls = 0;
+  async function ensureExplanation() {
+    ensureCalls += 1;
+    return V10_WE_VOICE;
+  }
+  async function fallbackCatch(staleCached, skipExplanation) {
+    const fallback = g.staleCacheFallbackPayload(staleCached);
+    const logicMismatch = staleCached.scanLogicVersion !== g.SCAN_LOGIC_VERSION;
+    if (!logicMismatch && !skipExplanation && !g.hasUsableExplanation(fallback)) {
+      fallback.explanation = await ensureExplanation();
+      fallback.explanationPending = false;
+    }
+    return fallback;
+  }
+  const afterCatch = await fallbackCatch({ ...v10cached, cachedAt: 1 }, false);
+  assert(ensureCalls === 0, 'fallback catch must not call ensureExplanation on mismatch');
+  assert(afterCatch.explanation === undefined, 'catch must not reattach v10 text');
+  assert(afterCatch.explanationPending === true);
+  assert(afterCatch.score === 35 && afterCatch.sugar === '25.2g');
+
+  const v11fresh = {
+    productType: 'food',
+    productName: 'Cadbury Dairy Milk',
+    score: 35,
+    sugar: '25.2g',
+    explanation: REGENERATED,
+    scanLogicVersion: '11',
+    cachedAt: now - 1000,
+  };
+  assert(isCacheFresh(v11fresh, now) === true, 'fresh v11 record is a cache hit');
+  const v11Fb = g.staleCacheFallbackPayload({ ...v11fresh, cachedAt: 1 });
+  assert(v11Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
+  assert(v11Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
+
+  console.log('scan logic v11 stale explanation ok');
+})().catch((err) => {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"scan logic v11 stale explanation assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def test_food_explanation_copy():
     """Food explanations: 3 complete sentences, decimal-safe trim, no composition we."""
     script = r"""
@@ -5122,7 +5372,7 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
 }
 
-assert(/const SCAN_LOGIC_VERSION = '10'/.test(src), 'must not bump SCAN_LOGIC_VERSION');
+assert(/const SCAN_LOGIC_VERSION = '11'/.test(src), 'SCAN_LOGIC_VERSION must be 11 so copy changes reach cached products');
 assert(src.includes('max_tokens: 220'), 'food max_tokens must allow 3 sentences to finish');
 assert(src.includes('function trimFoodExplanation'), 'food path must trim to complete sentences');
 
@@ -5262,6 +5512,7 @@ def main() -> int:
         test_batch1_security,
         test_batch2_classification,
         test_batch3_barcode_normalisation,
+        test_scan_logic_v11_stale_explanation,
         test_food_explanation_copy,
         test_usda_food_lookup,
     ]
