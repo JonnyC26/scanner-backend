@@ -2965,6 +2965,33 @@ function isKnownNutrientForPrompt(value, tier) {
   return true;
 }
 
+// Food explanations must never end mid-sentence. Keep at most 3 complete
+// sentences. Decimal points (25.2g) are not sentence boundaries; a period
+// after an E-number (E476.) still is when the next character is not a digit.
+function trimFoodExplanation(text, maxSentences = 3) {
+  const raw = String(text == null ? '' : text).trim();
+  if (!raw) return '';
+  const sentences = [];
+  let start = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch !== '.' && ch !== '!' && ch !== '?') continue;
+    if (ch === '.' && /\d/.test(raw[i - 1] || '') && /\d/.test(raw[i + 1] || '')) {
+      continue;
+    }
+    let end = i;
+    while (end + 1 < raw.length && /[.!?]/.test(raw[end + 1])) end += 1;
+    const sentence = raw.slice(start, end + 1).trim();
+    if (sentence) sentences.push(sentence);
+    let next = end + 1;
+    while (next < raw.length && /\s/.test(raw[next])) next += 1;
+    start = next;
+    i = end;
+    if (sentences.length >= maxSentences) break;
+  }
+  return sentences.slice(0, maxSentences).join(' ');
+}
+
 function buildFoodExplanationPrompt({
   sugar,
   sodium,
@@ -3002,10 +3029,12 @@ function buildFoodExplanationPrompt({
     ? nutrientParts.join(', ') + ', '
     : '';
 
-  return `Always write in the first-person plural ("we" / "we've" / "our"). Never use first-person singular ("I" / "I've" / "I'm" / "my").
+  return `Write at most 3 complete sentences. Never stop mid-sentence or mid-word.
+Purla may use "we" ONLY for an evaluation Purla performs (for example "We rate this Poor because…"). Product composition, formulation, processing, ingredients, and manufacturer actions are always third person — the product contains…, the manufacturer has used…. Never write "we've packed", "we've added", or "we've processed" this product.
+Never use first-person singular ("I" / "I've" / "I'm" / "my").
 Product data: ${nutrientPhrase}${additivesPhrase}, organic: ${isOrganic}, NOVA group ${novaGroup}. Ingredients: ${ingredients}.
 Score context: ${nutriGuidance}
-In one plain English sentence (max 20 words), call out the single most specific health concern or benefit using the actual numbers or ingredient names above. The explanation must not contradict the score shown beside it. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration." PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters. Do not restate an overall product score or Excellent/Good/Poor/Bad tier.`;
+Call out the most specific health concern or benefit using the actual numbers or ingredient names above. The explanation must not contradict the score shown beside it. The tier labels given above (low/medium/high) are already correct — match your wording to them exactly, do not recalculate or reclassify based on the numbers yourself. Never say "NOVA group" or any technical jargon — instead describe processing level in plain words like "highly processed" or "minimally processed" if relevant. Name a specific additive if relevant. Avoid vague filler. Write it the way a person would actually say it out loud — avoid stiff constructions like "makes this a sodium concern" or "is the primary nutritional consideration." PLAIN TEXT ONLY — no asterisks, no bold, no markdown, no headers, no bullet characters. Do not restate an overall product score or Excellent/Good/Poor/Bad tier.`;
 }
 
 async function requestFoodExplanation(prompt) {
@@ -3018,13 +3047,19 @@ async function requestFoodExplanation(prompt) {
     },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 100,
+      max_tokens: 220,
       messages: [{ role: 'user', content: prompt }]
     })
   });
 
   const claudeData = await claudeRes.json();
-  return claudeData.content[0].text;
+  if (claudeData.stop_reason === 'max_tokens') {
+    console.log('[FOOD EXPLAIN MAX TOKENS] completion stopped at max_tokens — trimming to last complete sentence');
+  }
+  const text = claudeData.content && claudeData.content[0] && claudeData.content[0].text
+    ? claudeData.content[0].text
+    : '';
+  return trimFoodExplanation(text);
 }
 
 function formatAdditivesCountDisplay(additivesCount, ingredientsText) {
