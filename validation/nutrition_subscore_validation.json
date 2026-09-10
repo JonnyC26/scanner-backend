@@ -1,0 +1,41 @@
+{
+  "nWithOffGradeAndSubscore": 242,
+  "spearmanRho": 0.8074,
+  "pairsSeparatedByTwoOrMoreGrades": 15289,
+  "pairsOrderedCorrectly": 14011,
+  "pairTies": 230,
+  "pctPairsOrderedCorrectly": 91.6,
+  "targets": {
+    "spearman": 0.7,
+    "pairwise": 80
+  },
+  "spearmanPass": true,
+  "pairwisePass": true,
+  "byGrade": [
+    {
+      "grade": "a",
+      "n": 64,
+      "meanSubscore": 43
+    },
+    {
+      "grade": "b",
+      "n": 23,
+      "meanSubscore": 40.1
+    },
+    {
+      "grade": "c",
+      "n": 41,
+      "meanSubscore": 37.5
+    },
+    {
+      "grade": "d",
+      "n": 47,
+      "meanSubscore": 30
+    },
+    {
+      "grade": "e",
+      "n": 67,
+      "meanSubscore": 23.3
+    }
+  ]
+}

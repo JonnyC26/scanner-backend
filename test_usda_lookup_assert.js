@@ -8,7 +8,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + logicMatch[1]);
+assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
 
 const normStart = src.indexOf('function normalizeBarcode(raw)');
 const normBody = src.slice(normStart, src.indexOf('function isValidBarcode'));
@@ -106,6 +106,12 @@ module.exports = {
   productHasIngredients,
   scanAndCacheFood,
   SCAN_LOGIC_VERSION,
+  mapUsdaNutrientsToOff,
+  computeNutritionSubscore,
+  classifyPurlaFoodPath,
+  applyDerivedNutrientZeros,
+  calculateScore,
+  getScoreBreakdown,
 };
 `;
 fs.writeFileSync('/tmp/usda_lookup_helpers.js', block);
@@ -123,11 +129,16 @@ const fettuccine = {
   ingredients: 'ORGANIC DURUM WHEAT SEMOLINA.',
   servingSizeUnit: 'g',
   servingSize: 56.0,
+  foodCategory: 'Pasta by Shape & Type',
   foodNutrients: [
     { nutrientId: 1003, nutrientName: 'Protein', unitName: 'G', value: 10.7 },
+    { nutrientId: 1004, nutrientName: 'Total lipid (fat)', unitName: 'G', value: 1.79 },
+    { nutrientId: 1005, nutrientName: 'Carbohydrate, by difference', unitName: 'G', value: 71.4 },
     { nutrientId: 1008, nutrientName: 'Energy', unitName: 'KCAL', value: 357 },
+    { nutrientId: 1079, nutrientName: 'Fiber, total dietary', unitName: 'G', value: 3.6 },
     { nutrientId: 2000, nutrientName: 'Total Sugars', unitName: 'G', value: 3.57 },
     { nutrientId: 1093, nutrientName: 'Sodium, Na', unitName: 'MG', value: 0.0 },
+    { nutrientId: 1258, nutrientName: 'Fatty acids, total saturated', unitName: 'G', value: 0.4 },
   ],
 };
 
@@ -150,6 +161,11 @@ const fettuccine = {
   assert(mapped.nutriments['energy-kcal_100g'] === 357, 'energy kcal per 100g');
   assert(mapped.nutriments.sugars_100g === 3.57, 'sugars per 100g');
   assert(mapped.nutriments.sodium_100g === 0, 'sodium MG → grams; 0 is valid');
+  assert(mapped.nutriments['saturated-fat_100g'] === 0.4, 'saturated fat mapped');
+  assert(mapped.nutriments.fiber_100g === 3.6, 'fibre mapped');
+  assert(mapped.nutriments.fat_100g === 1.79, 'total fat mapped');
+  assert(mapped.nutriments.carbohydrates_100g === 71.4, 'carbohydrate mapped');
+  assert(mapped.foodCategory === 'Pasta by Shape & Type', 'foodCategory mapped');
   assert(mapped.serving_quantity === 56, 'serving grams');
   assert(Array.isArray(mapped.additives_tags) && mapped.additives_tags.length === 0, 'no invented additives');
   assert(mapped.source === 'usda', 'USDA mapped source is string usda');
@@ -172,7 +188,7 @@ const fettuccine = {
     nova_group: 1,
     labels_tags: ['en:organic'],
     allergens_tags: ['en:gluten'],
-    nutriments: { 'energy-kcal_100g': 350, proteins_100g: 12, sodium_100g: 0.01, sugars_100g: 3, fiber_100g: 2 },
+    nutriments: { 'energy-kcal_100g': 350, proteins_100g: 12, sodium_100g: 0.01, sugars_100g: 3, fiber_100g: 2, 'fruits-vegetables-nuts_100g': 0 },
     image_front_url: 'https://off.example/fettuccine.jpg',
     selected_images: { front: { display: { en: 'https://off.example/fettuccine.jpg' } } },
   };
@@ -197,7 +213,9 @@ const fettuccine = {
   assert(mergedBoth.allergens_tags.includes('en:gluten'), 'OFF allergens kept');
   assert(mergedBoth.nutriments.proteins_100g === 10.7, 'USDA nutrition preferred');
   assert(mergedBoth.nutriments.sodium_100g === 0, 'USDA numeric 0 must win over OFF 0.01');
-  assert(mergedBoth.nutriments.fiber_100g === 2, 'OFF-only nutriment key kept when USDA lacks it');
+  assert(mergedBoth.nutriments.fiber_100g === 3.6, 'USDA fibre preferred over OFF');
+  assert(mergedBoth.nutriments['fruits-vegetables-nuts_100g'] === 0, 'OFF-only nutriment key kept when USDA lacks it');
+  assert(mergedBoth.foodCategory === 'Pasta by Shape & Type', 'USDA foodCategory kept on merge');
   assert(mergedBoth.image_front_url === 'https://off.example/fettuccine.jpg', 'image remains OFF-only');
   assert(mergedBoth.labels_tags.includes('en:organic'), 'OFF labels kept');
 
@@ -505,7 +523,7 @@ const fettuccine = {
   assert(typeof scored.score === 'number' && scored.score !== null, 'merged food must score');
   assert(scored.productName === 'ORGANIC FETTUCCINE');
   assert(/ORGANIC DURUM WHEAT SEMOLINA/i.test(scored.ingredients), 'USDA ingredients displayed as-is');
-  assert(scored.scanLogicVersion === '11', 'logic version 11');
+  assert(scored.scanLogicVersion === '12', 'logic version 12');
 
   const offScored = await g.scanAndCacheFood('111', {
     product_name: 'Yogurt',
@@ -519,9 +537,120 @@ const fettuccine = {
       proteins_100g: 4,
       sodium_100g: 0.05,
       sugars_100g: 4,
+      fat_100g: 0,
+      fiber_100g: 0,
     },
   }, { skipExplanation: true });
   assert(offScored.source === 'off', 'OFF default source on food response');
+  assert(typeof offScored.score === 'number', 'OFF yogurt with complete nutrients must score');
+
+  // Mapper: absent sat-fat row vs declared fibre 0.0
+  const cokeUsda = {
+    fdcId: 1,
+    description: 'COCA-COLA',
+    foodCategory: 'Soda',
+    foodNutrients: [
+      { nutrientId: 1003, unitName: 'G', value: 0 },
+      { nutrientId: 1004, unitName: 'G', value: 0 },
+      { nutrientId: 1005, unitName: 'G', value: 10.6 },
+      { nutrientId: 1008, unitName: 'KCAL', value: 42 },
+      { nutrientId: 2000, unitName: 'G', value: 10.6 },
+      { nutrientId: 1093, unitName: 'MG', value: 9 },
+    ],
+  };
+  const cokeMapped = g.mapUsdaNutrientsToOff(cokeUsda);
+  assert(!Object.prototype.hasOwnProperty.call(cokeMapped, 'saturated-fat_100g'),
+    'Coca-Cola must not invent a saturated-fat row');
+  assert(!Object.prototype.hasOwnProperty.call(cokeMapped, 'fiber_100g'),
+    'Coca-Cola must not invent a fibre row');
+  assert(cokeMapped.fat_100g === 0, 'Coca-Cola total fat 0 is stored');
+
+  const heinzUsda = {
+    foodNutrients: [
+      { nutrientId: 1003, unitName: 'G', value: 1.6 },
+      { nutrientId: 1004, unitName: 'G', value: 0 },
+      { nutrientId: 1005, unitName: 'G', value: 26.2 },
+      { nutrientId: 1008, unitName: 'KCAL', value: 100 },
+      { nutrientId: 1079, unitName: 'G', value: 0.0 },
+      { nutrientId: 2000, unitName: 'G', value: 22.8 },
+      { nutrientId: 1093, unitName: 'MG', value: 907 },
+      { nutrientId: 1258, unitName: 'G', value: 0 },
+    ],
+  };
+  const heinzMapped = g.mapUsdaNutrientsToOff(heinzUsda);
+  assert(Object.prototype.hasOwnProperty.call(heinzMapped, 'fiber_100g'), 'Heinz fibre row present');
+  assert(heinzMapped.fiber_100g === 0, 'Heinz fibre 0.0 preserved');
+  assert(heinzMapped['saturated-fat_100g'] === 0, 'Heinz sat fat 0.0 preserved');
+
+  assert(g.classifyPurlaFoodPath('Soda') === 'beverages', 'Soda is beverages');
+  assert(g.classifyPurlaFoodPath('Vegetable & Cooking Oils') === 'added_fats', 'oils path');
+  assert(g.classifyPurlaFoodPath('Pasta by Shape & Type') === 'general', 'pasta general');
+  assert(g.classifyPurlaFoodPath('Butter & Spread') === 'general', 'mixed butter aisle stays general');
+  assert(g.classifyPurlaFoodPath('Cheese') === 'general', 'cheese is general (no extra ontology)');
+  assert(g.classifyPurlaFoodPath('oil') === 'general', 'no fuzzy substring match');
+  assert(g.classifyPurlaFoodPath('') === 'general', 'blank → general');
+
+  const derivedCoke = g.applyDerivedNutrientZeros(cokeMapped);
+  assert(derivedCoke['saturated-fat_100g'] === 0, 'fat 0 derives sat fat 0');
+  assert(derivedCoke.fiber_100g == null, 'coke carbs > 0 must not invent fibre');
+
+  const missingEnergy = g.computeNutritionSubscore({
+    sugars_100g: 0, 'saturated-fat_100g': 0, sodium_100g: 0, fat_100g: 0,
+  }, 'Cereal');
+  assert(missingEnergy.available === false && missingEnergy.reason === 'missing_energy',
+    'missing energy → unavailable');
+
+  const missingFiber = g.computeNutritionSubscore({
+    'energy-kcal_100g': 80, sugars_100g: 4, 'saturated-fat_100g': 0, sodium_100g: 0.05,
+    proteins_100g: 4, fat_100g: 0,
+  }, 'Yogurt');
+  assert(missingFiber.available === true, 'missing fibre still computes');
+  assert(missingFiber.components.fibre === 0, 'missing fibre → 0 points');
+
+  const olive = g.computeNutritionSubscore({
+    'energy-kcal_100g': 884, sugars_100g: 0, 'saturated-fat_100g': 14, sodium_100g: 0,
+    fat_100g: 100, fiber_100g: 0, proteins_100g: 0, carbohydrates_100g: 0,
+  }, 'Vegetable & Cooking Oils');
+  const chocolate = g.computeNutritionSubscore({
+    'energy-kcal_100g': 530, sugars_100g: 51, 'saturated-fat_100g': 18, sodium_100g: 0.08,
+    fat_100g: 30, fiber_100g: 3.4, proteins_100g: 7.7, carbohydrates_100g: 59,
+  }, 'Chocolate');
+  assert(olive.available && chocolate.available, 'sentinels available');
+  assert(olive.path === 'added_fats', 'olive oil uses fat-quality path');
+  assert(chocolate.path === 'general', 'chocolate is general food');
+  assert(olive.points > chocolate.points,
+    'olive oil must not score like chocolate on energy density: oil=' + olive.points + ' choc=' + chocolate.points);
+
+  const dietCola = g.computeNutritionSubscore({
+    'energy-kcal_100g': 0, sugars_100g: 0, fat_100g: 0, sodium_100g: 0.008,
+    proteins_100g: 0, carbohydrates_100g: 0,
+  }, 'Soda');
+  assert(dietCola.available && dietCola.path === 'beverages', 'diet cola is a beverage');
+  assert(dietCola.points <= 45, 'diet cola must not approach the top, got ' + dietCola.points);
+
+  const frozenVeg = g.computeNutritionSubscore({
+    'energy-kcal_100g': 35, sugars_100g: 1.5, 'saturated-fat_100g': 0, sodium_100g: 0.03,
+    fat_100g: 0.4, fiber_100g: 3.3, proteins_100g: 2.4, carbohydrates_100g: 7,
+  }, 'Frozen Vegetables');
+  const oats = g.computeNutritionSubscore({
+    'energy-kcal_100g': 389, sugars_100g: 1, 'saturated-fat_100g': 1.1, sodium_100g: 0.002,
+    fat_100g: 6.9, fiber_100g: 10.6, proteins_100g: 16.9, carbohydrates_100g: 66,
+  }, 'Cereal');
+  const crisps = g.computeNutritionSubscore({
+    'energy-kcal_100g': 536, sugars_100g: 0.5, 'saturated-fat_100g': 3, sodium_100g: 0.5,
+    fat_100g: 35, fiber_100g: 4, proteins_100g: 6, carbohydrates_100g: 53,
+  }, 'Chips, Pretzels & Snacks');
+  assert(frozenVeg.points > crisps.points, 'frozen veg must outscore crisps: ' + frozenVeg.points + ' vs ' + crisps.points);
+  assert(oats.points > crisps.points, 'oats must outscore crisps: ' + oats.points + ' vs ' + crisps.points);
+  assert(frozenVeg.points > chocolate.points, 'frozen veg must outscore chocolate');
+  assert(oats.points > chocolate.points, 'oats must outscore chocolate');
+
+  const highN = g.computeNutritionSubscore({
+    'energy-kcal_100g': 500, sugars_100g: 40, 'saturated-fat_100g': 12, sodium_100g: 1.2,
+    fat_100g: 20, fiber_100g: 0, proteins_100g: 25, carbohydrates_100g: 50,
+  }, 'Pepperoni, Salami & Cold Cuts');
+  assert(highN.available && highN.proteinSuppressed, 'high N must suppress protein');
+  assert(highN.components.protein === 0, 'suppressed protein contributes 0');
 
   if (prevKey === undefined) delete process.env.USDA_API_KEY;
   else process.env.USDA_API_KEY = prevKey;
