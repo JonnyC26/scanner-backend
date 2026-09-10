@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '10';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '11';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -3777,6 +3777,12 @@ function staleCacheFallbackPayload(staleCached) {
   if (!staleCached) return null;
   const { cachedAt, ...responseData } = staleCached;
   if (!responseData.productType) responseData.productType = 'food';
+  // Product/nutrition may stay for resilience, but an explanation generated
+  // under an older SCAN_LOGIC_VERSION must not leak through a failed refresh.
+  if (staleCached.scanLogicVersion !== SCAN_LOGIC_VERSION) {
+    delete responseData.explanation;
+    responseData.explanationPending = true;
+  }
   return responseData;
 }
 
@@ -3969,7 +3975,10 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
     if (fallback) {
       const reason = refreshErr.statusCode === 404 ? 'not_found' : (refreshErr.message || 'refresh_failed');
       console.log(`[CACHE STALE FALLBACK] barcode=${barcode} reason=${reason}`);
-      if (!skipExplanation && !hasUsableExplanation(fallback)) {
+      // Version-mismatched explanations were omitted above. Do not reattach
+      // from Firestore or call Haiku — refresh already failed.
+      const logicMismatch = staleCached.scanLogicVersion !== SCAN_LOGIC_VERSION;
+      if (!logicMismatch && !skipExplanation && !hasUsableExplanation(fallback)) {
         try {
           const explanation = await ensureExplanation(barcode, fallback);
           fallback.explanation = explanation;
