@@ -3089,7 +3089,6 @@ async function generateFoodExplanation() {
 }
 const additiveMap = {};
 const additiveDetails = {};
-const FOOD_PHOTO_EXPLANATION = 'photo-fixed-copy';
 const SCAN_LOGIC_VERSION = '${SCAN_LOGIC_VERSION}';
 ${src.slice(cosStart, cosEnd).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(nutStart, nutEnd)}
@@ -3107,6 +3106,7 @@ module.exports = {
   scoreCosmeticProduct,
   FOOD_NO_NUTRITION_EXPLANATION,
   FOOD_INCOMPLETE_NUTRITION_EXPLANATION,
+  FOOD_PHOTO_EXPLANATION,
   SCAN_LOGIC_VERSION,
   formatIncompleteNutritionExplanation,
   explanationForUnscoredFood,
@@ -3230,7 +3230,7 @@ assert(g.formatIncompleteNutritionExplanation('missing_unfavourable') === g.FOOD
   'unknown reason keeps generic incomplete copy');
 
 assert(g.explanationForUnscoredFood({ source: 'photo', score: null, scoreLabel: 'Not enough data' }) ===
-  'photo-fixed-copy', 'photo rescue keeps photo copy');
+  g.FOOD_PHOTO_EXPLANATION, 'photo rescue keeps photo copy');
 assert(g.explanationForUnscoredFood({
   source: 'off',
   score: null,
