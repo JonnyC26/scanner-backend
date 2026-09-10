@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '11';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '12';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1587,6 +1587,24 @@ function mapUsdaNutrientsToOff(food) {
       const grams = usdaAmountToGrams(amount, unit || 'MG');
       nutriments.sodium_100g = grams;
       nutriments.sodium = grams;
+    } else if (id === 1258) {
+      // Fatty acids, total saturated. Absent row ≠ 0 (Coca-Cola has no row;
+      // a declared 0.0 must still be stored).
+      const grams = usdaAmountToGrams(amount, unit || 'G');
+      nutriments['saturated-fat_100g'] = grams;
+      nutriments['saturated-fat'] = grams;
+    } else if (id === 1079) {
+      const grams = usdaAmountToGrams(amount, unit || 'G');
+      nutriments.fiber_100g = grams;
+      nutriments.fiber = grams;
+    } else if (id === 1004) {
+      const grams = usdaAmountToGrams(amount, unit || 'G');
+      nutriments.fat_100g = grams;
+      nutriments.fat = grams;
+    } else if (id === 1005) {
+      const grams = usdaAmountToGrams(amount, unit || 'G');
+      nutriments.carbohydrates_100g = grams;
+      nutriments.carbohydrates = grams;
     }
   }
   return nutriments;
@@ -1621,6 +1639,7 @@ function mapUsdaFoodToProduct(food, barcode) {
     categories_tags: [],
     nutriments: mapUsdaNutrientsToOff(food),
     serving_quantity: mapUsdaServingQuantity(food),
+    foodCategory: String(food.foodCategory || food.brandedFoodCategory || '').trim(),
     nutriscore_grade: null,
     nova_group: null,
     image_front_url: '',
@@ -1933,6 +1952,7 @@ function mergeUsdaAndOffProducts(barcode, usdaProduct, offProduct) {
     categories_tags: Array.isArray(offProduct.categories_tags) ? offProduct.categories_tags : [],
     nutriments: nutriPick.nutriments,
     serving_quantity: servingPick.source ? servingPick.value : (usdaProduct.serving_quantity != null ? usdaProduct.serving_quantity : offProduct.serving_quantity),
+    foodCategory: usdaProduct.foodCategory || '',
     nutriscore_grade: offProduct.nutriscore_grade == null ? null : offProduct.nutriscore_grade,
     nutriscore_score: offProduct.nutriscore_score,
     nutrition_grade_fr: offProduct.nutrition_grade_fr,
@@ -2115,15 +2135,12 @@ async function resolveProductType(barcode) {
   return { productType: 'food', product: merged };
 }
 
-function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, barcode) {
-  // 60% Nutri-Score
-  const nutriPoints = { 'a': 60, 'b': 50, 'c': 40, 'd': 30, 'e': 15 };
-  const mappedNutriPts = nutriPoints[nutriScore?.toLowerCase()];
-  // Keep assuming 40 (grade C) when Nutri-Score is missing — instrumentation only.
-  if (mappedNutriPts === undefined && barcode != null) {
-    console.log(`[NUTRI FALLBACK] barcode=${barcode} assumed 40`);
+function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, barcode, nutriments, foodCategory) {
+  // 60% Purla nutrition subscore from per-100g nutrients (not OFF Nutri-Score).
+  const nutrition = computeNutritionSubscore(nutriments, foodCategory);
+  if (!nutrition.available && barcode != null) {
+    console.log(`[NUTRITION SUBSCORE UNAVAILABLE] barcode=${barcode} reason=${nutrition.reason || 'missing_unfavourable'}`);
   }
-  const nutriPts = mappedNutriPts ?? 40;
 
   // 30% Additives — risk-weighted, not count-based
   let additivePts = 30;
@@ -2138,12 +2155,12 @@ function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protei
   // 10% Organic — only a confirmed organic label earns points
   const organicPts = isOrganic ? 10 : 0;
 
-  return Math.max(0, Math.min(100, Math.round(nutriPts + additivePts + organicPts)));
+  if (!nutrition.available) return null;
+  return Math.max(0, Math.min(100, Math.round(nutrition.points + additivePts + organicPts)));
 }
 
-function getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList) {
-  const nutriPoints = { 'a': 60, 'b': 50, 'c': 40, 'd': 30, 'e': 15 };
-  const nutriPts = nutriPoints[nutriScore?.toLowerCase()] ?? 40;
+function getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, nutriments, foodCategory) {
+  const nutrition = computeNutritionSubscore(nutriments, foodCategory);
 
   let additivePts = 30;
   let additiveRisk = 'none';
@@ -2160,12 +2177,224 @@ function getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganic, pro
   return {
     nutriScoreGrade: (nutriScore || 'unknown').toUpperCase(),
     nutriScoreKnown: !!nutriScore,
-    nutriPts, nutriMax: 60,
+    nutriPts: nutrition.available ? nutrition.points : null,
+    nutriMax: 60,
+    nutritionAvailable: nutrition.available,
+    nutritionPath: nutrition.path,
+    nutritionReason: nutrition.available ? null : (nutrition.reason || 'missing_unfavourable'),
+    proteinSuppressed: !!nutrition.proteinSuppressed,
+    nutritionComponents: nutrition.components || null,
     additivesCount: additiveList ? additiveList.length : 0,
     additiveRisk,
     additivePts, additiveMax: 30,
     isOrganic: !!isOrganic,
     organicPts, organicMax: 10,
+  };
+}
+
+// Published Nutri-Score 2023 per-100g cut points (Santé publique France /
+// Open Food Facts Nutriscore.pm). Mapped onto Purla's 60-point allocation;
+// thresholds are not tuned.
+const NS2023_THRESHOLDS = {
+  energy: [335, 670, 1005, 1340, 1675, 2010, 2345, 2680, 3015, 3350],
+  energy_beverages: [30, 90, 150, 210, 240, 270, 300, 330, 360, 390],
+  sugars: [3.4, 6.8, 10, 14, 17, 20, 24, 27, 31, 34, 37, 41, 44, 48, 51],
+  sugars_beverages: [0.5, 2, 3.5, 5, 6, 7, 8, 9, 10, 11],
+  saturated_fat: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  salt: [0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2, 2.2, 2.4, 2.6, 2.8, 3, 3.2, 3.4, 3.6, 3.8, 4],
+  energy_from_saturated_fat: [120, 240, 360, 480, 600, 720, 840, 960, 1080, 1200],
+  saturated_fat_ratio: [10, 16, 22, 28, 34, 40, 46, 52, 58, 64],
+  fiber: [3.0, 4.1, 5.2, 6.3, 7.4],
+  proteins: [2.4, 4.8, 7.2, 9.6, 12, 14, 17],
+  proteins_beverages: [1.2, 1.5, 1.8, 2.1, 2.4, 2.7, 3.0],
+};
+
+const KJ_PER_KCAL = 4.184;
+const SALT_PER_SODIUM = 2.5;
+const SAT_FAT_KJ_PER_G = 37;
+
+// Exact USDA branded foodCategory strings observed in the coverage sample.
+// No substring matching — anything else is general food.
+const PURLA_BEVERAGE_FOOD_CATEGORIES = new Set([
+  'Soda',
+  'Water',
+  'Plant Based Water',
+  'Iced & Bottle Tea',
+  'Fruit & Vegetable Juice, Nectars & Fruit Drinks',
+  'Other Drinks',
+  'Sport Drinks',
+  'Non Alcoholic Beverages - Ready to Drink',
+  'Non Alcoholic Beverages  Ready to Drink',
+  'Plant Based Milk',
+  'Milk',
+  'Milk/Milk Substitutes',
+]);
+
+const PURLA_ADDED_FATS_FOOD_CATEGORIES = new Set([
+  'Vegetable & Cooking Oils',
+]);
+
+const FOOD_SUGAR_NUTRIMENT_KEYS = ['sugars_100g', 'sugars'];
+const FOOD_SAT_FAT_NUTRIMENT_KEYS = ['saturated-fat_100g', 'saturated-fat'];
+const FOOD_FIBER_NUTRIMENT_KEYS = ['fiber_100g', 'fiber'];
+const FOOD_FAT_NUTRIMENT_KEYS = ['fat_100g', 'fat'];
+const FOOD_CARB_NUTRIMENT_KEYS = ['carbohydrates_100g', 'carbohydrates'];
+
+function classifyPurlaFoodPath(foodCategory) {
+  const cat = String(foodCategory == null ? '' : foodCategory);
+  if (PURLA_BEVERAGE_FOOD_CATEGORIES.has(cat)) return 'beverages';
+  if (PURLA_ADDED_FATS_FOOD_CATEGORIES.has(cat)) return 'added_fats';
+  return 'general';
+}
+
+function getNumericNutrimentValue(nutriments, keys) {
+  if (!nutriments || typeof nutriments !== 'object') return null;
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(nutriments, key)) continue;
+    const v = nutriments[key];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+  }
+  return null;
+}
+
+function nsThresholdPoints(value, thresholds, { gte = false } = {}) {
+  if (value == null || !Number.isFinite(value) || !Array.isArray(thresholds)) return null;
+  let pts = 0;
+  for (const t of thresholds) {
+    if (gte ? value >= t : value > t) pts += 1;
+  }
+  return pts;
+}
+
+function mapNsPointsToPurla(nsPoints, nsMax, purlaMax, invert) {
+  if (nsMax <= 0) return 0;
+  const frac = Math.max(0, Math.min(1, nsPoints / nsMax));
+  return invert ? purlaMax * (1 - frac) : purlaMax * frac;
+}
+
+// Arithmetic identities only — not assumptions about unreported nutrients.
+function applyDerivedNutrientZeros(nutriments) {
+  const src = nutriments && typeof nutriments === 'object' ? nutriments : {};
+  const out = Object.assign({}, src);
+  const fat = getNumericNutrimentValue(src, FOOD_FAT_NUTRIMENT_KEYS);
+  const sat = getNumericNutrimentValue(src, FOOD_SAT_FAT_NUTRIMENT_KEYS);
+  const carbs = getNumericNutrimentValue(src, FOOD_CARB_NUTRIMENT_KEYS);
+  const sugars = getNumericNutrimentValue(src, FOOD_SUGAR_NUTRIMENT_KEYS);
+  const fiber = getNumericNutrimentValue(src, FOOD_FIBER_NUTRIMENT_KEYS);
+  if (sat == null && fat === 0) {
+    out['saturated-fat_100g'] = 0;
+    out['saturated-fat'] = 0;
+  }
+  if (sugars == null && carbs === 0) {
+    out.sugars_100g = 0;
+    out.sugars = 0;
+  }
+  if (fiber == null && carbs === 0) {
+    out.fiber_100g = 0;
+    out.fiber = 0;
+  }
+  return out;
+}
+
+function computeNutritionSubscore(nutriments, foodCategory) {
+  const path = classifyPurlaFoodPath(foodCategory);
+  const derived = applyDerivedNutrientZeros(nutriments);
+
+  const energyKcal = getNumericNutrimentValue(derived, ['energy-kcal_100g', 'energy-kcal']);
+  const sugars = getNumericNutrimentValue(derived, FOOD_SUGAR_NUTRIMENT_KEYS);
+  const satFat = getNumericNutrimentValue(derived, FOOD_SAT_FAT_NUTRIMENT_KEYS);
+  const sodiumG = getNumericNutrimentValue(derived, ['sodium_100g', 'sodium']);
+  const fiber = getNumericNutrimentValue(derived, FOOD_FIBER_NUTRIMENT_KEYS);
+  const protein = getNumericNutrimentValue(derived, ['proteins_100g', 'proteins']);
+  const fat = getNumericNutrimentValue(derived, FOOD_FAT_NUTRIMENT_KEYS);
+
+  const unavailable = (reason) => ({
+    available: false,
+    points: null,
+    path,
+    reason,
+    proteinSuppressed: false,
+    components: null,
+  });
+
+  if (energyKcal == null) return unavailable('missing_energy');
+  if (sugars == null) return unavailable('missing_sugars');
+  if (path === 'added_fats' && fat == null) return unavailable('missing_total_fat');
+  if (satFat == null) return unavailable('missing_saturated_fat');
+  if (sodiumG == null) return unavailable('missing_sodium');
+
+  const energyKj = energyKcal * KJ_PER_KCAL;
+  const saltG = sodiumG * SALT_PER_SODIUM;
+
+  const sugarsTable = path === 'beverages' ? NS2023_THRESHOLDS.sugars_beverages : NS2023_THRESHOLDS.sugars;
+  const energyTable = path === 'beverages' ? NS2023_THRESHOLDS.energy_beverages : NS2023_THRESHOLDS.energy;
+  const proteinTable = path === 'beverages' ? NS2023_THRESHOLDS.proteins_beverages : NS2023_THRESHOLDS.proteins;
+
+  const sugarsNs = nsThresholdPoints(sugars, sugarsTable);
+  const saltNs = nsThresholdPoints(saltG, NS2023_THRESHOLDS.salt);
+  const fiberNs = fiber == null ? 0 : nsThresholdPoints(fiber, NS2023_THRESHOLDS.fiber);
+  const proteinNs = protein == null ? 0 : nsThresholdPoints(protein, proteinTable);
+
+  let energyPts;
+  let satPts;
+  let fatQualityPts = null;
+  let energyNs;
+  let satNs;
+  let ratioNs = null;
+  let energyFromSatNs = null;
+  let nPoints;
+
+  if (path === 'added_fats') {
+    const ratioPct = fat === 0 ? 0 : (100 * satFat / fat);
+    if (!Number.isFinite(ratioPct)) return unavailable('missing_saturated_fat');
+    ratioNs = nsThresholdPoints(ratioPct, NS2023_THRESHOLDS.saturated_fat_ratio, { gte: true });
+    fatQualityPts = mapNsPointsToPurla(ratioNs, NS2023_THRESHOLDS.saturated_fat_ratio.length, 20, true);
+    energyPts = 0;
+    satPts = 0;
+    energyFromSatNs = nsThresholdPoints(satFat * SAT_FAT_KJ_PER_G, NS2023_THRESHOLDS.energy_from_saturated_fat);
+    nPoints = energyFromSatNs + sugarsNs + ratioNs + saltNs;
+  } else {
+    energyNs = nsThresholdPoints(energyKj, energyTable);
+    satNs = nsThresholdPoints(satFat, NS2023_THRESHOLDS.saturated_fat);
+    energyPts = mapNsPointsToPurla(energyNs, energyTable.length, 10, true);
+    satPts = mapNsPointsToPurla(satNs, NS2023_THRESHOLDS.saturated_fat.length, 10, true);
+    nPoints = energyNs + sugarsNs + satNs + saltNs;
+  }
+
+  const sugarsPts = mapNsPointsToPurla(sugarsNs, sugarsTable.length, 10, true);
+  const sodiumPts = mapNsPointsToPurla(saltNs, NS2023_THRESHOLDS.salt.length, 10, true);
+  const fibrePts = fiber == null ? 0 : mapNsPointsToPurla(fiberNs, NS2023_THRESHOLDS.fiber.length, 12, false);
+
+  let proteinSuppressed = false;
+  if (path === 'general' && nPoints >= 11) proteinSuppressed = true;
+  if (path === 'added_fats' && nPoints >= 7) proteinSuppressed = true;
+  // Beverages: Nutri-Score 2023 always counts protein. No sweetener parser.
+
+  const proteinPts = proteinSuppressed || protein == null
+    ? 0
+    : mapNsPointsToPurla(proteinNs, proteinTable.length, 8, false);
+
+  const raw = path === 'added_fats'
+    ? fatQualityPts + sugarsPts + sodiumPts + fibrePts + proteinPts
+    : energyPts + sugarsPts + satPts + sodiumPts + fibrePts + proteinPts;
+  const points = Math.max(0, Math.min(60, Math.round(raw)));
+
+  return {
+    available: true,
+    points,
+    path,
+    reason: null,
+    proteinSuppressed,
+    nPoints,
+    components: {
+      energy: path === 'added_fats' ? 0 : energyPts,
+      sugars: sugarsPts,
+      saturatedFat: path === 'added_fats' ? 0 : satPts,
+      fatQuality: path === 'added_fats' ? fatQualityPts : null,
+      sodium: sodiumPts,
+      fibre: fibrePts,
+      protein: proteinPts,
+    },
   };
 }
 
@@ -2565,7 +2794,7 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
 
   const scoredFull = candidates
     .map(p => {
-      const pNutriScore = p.nutriscore_grade || 'c';
+      const pNutriScore = p.nutriscore_grade || null;
       const pNovaGroup = p.nova_group || 3;
       const pAdditiveCodes = extractAdditiveCodes(p);
       const pAdditivesCount = pAdditiveCodes.length;
@@ -2577,7 +2806,9 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
         const details = additiveRiskDetails(a);
         return { riskLevel: details?.riskLevel || 'safe' };
       });
-      const pScore = calculateScore(pNutriScore, pNovaGroup, pAdditivesCount, pIsOrganic, pProtein, pSugar, pSodium, pAdditiveList);
+      const pScore = calculateScore(pNutriScore, pNovaGroup, pAdditivesCount, pIsOrganic, pProtein, pSugar, pSodium, pAdditiveList, p.code, p.nutriments, p.foodCategory);
+      const pScoreColor = pScore == null ? '#9E9E9E' : pScore >= 75 ? '#2E7D32' : pScore >= 50 ? '#8BC34A' : pScore >= 25 ? '#FF9800' : '#F44336';
+      const pScoreLabel = pScore == null ? 'Not enough data' : pScore >= 75 ? 'Excellent' : pScore >= 50 ? 'Good' : pScore >= 25 ? 'Poor' : 'Bad';
 
       // Relevance: how much of this candidate's non-generic category lineage
       // actually overlaps with the scanned product's. Two genuinely similar
@@ -2592,8 +2823,8 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
         barcode: p.code,
         name: p.product_name || 'Unknown Product',
         score: pScore,
-        scoreColor: pScore >= 75 ? '#2E7D32' : pScore >= 50 ? '#8BC34A' : pScore >= 25 ? '#FF9800' : '#F44336',
-        scoreLabel: pScore >= 75 ? 'Excellent' : pScore >= 50 ? 'Good' : pScore >= 25 ? 'Poor' : 'Bad',
+        scoreColor: pScoreColor,
+        scoreLabel: pScoreLabel,
         imageUrl: p.image_front_url || p.image_url || '',
         overlapRatio,
       };
@@ -2610,7 +2841,7 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   const scored = scoredFull
     // Require at least half the scanned product's specific category tags to
     // match — this is the real relevance gate, not the search tag itself.
-    .filter(p => p.name !== 'Unknown Product' && p.score >= 50 && p.score > currentScore && p.overlapRatio >= 0.5)
+    .filter(p => p.name !== 'Unknown Product' && p.score != null && p.score >= 50 && p.score > currentScore && p.overlapRatio >= 0.5)
     .sort((a, b) => b.score - a.score)
     .map(({ overlapRatio, ...rest }) => rest);
 
@@ -3076,6 +3307,9 @@ const FOOD_NO_INGREDIENTS_EXPLANATION =
 const FOOD_NO_NUTRITION_EXPLANATION =
   "We couldn't tell what kind of product this is. There's no nutrition information and no product category, so we can't score it. If it's a cleaning or household product, we don't assess those.";
 
+const FOOD_INCOMPLETE_NUTRITION_EXPLANATION =
+  "We found this product but some required nutrition values are missing, so we could not compute a nutrition score.";
+
 // Fixed copy when a cosmetic explanation is unusable (refusal / malformed).
 const COSMETIC_NO_EXPLANATION =
   "We couldn't summarise this product's ingredients.";
@@ -3469,8 +3703,8 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     };
   }
 
-  // Do not silently coerce missing Nutri-Score to 'c' before scoring — leave
-  // calculateScore's ?? 40 in place and surface the assumption via nutriScoreKnown.
+  // Do not use OFF Nutri-Score for the 60-point component — Purla's USDA
+  // nutrition subscore runs for every food, including those with a real grade.
   const nutriScore = product.nutriscore_grade || null;
   const nutriScoreKnown = !!nutriScore;
   const novaGroup = product.nova_group || 3;
@@ -3513,11 +3747,11 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   const protein = proteinRaw ?? 0;
   const sugar = sugarRaw ?? 0;
   const sodium = sodiumRaw ?? 0;
-  const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList, barcode);
-  const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList);
+  const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList, barcode, product.nutriments, product.foodCategory);
+  const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList, product.nutriments, product.foodCategory);
 
   let alternatives = [];
-  if (score < 50) {
+  if (score != null && score < 50) {
     try {
       alternatives = await getCategoryAlternatives(barcode, product.categories_tags, score);
     } catch (altErr) {
@@ -3525,7 +3759,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     }
   }
 
-  console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${organicStatus} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
+  console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} nutritionPath=${scoreBreakdown.nutritionPath} nutritionAvailable=${scoreBreakdown.nutritionAvailable} nutriPts=${scoreBreakdown.nutriPts} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${organicStatus} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
 
   // Format display values — show "N/A" when data is genuinely missing
   const fmtProtein = formatGrams(proteinDisplay);
@@ -3543,7 +3777,9 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
 
   let explanation = null;
   const noIngredientData = !hasUsableIngredientText(ingredients);
-  if (noIngredientData) {
+  if (score == null) {
+    explanation = FOOD_INCOMPLETE_NUTRITION_EXPLANATION;
+  } else if (noIngredientData) {
     // Fixed copy — do not call Haiku with an empty/junk ingredient list.
     explanation = FOOD_NO_INGREDIENTS_EXPLANATION;
   } else if (!skipExplanation) {
@@ -3563,8 +3799,8 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     });
   }
 
-  const scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
-  const scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
+  const scoreColor = score == null ? '#9E9E9E' : score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
+  const scoreLabel = score == null ? 'Not enough data' : score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
 
   const responseData = {
     productType: 'food',
@@ -3603,7 +3839,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     scanLogicVersion: SCAN_LOGIC_VERSION,
     source,
   };
-  if (skipExplanation && !noIngredientData) {
+  if (skipExplanation && !noIngredientData && score != null) {
     responseData.explanationPending = true;
   }
   return responseData;
@@ -5153,9 +5389,9 @@ app.get('/search', async (req, res) => {
           scoreColor = '#9E9E9E';
           scoreLabel = 'Not enough data';
         } else {
-          score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, searchAdditiveList);
-          scoreColor = score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
-          scoreLabel = score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
+          score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, searchAdditiveList, p.code, p.nutriments, p.foodCategory);
+          scoreColor = score == null ? '#9E9E9E' : score >= 75 ? '#2E7D32' : score >= 50 ? '#8BC34A' : score >= 25 ? '#FF9800' : '#F44336';
+          scoreLabel = score == null ? 'Not enough data' : score >= 75 ? 'Excellent' : score >= 50 ? 'Good' : score >= 25 ? 'Poor' : 'Bad';
         }
 
         const dietWarnings = healthProfile ? detectDietWarnings(p, healthProfile) : '';

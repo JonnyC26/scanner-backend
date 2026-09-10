@@ -3036,7 +3036,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + SCAN_LOGIC_VERSION);
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -3099,6 +3099,7 @@ module.exports = {
   scanAndCacheFood,
   scoreCosmeticProduct,
   FOOD_NO_NUTRITION_EXPLANATION,
+  FOOD_INCOMPLETE_NUTRITION_EXPLANATION,
   SCAN_LOGIC_VERSION,
 };
 `;
@@ -3107,7 +3108,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '11', 'exported SCAN_LOGIC_VERSION must be 11');
+assert(g.SCAN_LOGIC_VERSION === '12', 'exported SCAN_LOGIC_VERSION must be 12');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3157,17 +3158,19 @@ assert(g.productHasNutriments({
       proteins_100g: 4,
       sodium_100g: 0.05,
       sugars_100g: 4,
+      fat_100g: 0,
+      fiber_100g: 0,
     },
   }, { skipExplanation: true });
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '11', 'normal food stamps logic version 11');
+  assert(result.scanLogicVersion === '12', 'normal food stamps logic version 12');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
 
-// 2. Food with only energy still scores
+// 2. Food with only energy is scorable at the gate but nutrition subscore is unavailable
 {
   const result = await g.scanAndCacheFood('222', {
     product_name: 'Mystery Calories',
@@ -3176,9 +3179,9 @@ assert(g.productHasNutriments({
     additives_tags: [],
     nutriments: { 'energy-kcal_100g': 200 },
   }, { skipExplanation: true });
-  assert(typeof result.score === 'number', 'energy-only food must score, got ' + result.score);
-  assert(result.score !== null, 'energy-only score not null');
-  assert(result.scoreLabel !== 'Not enough data', 'energy-only must not be Not enough data');
+  assert(result.score === null, 'energy-only food cannot invent missing unfavourable nutrients');
+  assert(result.scoreLabel === 'Not enough data', 'energy-only must be Not enough data');
+  assert(result.explanation === g.FOOD_INCOMPLETE_NUTRITION_EXPLANATION, 'incomplete nutrition copy');
 }
 
 // 3. Dawn Ultra nutriment shape → no score, fixed explanation, no Haiku
@@ -3207,7 +3210,7 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '11', 'Dawn stamps logic version 11');
+  assert(result.scanLogicVersion === '12', 'Dawn stamps logic version 12');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3273,7 +3276,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + logicMatch[1]);
+assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -3936,7 +3939,7 @@ assert(isCacheFresh({
   scanLogicVersion: '0',
 }, now) === false, 'mismatched scanLogicVersion must be stale');
 
-assert(g.SCAN_LOGIC_VERSION === '11', 'SCAN_LOGIC_VERSION must be 11 after explanation copy');
+assert(g.SCAN_LOGIC_VERSION === '12', 'SCAN_LOGIC_VERSION must be 12 after explanation copy');
 assert(isCacheFresh({
   productType: 'food',
   cachedAt: now - 1000,
@@ -3998,13 +4001,11 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + SCAN_LOGIC_VERSION);
 
-// ?? 40 must remain — instrumentation only, no score redesign.
-assert(/nutriPoints\[nutriScore\?\.toLowerCase\(\)\]/.test(src) ||
-  /mappedNutriPts \?\? 40/.test(src),
-  'Nutri-Score ?? 40 fallback must remain');
-assert(src.includes('[NUTRI FALLBACK]'), 'must log NUTRI FALLBACK');
+assert(src.includes('computeNutritionSubscore'), 'must compute a USDA nutrition subscore');
+assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'), 'must log unavailable nutrition subscore');
+assert(!src.includes('[NUTRI FALLBACK]'), 'must not invent a Nutri-Score C fallback');
 assert(src.includes('nutriScoreKnown'), 'must expose nutriScoreKnown');
 assert(src.includes("basisLabel") && src.includes('per 100g'),
   'prompt must support per 100g basis label');
@@ -4097,8 +4098,8 @@ const origLog = console.log;
 console.log = (...args) => { logs.push(args.join(' ')); origLog(...args); };
 
 function clearLogs() { logs.length = 0; }
-function loggedNutriFallback(barcode) {
-  return logs.some(l => l.includes('[NUTRI FALLBACK]') && l.includes('barcode=' + barcode) && l.includes('assumed 40'));
+function loggedNutritionUnavailable(barcode) {
+  return logs.some(l => l.includes('[NUTRITION SUBSCORE UNAVAILABLE]') && l.includes('barcode=' + barcode));
 }
 
 (async () => {
@@ -4192,7 +4193,7 @@ function loggedNutriFallback(barcode) {
   assert(n.sodiumDisplay === null, 'unparseable qty → sodiumDisplay null');
 }
 
-// 4. No Nutri-Score → nutriScoreKnown false + fallback logged; score still uses 40
+// 4. No Nutri-Score → nutriScoreKnown false; 60-point component is the USDA subscore
 {
   clearLogs();
   const result = await g.scanAndCacheFood('nutri-missing', {
@@ -4208,6 +4209,7 @@ function loggedNutriFallback(barcode) {
       proteins_100g: 0,
       sugars_100g: 0,
       sodium_100g: 3.85,
+      fat_100g: 0,
       sodium_serving: 0.5,
       sugars_serving: 0,
       proteins_serving: 0,
@@ -4217,14 +4219,18 @@ function loggedNutriFallback(barcode) {
   assert(result.nutriScore == null, 'nutriScore null when missing, got ' + result.nutriScore);
   const breakdown = JSON.parse(result.scoreBreakdown);
   assert(breakdown.nutriScoreKnown === false, 'breakdown nutriScoreKnown false');
-  assert(breakdown.nutriPts === 40, 'fallback still awards 40 points');
-  assert(loggedNutriFallback('nutri-missing'), 'must log NUTRI FALLBACK for missing grade');
+  assert(breakdown.nutritionAvailable === true, 'subscore still computed from nutrients');
+  assert(typeof breakdown.nutriPts === 'number' && breakdown.nutriPts >= 0 && breakdown.nutriPts <= 60,
+    'nutriPts is the 0-60 subscore, got ' + breakdown.nutriPts);
+  assert(breakdown.nutriPts !== 40 || breakdown.nutritionPath === 'general', 'must not be an invented grade-C 40 from Nutri-Score');
+  assert(!loggedNutritionUnavailable('nutri-missing'), 'complete nutrients must not log unavailable');
+  assert(typeof result.score === 'number', 'score is still computed');
   // Tiers from per-serving (honesty fix 1 still applies)
   assert(result.sodiumTier === 'medium', 'serving sodium tier medium, got ' + result.sodiumTier);
   assert(result.servingKnown === true, 'serving known for Liquid IV shape');
 }
 
-// 5. With Nutri-Score → nutriScoreKnown true, no log line
+// 5. With Nutri-Score → nutriScoreKnown true; points still from USDA subscore, not grade B
 {
   clearLogs();
   const result = await g.scanAndCacheFood('nutri-known', {
@@ -4240,14 +4246,18 @@ function loggedNutriFallback(barcode) {
       proteins_100g: 4,
       sugars_100g: 4,
       sodium_100g: 0.05,
+      fat_100g: 0,
+      fiber_100g: 0,
     },
   }, { skipExplanation: true });
   assert(result.nutriScoreKnown === true, 'nutriScoreKnown true');
   assert(result.nutriScore === 'b', 'nutriScore preserved');
   const breakdown = JSON.parse(result.scoreBreakdown);
   assert(breakdown.nutriScoreKnown === true, 'breakdown nutriScoreKnown true');
-  assert(breakdown.nutriPts === 50, 'grade B → 50 pts');
-  assert(!loggedNutriFallback('nutri-known'), 'must not log fallback when grade known');
+  assert(breakdown.nutritionAvailable === true, 'subscore available');
+  assert(typeof breakdown.nutriPts === 'number' && breakdown.nutriPts <= 60, 'nutriPts from subscore');
+  assert(breakdown.nutriPts !== 50, 'must not map grade B to 50 Nutri-Score points');
+  assert(!loggedNutritionUnavailable('nutri-known'), 'must not log unavailable when nutrients present');
 }
 
 // 6. /search path uses the same helper → same tiers and servingKnown
@@ -4963,7 +4973,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + logicMatch[1]);
+assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
 
 // --- Source: /scan/photo resolves type before scoring ---
 const photoStart = src.indexOf("app.post('/scan/photo'");
@@ -5013,7 +5023,7 @@ const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
-const SCAN_LOGIC_VERSION = '11';
+const SCAN_LOGIC_VERSION = '12';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 ${src.slice(helperStart, helperEnd)}
@@ -5121,7 +5131,9 @@ assert(photoBody.includes("productType: 'cosmetic'"),
     if (productType === 'household' || productType === 'cosmetic') {
       return { productType, score: null, scoreLabel: 'Not enough data', scoreColor: '#9E9E9E' };
     }
-    const score = g.calculateScore('b', 3, 0, false, 5, 5, 0.1, []);
+    const score = g.calculateScore('b', 3, 0, false, 5, 5, 0.1, [], null, {
+      'energy-kcal_100g': 80, proteins_100g: 5, sugars_100g: 5, sodium_100g: 0.1, fat_100g: 0, fiber_100g: 0,
+    }, 'Yogurt');
     return {
       productType,
       score,
@@ -5176,7 +5188,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + logicMatch[1]);
+assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
 
 const catchStart = src.indexOf('const fallback = staleCacheFallbackPayload(staleCached);');
 const catchEnd = src.indexOf('if (responseData.noIngredientData)');
@@ -5287,9 +5299,12 @@ function isCacheFresh(cached, nowMs) {
       proteins_100g: 7.3,
       sugars_100g: 56,
       sodium_100g: 0.18,
+      fat_100g: 30,
+      'saturated-fat_100g': 18,
+      fiber_100g: 2.1,
     },
   }, { skipExplanation: false });
-  assert(regenerated.scanLogicVersion === '11', 'rescan stamps v11');
+  assert(regenerated.scanLogicVersion === '12', 'rescan stamps v12');
   assert(regenerated.explanation === REGENERATED,
     'successful rescan after bump must serve the regenerated explanation');
   assert(!/we've packed/i.test(regenerated.explanation),
@@ -5335,10 +5350,20 @@ function isCacheFresh(cached, nowMs) {
     scanLogicVersion: '11',
     cachedAt: now - 1000,
   };
-  assert(isCacheFresh(v11fresh, now) === true, 'fresh v11 record is a cache hit');
-  const v11Fb = g.staleCacheFallbackPayload({ ...v11fresh, cachedAt: 1 });
-  assert(v11Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
-  assert(v11Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
+  const v12fresh = {
+    productType: 'food',
+    productName: 'Cadbury Dairy Milk',
+    score: 35,
+    sugar: '25.2g',
+    explanation: REGENERATED,
+    scanLogicVersion: '12',
+    cachedAt: now - 1000,
+  };
+  assert(isCacheFresh(v12fresh, now) === true, 'fresh v12 record is a cache hit');
+  assert(isCacheFresh(v11fresh, now) === false, 'fresh v11 record is stale after the v12 bump');
+  const v12Fb = g.staleCacheFallbackPayload({ ...v12fresh, cachedAt: 1 });
+  assert(v12Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
+  assert(v12Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
 
   console.log('scan logic v11 stale explanation ok');
 })().catch((err) => {
@@ -5376,7 +5401,7 @@ function assert(cond, msg) {
 const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '11', 'SCAN_LOGIC_VERSION must be 11, got ' + logicMatch[1]);
+assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
 
 const explainStart = src.indexOf("app.get('/explain/:barcode'");
 const explainEnd = src.indexOf("app.get('/search'");
@@ -5538,7 +5563,7 @@ const v10Doc = {
 
     productCache.set('7622210100586', {
       ...v10Doc,
-      scanLogicVersion: '11',
+      scanLogicVersion: '12',
       explanation: REGENERATED,
     });
     anthropicCalls = 0;
@@ -5580,7 +5605,7 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
 }
 
-assert(/const SCAN_LOGIC_VERSION = '11'/.test(src), 'SCAN_LOGIC_VERSION must be 11 so copy changes reach cached products');
+assert(/const SCAN_LOGIC_VERSION = '12'/.test(src), 'SCAN_LOGIC_VERSION must be 12 so scoring changes reach cached products');
 assert(src.includes('max_tokens: 220'), 'food max_tokens must allow 3 sentences to finish');
 assert(src.includes('function trimFoodExplanation'), 'food path must trim to complete sentences');
 
@@ -5689,6 +5714,22 @@ def test_usda_food_lookup():
     print(proc.stdout.strip())
 
 
+def test_nutrition_subscore_validation():
+    """Spearman and pairwise ordering vs OFF Nutri-Score on the Task 1 USDA sample."""
+    proc = subprocess.run(
+        ["node", str(ROOT / "validation" / "validate_nutrition_subscore.js")],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    sys.stdout.write(proc.stdout)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"nutrition subscore validation failed (exit {proc.returncode})"
+        )
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -5724,6 +5765,7 @@ def main() -> int:
         test_explain_version_mismatch_regenerates,
         test_food_explanation_copy,
         test_usda_food_lookup,
+        test_nutrition_subscore_validation,
     ]
     failed = 0
     for test in tests:
