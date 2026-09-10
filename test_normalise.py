@@ -3899,11 +3899,17 @@ assert(scanSlice.includes('SCAN_LOGIC_VERSION'), 'scanAndCache must compare SCAN
 assert(/scanLogicVersion:\s*SCAN_LOGIC_VERSION/.test(src),
   'cached documents must stamp scanLogicVersion');
 
-// 8. Food prompt contains first-person-plural instruction
-assert(g.buildFoodExplanationPromptSource.includes('Always write in the first-person plural'),
-  'food prompt must pin first-person plural');
+// 8. Food prompt: third person for composition; "we" only for Purla's evaluation
+assert(!g.buildFoodExplanationPromptSource.includes('Always write in the first-person plural'),
+  'food prompt must not pin first-person plural for composition');
+assert(g.buildFoodExplanationPromptSource.includes('Purla may use "we" ONLY for an evaluation Purla performs'),
+  'food prompt must allow we only for Purla evaluation');
+assert(g.buildFoodExplanationPromptSource.includes('always third person'),
+  'food prompt must require third person for composition');
 assert(g.buildFoodExplanationPromptSource.includes('Never use first-person singular'),
   'food prompt must ban first-person singular');
+assert(g.buildFoodExplanationPromptSource.includes('Write at most 3 complete sentences'),
+  'food prompt must cap length at 3 sentences');
 
 console.log('phase0 batch c ok');
 })().catch((err) => {
@@ -5105,6 +5111,109 @@ console.log('batch2 classification ok');
     print(proc.stdout.strip())
 
 
+def test_food_explanation_copy():
+    """Food explanations: 3 complete sentences, decimal-safe trim, no composition we."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+assert(/const SCAN_LOGIC_VERSION = '10'/.test(src), 'must not bump SCAN_LOGIC_VERSION');
+assert(src.includes('max_tokens: 220'), 'food max_tokens must allow 3 sentences to finish');
+assert(src.includes('function trimFoodExplanation'), 'food path must trim to complete sentences');
+
+const cosmeticStart = src.indexOf('async function generateCosmeticExplanation');
+const foodPromptStart = src.indexOf('function buildFoodExplanationPrompt');
+assert(cosmeticStart >= 0 && foodPromptStart > cosmeticStart, 'cosmetic prompt block missing');
+const cosmeticPrompt = src.slice(cosmeticStart, foodPromptStart);
+assert(cosmeticPrompt.includes('Always write in the first-person plural'),
+  'cosmetic we-voice must stay unchanged');
+assert(cosmeticPrompt.includes('max_tokens: 120'), 'cosmetic token limit must stay 120');
+
+const trimStart = src.indexOf('function isKnownNutrientForPrompt');
+const promptEnd = src.indexOf('async function requestFoodExplanation');
+if (trimStart < 0 || promptEnd < 0) throw new Error('could not locate food explanation helpers');
+
+const block = `
+${src.slice(trimStart, promptEnd)}
+module.exports = { trimFoodExplanation, buildFoodExplanationPrompt };
+`;
+fs.writeFileSync('/tmp/food_explanation_copy.js', block);
+delete require.cache['/tmp/food_explanation_copy.js'];
+const g = require('/tmp/food_explanation_copy.js');
+
+const CADBURY_BEFORE =
+  "We've packed this product with 25.2g of sugar per serving. We've heavily processed this with emulsifiers like E442 and E476. This is a treat that's more about indulgence than";
+
+const cadburyTrimmed = g.trimFoodExplanation(CADBURY_BEFORE);
+assert(cadburyTrimmed ===
+  "We've packed this product with 25.2g of sugar per serving. We've heavily processed this with emulsifiers like E442 and E476.",
+  'Cadbury fixture must drop the incomplete last sentence, got: ' + cadburyTrimmed);
+assert(!/indulgence than$/i.test(cadburyTrimmed), 'must not end mid-sentence');
+assert(/25\.2g of sugar per serving/.test(cadburyTrimmed), '25.2g must not be a sentence boundary');
+assert(/E442/.test(cadburyTrimmed) && /E476/.test(cadburyTrimmed), 'E-numbers must stay in the kept sentences');
+
+const overlong =
+  'First complete sentence. Second complete sentence. Third complete sentence. Fourth should be dropped.';
+assert(g.trimFoodExplanation(overlong) ===
+  'First complete sentence. Second complete sentence. Third complete sentence.',
+  'overlong text must trim at the 3rd sentence boundary');
+
+const fourWithDecimal =
+  'This bar contains 25.2g of sugar per serving. Cadbury has used emulsifiers E442 and E476. Processing is high. Extra fourth sentence.';
+const fourTrimmed = g.trimFoodExplanation(fourWithDecimal);
+assert(fourTrimmed ===
+  'This bar contains 25.2g of sugar per serving. Cadbury has used emulsifiers E442 and E476. Processing is high.',
+  'decimal 25.2g must stay inside sentence 1, got: ' + fourTrimmed);
+const sentenceCount = (fourTrimmed.match(/[.!?](?=\s|$)/g) || []).length;
+assert(sentenceCount === 3, 'food explanation is at most 3 complete sentences, got ' + sentenceCount);
+
+assert(g.trimFoodExplanation('No terminator at all') === '',
+  'mid-sentence-only text must not be kept');
+
+const prompt = g.buildFoodExplanationPrompt({
+  sugar: '25.2g', sodium: '80mg', protein: '4g',
+  sugarTier: 'high', sodiumTier: 'low', proteinTier: 'low',
+  additivesPhrase: '2 additives', isOrganic: 'no',
+  novaGroup: 4,
+  ingredients: 'Sugar, cocoa butter, emulsifiers (E442, E476)',
+  nutriScoreGrade: 'e',
+  basisLabel: 'per serving',
+});
+assert(prompt.includes('25.2g'), 'Cadbury fixture numbers reach the prompt');
+assert(prompt.includes('E442') && prompt.includes('E476'), 'Cadbury additives reach the prompt');
+assert(!/Always write in the first-person plural/.test(prompt),
+  'food prompt must not require we-voice');
+assert(/Purla may use "we" ONLY for an evaluation Purla performs/.test(prompt),
+  'evaluation we is still allowed');
+assert(/always third person/.test(prompt), 'composition must be third person');
+assert(!/\bwe've packed\b/i.test(fourTrimmed), 'composition text must not use first-person plural');
+assert(!/\bwe've\b/i.test(fourTrimmed) && !/\bwe have\b/i.test(fourTrimmed),
+  'manufacturer/composition fixture must not contain first-person plural');
+
+console.log('food explanation copy ok');
+console.log('CADBURY_BEFORE=' + CADBURY_BEFORE);
+console.log('CADBURY_AFTER_TRIM=' + cadburyTrimmed);
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"food explanation copy assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def test_usda_food_lookup():
     """USDA+OFF merge: parallel abort-bounded lookup, field precedence, source string."""
     proc = subprocess.run(
@@ -5153,6 +5262,7 @@ def main() -> int:
         test_batch1_security,
         test_batch2_classification,
         test_batch3_barcode_normalisation,
+        test_food_explanation_copy,
         test_usda_food_lookup,
     ]
     failed = 0
