@@ -3036,7 +3036,13 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + SCAN_LOGIC_VERSION);
+assert(src.includes('explanationForUnscoredFood(cached)'),
+  'generateExplanationFromCached must use explanationForUnscoredFood');
+assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'),
+  'unavailable subscore must log');
+assert(src.includes('missing=${missing}'),
+  'unavailable subscore log must include missing=');
 
 const nutStart = src.indexOf('function productHasNutriments');
 const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
@@ -3100,7 +3106,11 @@ module.exports = {
   scoreCosmeticProduct,
   FOOD_NO_NUTRITION_EXPLANATION,
   FOOD_INCOMPLETE_NUTRITION_EXPLANATION,
+  FOOD_PHOTO_EXPLANATION,
   SCAN_LOGIC_VERSION,
+  formatIncompleteNutritionExplanation,
+  explanationForUnscoredFood,
+  nutritionReasonFromCachedBreakdown,
 };
 `;
 fs.writeFileSync('/tmp/no_nutrition_helpers.js', block);
@@ -3108,7 +3118,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '12', 'exported SCAN_LOGIC_VERSION must be 12');
+assert(g.SCAN_LOGIC_VERSION === '13', 'exported SCAN_LOGIC_VERSION must be 13');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3165,7 +3175,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '12', 'normal food stamps logic version 12');
+  assert(result.scanLogicVersion === '13', 'normal food stamps logic version 13');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -3181,8 +3191,65 @@ assert(g.productHasNutriments({
   }, { skipExplanation: true });
   assert(result.score === null, 'energy-only food cannot invent missing unfavourable nutrients');
   assert(result.scoreLabel === 'Not enough data', 'energy-only must be Not enough data');
-  assert(result.explanation === g.FOOD_INCOMPLETE_NUTRITION_EXPLANATION, 'incomplete nutrition copy');
+  assert(result.explanation === g.formatIncompleteNutritionExplanation('missing_sugars'),
+    'incomplete nutrition copy must name the missing nutrient, got: ' + result.explanation);
+  assert(/sugars data is missing/i.test(result.explanation), 'energy-only fails on sugars after energy is present');
+  assert(!/product is/i.test(result.explanation), 'must not blame the product');
 }
+
+{
+  const result = await g.scanAndCacheFood('0842515006807', {
+    product_name: 'Organic Dried Plums',
+    ingredients_text: 'Organic dried plums, water',
+    nutriscore_grade: 'unknown',
+    additives_tags: [],
+    nutriments: {
+      'energy-kcal_100g': 70,
+      sugars_100g: 12,
+      fat_100g: 0,
+      carbohydrates_100g: 19,
+      proteins_100g: 1,
+      fiber_100g: 2,
+    },
+  }, { skipExplanation: true });
+  assert(result.score === null, 'plums with no sodium must not score');
+  assert(result.scoreLabel === 'Not enough data', 'plums stay Not enough data');
+  assert(/sodium data is missing/i.test(result.explanation),
+    'plums explanation must name sodium, got: ' + result.explanation);
+  const breakdown = JSON.parse(result.scoreBreakdown);
+  assert(breakdown.nutritionReason === 'missing_sodium', 'cached breakdown must carry missing_sodium');
+}
+
+assert(g.formatIncompleteNutritionExplanation('missing_sodium') ===
+  "We found this product, but sodium data is missing, so we can't calculate a score.");
+assert(g.formatIncompleteNutritionExplanation(['missing_sodium', 'missing_sugars']) ===
+  "We found this product, but sodium and sugars data are missing, so we can't calculate a score.");
+assert(g.formatIncompleteNutritionExplanation(['missing_energy', 'missing_sugars', 'missing_sodium']) ===
+  "We found this product, but energy, sugars and sodium data are missing, so we can't calculate a score.");
+assert(g.formatIncompleteNutritionExplanation('missing_unfavourable') === g.FOOD_INCOMPLETE_NUTRITION_EXPLANATION,
+  'unknown reason keeps generic incomplete copy');
+
+assert(g.explanationForUnscoredFood({ source: 'photo', score: null, scoreLabel: 'Not enough data' }) ===
+  g.FOOD_PHOTO_EXPLANATION, 'photo rescue keeps photo copy');
+assert(g.explanationForUnscoredFood({
+  source: 'off',
+  score: null,
+  scoreLabel: 'Not enough data',
+  scoreBreakdown: JSON.stringify({ nutritionAvailable: false, nutritionReason: 'missing_sodium' }),
+}) === g.formatIncompleteNutritionExplanation('missing_sodium'),
+  '/explain incomplete nutrition must name sodium');
+assert(g.explanationForUnscoredFood({
+  source: 'off',
+  score: null,
+  scoreLabel: 'Not enough data',
+  scoreBreakdown: JSON.stringify({
+    nutriPts: null, nutriMax: 60, additivePts: null, organicPts: null,
+  }),
+}) === g.FOOD_NO_NUTRITION_EXPLANATION,
+  '/explain with no nutritionReason stays the no-nutrition sentence');
+assert(g.nutritionReasonFromCachedBreakdown({
+  scoreBreakdown: { nutritionReason: 'missing_saturated_fat' },
+}) === 'missing_saturated_fat');
 
 // 3. Dawn Ultra nutriment shape → no score, fixed explanation, no Haiku
 {
@@ -3210,7 +3277,7 @@ assert(g.productHasNutriments({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '12', 'Dawn stamps logic version 12');
+  assert(result.scanLogicVersion === '13', 'Dawn stamps logic version 13');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3276,7 +3343,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
+assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -3939,7 +4006,7 @@ assert(isCacheFresh({
   scanLogicVersion: '0',
 }, now) === false, 'mismatched scanLogicVersion must be stale');
 
-assert(g.SCAN_LOGIC_VERSION === '12', 'SCAN_LOGIC_VERSION must be 12 after explanation copy');
+assert(g.SCAN_LOGIC_VERSION === '13', 'SCAN_LOGIC_VERSION must be 13 after explanation copy');
 assert(isCacheFresh({
   productType: 'food',
   cachedAt: now - 1000,
@@ -4001,7 +4068,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + SCAN_LOGIC_VERSION);
 
 assert(src.includes('computeNutritionSubscore'), 'must compute a USDA nutrition subscore');
 assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'), 'must log unavailable nutrition subscore');
@@ -4973,7 +5040,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
+assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
 
 // --- Source: /scan/photo resolves type before scoring ---
 const photoStart = src.indexOf("app.post('/scan/photo'");
@@ -5023,7 +5090,7 @@ const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
-const SCAN_LOGIC_VERSION = '12';
+const SCAN_LOGIC_VERSION = '13';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 ${src.slice(helperStart, helperEnd)}
@@ -5188,7 +5255,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
+assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
 
 const catchStart = src.indexOf('const fallback = staleCacheFallbackPayload(staleCached);');
 const catchEnd = src.indexOf('if (responseData.noIngredientData)');
@@ -5304,7 +5371,7 @@ function isCacheFresh(cached, nowMs) {
       fiber_100g: 2.1,
     },
   }, { skipExplanation: false });
-  assert(regenerated.scanLogicVersion === '12', 'rescan stamps v12');
+  assert(regenerated.scanLogicVersion === '13', 'rescan stamps v13');
   assert(regenerated.explanation === REGENERATED,
     'successful rescan after bump must serve the regenerated explanation');
   assert(!/we've packed/i.test(regenerated.explanation),
@@ -5341,15 +5408,6 @@ function isCacheFresh(cached, nowMs) {
   assert(afterCatch.explanationPending === true);
   assert(afterCatch.score === 35 && afterCatch.sugar === '25.2g');
 
-  const v11fresh = {
-    productType: 'food',
-    productName: 'Cadbury Dairy Milk',
-    score: 35,
-    sugar: '25.2g',
-    explanation: REGENERATED,
-    scanLogicVersion: '11',
-    cachedAt: now - 1000,
-  };
   const v12fresh = {
     productType: 'food',
     productName: 'Cadbury Dairy Milk',
@@ -5359,11 +5417,20 @@ function isCacheFresh(cached, nowMs) {
     scanLogicVersion: '12',
     cachedAt: now - 1000,
   };
-  assert(isCacheFresh(v12fresh, now) === true, 'fresh v12 record is a cache hit');
-  assert(isCacheFresh(v11fresh, now) === false, 'fresh v11 record is stale after the v12 bump');
-  const v12Fb = g.staleCacheFallbackPayload({ ...v12fresh, cachedAt: 1 });
-  assert(v12Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
-  assert(v12Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
+  const v13fresh = {
+    productType: 'food',
+    productName: 'Cadbury Dairy Milk',
+    score: 35,
+    sugar: '25.2g',
+    explanation: REGENERATED,
+    scanLogicVersion: '13',
+    cachedAt: now - 1000,
+  };
+  assert(isCacheFresh(v13fresh, now) === true, 'fresh v13 record is a cache hit');
+  assert(isCacheFresh(v12fresh, now) === false, 'fresh v12 record is stale after the v13 bump');
+  const v13Fb = g.staleCacheFallbackPayload({ ...v13fresh, cachedAt: 1 });
+  assert(v13Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
+  assert(v13Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
 
   console.log('scan logic v11 stale explanation ok');
 })().catch((err) => {
@@ -5401,7 +5468,7 @@ function assert(cond, msg) {
 const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '12', 'SCAN_LOGIC_VERSION must be 12, got ' + logicMatch[1]);
+assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
 
 const explainStart = src.indexOf("app.get('/explain/:barcode'");
 const explainEnd = src.indexOf("app.get('/search'");
@@ -5563,7 +5630,7 @@ const v10Doc = {
 
     productCache.set('7622210100586', {
       ...v10Doc,
-      scanLogicVersion: '12',
+      scanLogicVersion: '13',
       explanation: REGENERATED,
     });
     anthropicCalls = 0;
@@ -5605,7 +5672,7 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
 }
 
-assert(/const SCAN_LOGIC_VERSION = '12'/.test(src), 'SCAN_LOGIC_VERSION must be 12 so scoring changes reach cached products');
+assert(/const SCAN_LOGIC_VERSION = '13'/.test(src), 'SCAN_LOGIC_VERSION must be 13 so scoring changes reach cached products');
 assert(src.includes('max_tokens: 220'), 'food max_tokens must allow 3 sentences to finish');
 assert(src.includes('function trimFoodExplanation'), 'food path must trim to complete sentences');
 
