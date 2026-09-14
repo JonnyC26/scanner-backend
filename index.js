@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '13';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '14';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -957,6 +957,99 @@ function buildHouseholdScanResponse({
   };
 }
 
+// Fixed copy for products that are not food. No cosmetics, roadmap, or coverage.
+const UNSUPPORTED_EXPLANATION =
+  "Purla currently scores food products only.";
+
+function buildUnsupportedScanResponse({
+  productName = 'Unknown Product',
+  imageUrl = '',
+  ingredients = '',
+  extras = {},
+} = {}) {
+  return {
+    productType: 'unsupported',
+    productName,
+    additiveNames: null,
+    additiveList: JSON.stringify([]),
+    ingredients,
+    nutriScore: null,
+    novaGroup: null,
+    additivesCount: null,
+    isOrganic: null,
+    protein: null,
+    sugar: null,
+    sodium: null,
+    sugarTier: null,
+    sodiumTier: null,
+    proteinTier: null,
+    score: null,
+    scoreBreakdown: JSON.stringify({
+      start: 100,
+      penalties: [],
+      categoryCaps: { high: 0, moderate: 0, low: 0 },
+      allergenPenalty: 0,
+      allergenCapApplied: false,
+      annexIICapApplied: false,
+      rawScore: null,
+      finalScore: null,
+      coverageMatched: 0,
+      coverageTotal: 0,
+      assessedCount: 0,
+      recognisedCount: 0,
+      totalCount: 0,
+      coverage: 0,
+    }),
+    alternatives: JSON.stringify([]),
+    explanation: UNSUPPORTED_EXPLANATION,
+    scoreColor: '#9E9E9E',
+    imageUrl,
+    scoreLabel: 'Not enough data',
+    coverageMatched: 0,
+    coverageTotal: 0,
+    assessedCount: 0,
+    recognisedCount: 0,
+    totalCount: 0,
+    noIngredientData: false,
+    ingredientFindings: JSON.stringify([]),
+    ingredientList: JSON.stringify([]),
+    tableVersion: COSMETIC_TABLE_VERSION,
+    scanLogicVersion: SCAN_LOGIC_VERSION,
+    ...extras,
+  };
+}
+
+function isExplicitFoodProductType(productType) {
+  return productType === 'food';
+}
+
+function unsupportedScanFromRecord(record, extras = {}) {
+  if (!record || typeof record !== 'object') {
+    return buildUnsupportedScanResponse({ extras });
+  }
+  return buildUnsupportedScanResponse({
+    productName: record.productName || record.product_name || 'Unknown Product',
+    imageUrl: record.imageUrl || record.image_front_url || record.image_url || '',
+    ingredients: record.ingredients || record.ingredients_text || '',
+    extras: {
+      ...(record.source ? { source: record.source } : {}),
+      ...(record.photoParsedCount != null ? { photoParsedCount: record.photoParsedCount } : {}),
+      ...(record.photoCapturedAt != null ? { photoCapturedAt: record.photoCapturedAt } : {}),
+      ...(record.photoCapturedBy != null ? { photoCapturedBy: record.photoCapturedBy } : {}),
+      ...extras,
+    },
+  });
+}
+
+// Cache/stale payloads that are not explicit food must never be served as food.
+function cachePayloadWithoutFoodCoercion(cached) {
+  if (!cached) return null;
+  const { cachedAt, ...responseData } = cached;
+  if (isExplicitFoodProductType(responseData.productType)) return responseData;
+  if (responseData.productType === 'unsupported') return responseData;
+  return unsupportedScanFromRecord(responseData);
+}
+
 // Fixed copy when a food label is photographed — ingredients alone cannot score food.
 const FOOD_PHOTO_EXPLANATION =
   "We read the ingredients from your photo, but we can't score a food product from its label alone — we need nutrition information too.";
@@ -1844,6 +1937,16 @@ function hasHouseholdCategory(product) {
   return tags.some(tagIndicatesHousehold);
 }
 
+// Affirmative OFF food evidence: non-empty tags that are neither household
+// nor cosmetic. Empty or absent tags are not food.
+function hasExplicitOffFoodCategory(product) {
+  const tags = (product && product.categories_tags) || [];
+  if (!Array.isArray(tags) || tags.length === 0) return false;
+  if (tags.some(tagIndicatesHousehold)) return false;
+  if (tags.some(tagIndicatesCosmetic)) return false;
+  return true;
+}
+
 // Search candidates: classify from OFF category tags only (no upstream fetch).
 // Household wins over cosmetic, matching resolveProductType. No tags → food.
 function classifySearchProductType(categoriesTags) {
@@ -2001,10 +2104,10 @@ function lookupOutcome(settled, msFallback) {
 }
 
 async function resolveProductType(barcode) {
-  // Classify by category (and OBF), not merely by which database answered first.
-  // Toothpaste/soap/etc. often exist in OFF with ingredients and would otherwise
-  // be scored as food. Dish soap / laundry detergent categories must win before
-  // the food default (looksLikeHouseholdProduct only covers EPA pesticide labels).
+  // Food-only gate classification. USDA is affirmative food evidence and wins
+  // before OFF household/cosmetic tags. Empty OFF tags are not food.
+  // Cosmetic/household types still resolve so the scan gate can map them to
+  // unsupported without 404 (true both-miss stays null → photo capture).
   let foodProduct = null;
   let cosmeticProduct = null;
 
@@ -2040,15 +2143,22 @@ async function resolveProductType(barcode) {
 
   foodProduct = offFetched;
 
-  if (!foodProduct) {
-    // USDA hit + OFF miss → USDA only. Do not walk OBF when USDA already matched.
-    if (usdaProduct) {
+  // Verified USDA hit is affirmative food. Wins before OFF household/cosmetic
+  // branches; still merge OFF for scoring when both exist.
+  if (usdaProduct) {
+    if (!foodProduct) {
       console.log(
         `[LOOKUP FIELDS] barcode=${barcode} name=usda brand=usda ingredients=usda nutrition=usda additives=none allergens=none nutriscore=none nova=none image=none`
       );
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda`);
       return { productType: 'food', product: usdaProduct };
     }
+    const merged = mergeUsdaAndOffProducts(barcode, usdaProduct, foodProduct);
+    console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda_off_merge`);
+    return { productType: 'food', product: merged };
+  }
+
+  if (!foodProduct) {
     try {
       cosmeticProduct = attachProductSource(
         await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
@@ -2065,18 +2175,16 @@ async function resolveProductType(barcode) {
     return { productType: null, product: null };
   }
 
-  // Household cleaning categories beat food and cosmetic (Dawn Ultra etc.).
-  // Do not overlay USDA food data onto a household OFF record.
   if (hasHouseholdCategory(foodProduct)) {
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=household reason=category_off`);
     return { productType: 'household', product: foodProduct };
   }
 
   const offCosmeticCategory = hasCosmeticCategory(foodProduct);
-  const offHasIngredients = productHasIngredients(foodProduct);
   const offHasNutriments = productHasNutriments(foodProduct);
 
-  // Category says beauty/hygiene (optionally reinforced by missing nutriments).
+  // Category says beauty/hygiene. OBF may enrich a cosmetic already classified
+  // by category; ingredient completeness must not override type.
   if (offCosmeticCategory) {
     try {
       cosmeticProduct = attachProductSource(
@@ -2093,7 +2201,6 @@ async function resolveProductType(barcode) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=${reason}`);
       return { productType: 'cosmetic', product: cosmeticProduct };
     }
-    // Prefer OBF when present even without ingredients; else score OFF via cosmetic path.
     if (cosmeticProduct) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=category_obf_record`);
       return { productType: 'cosmetic', product: cosmeticProduct };
@@ -2102,37 +2209,16 @@ async function resolveProductType(barcode) {
     return { productType: 'cosmetic', product: foodProduct };
   }
 
-  // OFF has no ingredients — try OBF (genuine beauty product missing from OFF text).
-  if (!offHasIngredients) {
-    try {
-      cosmeticProduct = attachProductSource(
-        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
-        'obf'
-      );
-    } catch (err) {
-      console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
-    }
-    if (cosmeticProduct && productHasIngredients(cosmeticProduct)) {
-      console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=off_empty_obf_ingredients`);
-      return { productType: 'cosmetic', product: cosmeticProduct };
-    }
-    if (cosmeticProduct) {
-      console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=off_empty_obf_hit`);
-      return { productType: 'cosmetic', product: cosmeticProduct };
-    }
-  }
-
-  // USDA miss + OFF food hit → OFF only, unchanged. Both hits → merge.
-  if (!usdaProduct) {
+  if (hasExplicitOffFoodCategory(foodProduct)) {
     console.log(
       `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
     );
-    console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=default_off_ambiguous`);
+    console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=off_food_category`);
     return { productType: 'food', product: foodProduct };
   }
-  const merged = mergeUsdaAndOffProducts(barcode, usdaProduct, foodProduct);
-  console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda_off_merge`);
-  return { productType: 'food', product: merged };
+
+  console.log(`[PRODUCT TYPE] barcode=${barcode} type=unsupported reason=no_affirmative_food`);
+  return { productType: 'unsupported', product: foodProduct };
 }
 
 function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, barcode, nutriments, foodCategory) {
@@ -3379,9 +3465,10 @@ const COSMETIC_NO_EXPLANATION =
   "We couldn't summarise this product's ingredients.";
 
 function fallbackExplanationForProductType(productType) {
+  if (productType === 'food') return FOOD_NO_INGREDIENTS_EXPLANATION;
   if (productType === 'household') return HOUSEHOLD_EXPLANATION;
   if (productType === 'cosmetic') return COSMETIC_NO_EXPLANATION;
-  return FOOD_NO_INGREDIENTS_EXPLANATION;
+  return UNSUPPORTED_EXPLANATION;
 }
 
 function formatNutrientForPrompt(gramsVal, kind) {
@@ -3432,28 +3519,31 @@ async function generateFoodExplanation({
 
 // Rebuild a Haiku explanation from a productCache document (food or cosmetic).
 async function generateExplanationFromCached(cached) {
-  const productType = cached.productType || 'food';
-  if (productType === 'household') {
-    return HOUSEHOLD_EXPLANATION;
-  }
-  if (productType === 'cosmetic') {
-    const findings = typeof cached.ingredientFindings === 'string'
-      ? JSON.parse(cached.ingredientFindings || '[]')
-      : (cached.ingredientFindings || []);
-    const breakdown = typeof cached.scoreBreakdown === 'string'
-      ? JSON.parse(cached.scoreBreakdown || '{}')
-      : (cached.scoreBreakdown || {});
-    const coverageMatched = cached.coverageMatched ?? 0;
-    const coverageTotal = cached.coverageTotal ?? 0;
-    return generateCosmeticExplanation({
-      score: cached.score,
-      scoreLabel: cached.scoreLabel,
-      coverageMatched,
-      coverageTotal,
-      coverage: coverageTotal > 0 ? coverageMatched / coverageTotal : 0,
-      ingredientFindings: findings,
-      scoreBreakdown: breakdown,
-    }, cached.ingredients || '');
+  const productType = cached.productType;
+  if (!isExplicitFoodProductType(productType)) {
+    if (productType === 'household') {
+      return HOUSEHOLD_EXPLANATION;
+    }
+    if (productType === 'cosmetic') {
+      const findings = typeof cached.ingredientFindings === 'string'
+        ? JSON.parse(cached.ingredientFindings || '[]')
+        : (cached.ingredientFindings || []);
+      const breakdown = typeof cached.scoreBreakdown === 'string'
+        ? JSON.parse(cached.scoreBreakdown || '{}')
+        : (cached.scoreBreakdown || {});
+      const coverageMatched = cached.coverageMatched ?? 0;
+      const coverageTotal = cached.coverageTotal ?? 0;
+      return generateCosmeticExplanation({
+        score: cached.score,
+        scoreLabel: cached.scoreLabel,
+        coverageMatched,
+        coverageTotal,
+        coverage: coverageTotal > 0 ? coverageMatched / coverageTotal : 0,
+        ingredientFindings: findings,
+        scoreBreakdown: breakdown,
+      }, cached.ingredients || '');
+    }
+    return UNSUPPORTED_EXPLANATION;
   }
 
   // Food — null score: photo rescue, incomplete subscore, or no nutrition at all.
@@ -3909,6 +3999,16 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   return responseData;
 }
 
+// Food scoring only for explicit productType === 'food'. Cosmetic and household
+// resolve types, missing types, and unsupported all return the unsupported
+// payload — scanAndCacheCosmetic / scanAndCacheHousehold are not called.
+async function routeResolvedScan(barcode, productType, product, { skipExplanation = false } = {}) {
+  if (isExplicitFoodProductType(productType) && product) {
+    return scanAndCacheFood(barcode, product, { skipExplanation });
+  }
+  return unsupportedScanFromRecord(product || {});
+}
+
 // Photo-rescued cache docs have no upstream to re-fetch from. Re-score from
 // the stored ingredients text when the entry is stale (TTL or tableVersion).
 // Returns null when ingredients are missing — caller falls through to upstream.
@@ -3928,8 +4028,9 @@ function rescorePhotoCachedDocument(cached) {
     unmatchedNames: [],
   };
 
-  // Food photo entries must not be re-scored as cosmetics on a table/logic bump.
-  if (cached.productType === 'food') {
+  // Food photo fallback is unchanged. Everything else is unsupported — no
+  // cosmetic scoring, no household copy.
+  if (isExplicitFoodProductType(cached && cached.productType)) {
     const food = buildFoodPhotoScanResponse({
       productName: cached.productName || 'Scanned label',
       imageUrl: cached.imageUrl || '',
@@ -3944,62 +4045,18 @@ function rescorePhotoCachedDocument(cached) {
     return { responseData: food, scored: scoredStub, unmatchedNames: [] };
   }
 
-  // Household labels must not be re-scored as cosmetics on a table bump.
-  if (looksLikeHouseholdProduct(ingredientsText) || cached.productType === 'household') {
-    const household = buildHouseholdScanResponse({
-      productName: cached.productName || 'Scanned label',
-      imageUrl: cached.imageUrl || '',
-      ingredients: ingredientsText,
-      extras: {
-        source: 'photo',
-        photoParsedCount: cached.photoParsedCount,
-        photoCapturedAt: cached.photoCapturedAt,
-        photoCapturedBy: cached.photoCapturedBy,
-      },
-    });
-    return { responseData: household, scored: scoredStub, unmatchedNames: [] };
-  }
-
-  const scored = scoreCosmeticProduct({ ingredients_text: ingredientsText });
-  const responseData = {
-    ...cached,
-    productType: 'cosmetic',
-    source: 'photo',
+  const unsupported = buildUnsupportedScanResponse({
+    productName: cached.productName || 'Unknown Product',
+    imageUrl: cached.imageUrl || '',
     ingredients: ingredientsText,
-    score: scored.score,
-    scoreBreakdown: JSON.stringify(scored.scoreBreakdown),
-    scoreColor: scored.scoreColor,
-    scoreLabel: scored.scoreLabel,
-    coverageMatched: scored.coverageMatched,
-    coverageTotal: scored.coverageTotal,
-    assessedCount: scored.assessedCount,
-    recognisedCount: scored.recognisedCount,
-    totalCount: scored.totalCount,
-    noIngredientData: !!scored.noIngredientData,
-    ingredientFindings: JSON.stringify(scored.ingredientFindings),
-    ingredientList: JSON.stringify(scored.ingredientList || []),
-    tableVersion: COSMETIC_TABLE_VERSION,
-    scanLogicVersion: SCAN_LOGIC_VERSION,
-    // photoCapturedAt / photoParsedCount / photoCapturedBy are provenance of
-    // the human transcription — never refresh them on local re-score.
-  };
-  delete responseData.cachedAt;
-
-  // Drop a stale Haiku explanation when the scored outcome changed — otherwise
-  // hasUsableExplanation keeps the old sentence (written for the previous
-  // score/findings) after a tableVersion bump.
-  const outcomeChanged =
-    scored.score !== cached.score ||
-    scored.coverageMatched !== cached.coverageMatched ||
-    scored.coverageTotal !== cached.coverageTotal;
-  if (outcomeChanged) {
-    responseData.explanation = null;
-    responseData.explanationPending = true;
-  } else if (responseData.explanation && String(responseData.explanation).trim()) {
-    responseData.explanationPending = false;
-  }
-
-  return { responseData, scored, unmatchedNames: scored.unmatchedNames || [] };
+    extras: {
+      source: 'photo',
+      photoParsedCount: cached.photoParsedCount,
+      photoCapturedAt: cached.photoCapturedAt,
+      photoCapturedBy: cached.photoCapturedBy,
+    },
+  });
+  return { responseData: unsupported, scored: scoredStub, unmatchedNames: [] };
 }
 
 // Quality of a photo-derived cache candidate.
@@ -4080,8 +4137,11 @@ function isUnscoreableCacheEntry(entry) {
 // Returns the response payload, or null if there is nothing to fall back to.
 function staleCacheFallbackPayload(staleCached) {
   if (!staleCached) return null;
-  const { cachedAt, ...responseData } = staleCached;
-  if (!responseData.productType) responseData.productType = 'food';
+  const responseData = cachePayloadWithoutFoodCoercion(staleCached);
+  if (!responseData) return null;
+  if (!isExplicitFoodProductType(responseData.productType)) {
+    return responseData;
+  }
   // Product/nutrition may stay for resilience, but an explanation generated
   // under an older SCAN_LOGIC_VERSION must not leak through a failed refresh.
   if (staleCached.scanLogicVersion !== SCAN_LOGIC_VERSION) {
@@ -4100,7 +4160,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
       if (cacheDoc.exists) {
         const cached = cacheDoc.data();
         const age = Date.now() - (cached.cachedAt || 0);
-        const cachedType = cached.productType || 'food';
+        const cachedType = cached.productType;
         // Documents cached before scanLogicVersion existed (or on an older
         // logic version) must re-scan so classification/scoring fixes apply.
         const logicStale = cached.scanLogicVersion !== SCAN_LOGIC_VERSION;
@@ -4109,12 +4169,17 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
           cached.tableVersion !== COSMETIC_TABLE_VERSION;
         if (age < CACHE_TTL_MS && !tableStale && !logicStale) {
           console.log(`[CACHE HIT] barcode=${barcode} type=${cachedType} age=${Math.round(age / 3600000)}h`);
-          const { cachedAt, ...responseData } = cached;
-          if (!responseData.productType) responseData.productType = 'food';
+          const responseData = cachePayloadWithoutFoodCoercion(cached);
 
           // Old TestFlight clients always need an explanation. If a deferred
           // scan cached a pending entry, fill it inline before returning.
-          if (!skipExplanation && !hasUsableExplanation(responseData)) {
+          // Non-food payloads already carry fixed copy — do not generate a
+          // food explanation for a missing or unknown productType.
+          if (
+            isExplicitFoodProductType(responseData.productType) &&
+            !skipExplanation &&
+            !hasUsableExplanation(responseData)
+          ) {
             try {
               const explanation = await ensureExplanation(barcode, responseData);
               responseData.explanation = explanation;
@@ -4146,11 +4211,12 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
             try {
               const resolved = await resolveProductType(barcode);
               if (shouldReplacePhotoWithUpstream(resolved.product)) {
-                const upstreamData = resolved.productType === 'household'
-                  ? scanAndCacheHousehold(barcode, resolved.product)
-                  : resolved.productType === 'cosmetic'
-                    ? await scanAndCacheCosmetic(barcode, resolved.product, { skipExplanation })
-                    : await scanAndCacheFood(barcode, resolved.product, { skipExplanation });
+                const upstreamData = await routeResolvedScan(
+                  barcode,
+                  resolved.productType,
+                  resolved.product,
+                  { skipExplanation }
+                );
 
                 // Same unscoreable rule as [PHOTO CACHE REPLACED UNSCOREABLE],
                 // opposite direction: do not discard photo data for a worse
@@ -4268,11 +4334,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
       throw notFoundErr;
     }
 
-    responseData = productType === 'household'
-      ? scanAndCacheHousehold(barcode, product)
-      : productType === 'cosmetic'
-        ? await scanAndCacheCosmetic(barcode, product, { skipExplanation })
-        : await scanAndCacheFood(barcode, product, { skipExplanation });
+    responseData = await routeResolvedScan(barcode, productType, product, { skipExplanation });
   } catch (refreshErr) {
     // Stale beats nothing: a slightly old answer is better than a false 404
     // (photo-rescued products, OFF/OBF outages, network errors).
@@ -4385,8 +4447,8 @@ app.get('/scan/:barcode', async (req, res) => {
     // Diet warning detection — food only. Needs raw OFF product data (labels,
     // allergens etc.) which isn't stored in the cache. Cosmetics skip this.
     let dietWarnings = '';
-    const responseType = responseData.productType || 'food';
-    if (healthProfile && responseType === 'food') {
+    const responseType = responseData.productType;
+    if (healthProfile && isExplicitFoodProductType(responseType)) {
       try {
         const offRes = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`, {
           headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
@@ -4743,7 +4805,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     const ingredientsText = ingredientNames.join(', ');
 
     // Classify when a barcode is supplied — never assume cosmetic for known foods.
-    // No barcode (original not-found flow) keeps the cosmetic path.
+    // No barcode / unknown barcode is unsupported (food-only gate).
     let resolvedType = null;
     let upstreamProduct = null;
     let productName = '';
@@ -4764,16 +4826,9 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     }
 
     const isFoodPhoto = resolvedType === 'food';
-    // Resolved household wins; otherwise EPA-label heuristic (no-barcode / cosmetic path).
-    const isHousehold = resolvedType === 'household'
-      || (!isFoodPhoto && looksLikeHouseholdProduct(ingredientsText));
-    // Cosmetic path: resolved cosmetic, unknown/not-found, or no barcode.
-    const isCosmeticPhoto = !isFoodPhoto && !isHousehold;
 
     // Photo scans have no upstream DB payload — keep the vision transcription.
-    const observationType = isFoodPhoto
-      ? 'food'
-      : (isHousehold ? 'household' : 'cosmetic');
+    const observationType = isFoodPhoto ? 'food' : 'unsupported';
     recordRawObservation({
       barcode: normalizedBarcode || null,
       productType: observationType,
@@ -4783,44 +4838,15 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       photoCapturedBy,
     });
 
-    const product = { ingredients_text: ingredientsText };
-    // Food / household: skip cosmetic scoring entirely (empty ingredientList, fixed copy).
-    const scored = isCosmeticPhoto ? scoreCosmeticProduct(product) : null;
+    // Food photo fallback unchanged. Everything else — including unknown
+    // barcode and no barcode — is unsupported. No cosmetic/household scoring.
+    const photoParsedCount = 0;
+    const canCache = !!normalizedBarcode;
 
-    // Cache below-gate photo rescues too — transcribed ingredients are valuable
-    // even when score is null. Never cache a zero-ingredient parse.
-    // Food/household results cache with an empty ingredientList so rescans are instant.
-    const photoParsedCount = isCosmeticPhoto
-      ? (Array.isArray(scored.ingredientList) ? scored.ingredientList.length : 0)
-      : 0;
-    const canCache = !!normalizedBarcode && (isHousehold || isFoodPhoto || photoParsedCount > 0);
-    // Ignore defer when we are not caching — there is no doc for /explain to fill.
-    // Food/household explanations are fixed strings; never defer or call Haiku.
-    const skipExplanation = isCosmeticPhoto && deferExplanation && canCache;
-
-    let explanation = null;
-    if (isHousehold) {
-      explanation = HOUSEHOLD_EXPLANATION;
-      console.log(`[HOUSEHOLD] barcode=${normalizedBarcode || 'none'} photo=true`);
-    } else if (isFoodPhoto) {
-      explanation = FOOD_PHOTO_EXPLANATION;
+    if (isFoodPhoto) {
       console.log(`[FOOD PHOTO] barcode=${normalizedBarcode || 'none'} — skipping score`);
-    } else if (!skipExplanation) {
-      explanation = await generateCosmeticExplanation(scored, ingredientsText);
-    }
-
-    if (isCosmeticPhoto) {
-      const unmatchedNames = scored.unmatchedNames || [];
-      const namesJoined = unmatchedNames.map(unmatchedNameLabel).join('|');
-      const namesTruncated = namesJoined.length > 200
-        ? namesJoined.slice(0, 200) + '...'
-        : namesJoined;
-      console.log(`[COSMETIC UNMATCHED] barcode=${normalizedBarcode || 'none'} count=${unmatchedNames.length} names=${namesTruncated}`);
-      recordUnmatchedInci(normalizedBarcode || null, unmatchedNames);
-      console.log(`[UNPARSEABLE] barcode=${normalizedBarcode || 'none'} count=${scored.unparseableCount || 0}`);
-      if (scored.drugFactsMarker) {
-        console.log(`[DRUG FACTS TRUNCATED] barcode=${normalizedBarcode || 'none'} marker=${scored.drugFactsMarker}`);
-      }
+    } else {
+      console.log(`[UNSUPPORTED] barcode=${normalizedBarcode || 'none'} photo=true`);
     }
 
     // Optional front-of-pack: second vision call (name) + store image for serving.
@@ -4897,14 +4923,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       persisted,
     };
     let responseData;
-    if (isHousehold) {
-      responseData = buildHouseholdScanResponse({
-        productName,
-        imageUrl,
-        ingredients: ingredientsText,
-        extras: photoExtras,
-      });
-    } else if (isFoodPhoto) {
+    if (isFoodPhoto) {
       responseData = buildFoodPhotoScanResponse({
         productName,
         imageUrl,
@@ -4912,45 +4931,12 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         extras: photoExtras,
       });
     } else {
-      // Cosmetic path — no barcode, not-found, or resolved cosmetic.
-      responseData = {
-        productType: 'cosmetic',
+      responseData = buildUnsupportedScanResponse({
         productName,
-        additiveNames: null,
-        additiveList: JSON.stringify([]),
-        ingredients: ingredientsText,
-        nutriScore: null,
-        novaGroup: null,
-        additivesCount: null,
-        isOrganic: null,
-        protein: null,
-        sugar: null,
-        sodium: null,
-        sugarTier: null,
-        sodiumTier: null,
-        proteinTier: null,
-        score: scored.score,
-        scoreBreakdown: JSON.stringify(scored.scoreBreakdown),
-        alternatives: JSON.stringify([]),
-        explanation,
-        scoreColor: scored.scoreColor,
         imageUrl,
-        scoreLabel: scored.scoreLabel,
-        coverageMatched: scored.coverageMatched,
-        coverageTotal: scored.coverageTotal,
-        assessedCount: scored.assessedCount,
-        recognisedCount: scored.recognisedCount,
-        totalCount: scored.totalCount,
-        noIngredientData: !!scored.noIngredientData,
-        ingredientFindings: JSON.stringify(scored.ingredientFindings),
-        ingredientList: JSON.stringify(scored.ingredientList || []),
-        tableVersion: COSMETIC_TABLE_VERSION,
-        scanLogicVersion: SCAN_LOGIC_VERSION,
-        ...photoExtras,
-      };
-    }
-    if (skipExplanation) {
-      responseData.explanationPending = true;
+        ingredients: ingredientsText,
+        extras: photoExtras,
+      });
     }
 
     if (canCache) {
@@ -4961,13 +4947,13 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         const incomingMeta = {
           source: 'photo',
           photoParsedCount,
-          coverageMatched: isCosmeticPhoto ? scored.coverageMatched : 0,
+          coverageMatched: 0,
         };
 
         let writePhotoCache = true;
-        if (existing && existing.source !== 'photo' && isCosmeticPhoto) {
-          // Unscoreable upstream (e.g. food-no-nutrition misclassified cosmetic)
-          // must not block a photo result that has a real score/ingredients.
+        if (existing && existing.source !== 'photo' && !isFoodPhoto) {
+          // Unscoreable upstream must not block a photo result; usable food
+          // upstream must not be overwritten by an unsupported photo.
           if (isUnscoreableCacheEntry(existing)) {
             console.log(`[PHOTO CACHE REPLACED UNSCOREABLE] barcode=${normalizedBarcode}`);
           } else {
@@ -4976,7 +4962,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
             persisted = true;
           }
         } else if (
-          isCosmeticPhoto &&
+          !isFoodPhoto &&
           existing &&
           !shouldReplaceWithPhotoCache(existing, incomingMeta)
         ) {
@@ -4990,7 +4976,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         if (writePhotoCache) {
           const { dietWarnings: _dietWarnings, persisted: _p, imageStored: _is, imageSkipReason: _isr, ...cachePayload } = responseData;
           cachePayload.ingredientList = stringifyIngredientListForCache(
-            isCosmeticPhoto ? scored.ingredientList : [],
+            [],
             normalizedBarcode
           );
           const wrote = await writeProductCacheWithRetry(
@@ -5012,20 +4998,11 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
           capturedBy: photoCapturedBy,
         });
       }
-    } else if (normalizedBarcode && photoParsedCount === 0 && isCosmeticPhoto) {
-      console.log(`[PHOTO SCAN NOT CACHED] barcode=${normalizedBarcode} coverage=${scored.coverageMatched}/${scored.coverageTotal}`);
     }
     responseData.persisted = persisted;
 
-    const matchedLog = isCosmeticPhoto ? scored.coverageMatched : 0;
-    console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=true parsed=${ingredientNames.length} matched=${matchedLog} type=${observationType} front=${hasFrontImage ? 'yes' : 'no'} persisted=${persisted} imageStored=${imageStored} ms=${Date.now() - started}`);
+    console.log(`[PHOTO SCAN] barcode=${normalizedBarcode || 'none'} readable=true parsed=${ingredientNames.length} matched=0 type=${observationType} front=${hasFrontImage ? 'yes' : 'no'} persisted=${persisted} imageStored=${imageStored} ms=${Date.now() - started}`);
     res.json(responseData);
-
-    if (skipExplanation && responseData.explanationPending) {
-      ensureExplanation(String(normalizedBarcode), responseData).catch(err => {
-        console.log(`[EXPLAIN DEFER ERROR] barcode=${normalizedBarcode} ${err.message}`);
-      });
-    }
   } catch (err) {
     console.log(`[PHOTO SCAN ERROR] ${err.message}`);
     res.status(err.statusCode || 500).json({ error: err.message });

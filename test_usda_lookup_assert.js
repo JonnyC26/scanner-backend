@@ -8,7 +8,12 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
+assert(logicMatch[1] === '14', 'SCAN_LOGIC_VERSION must be 14, got ' + logicMatch[1]);
+assert(!src.includes('default_off_ambiguous'), 'empty-tag food default must be removed');
+assert(!src.includes("cached.productType || 'food'"), 'cache hit must not coerce missing type to food');
+assert(!src.includes("responseData.productType || 'food'"), 'must not coerce missing productType to food');
+assert(src.includes('routeResolvedScan'), 'scan routing helper must exist');
+assert(src.includes('buildUnsupportedScanResponse'), 'unsupported builder must exist');
 
 const normStart = src.indexOf('function normalizeBarcode(raw)');
 const normBody = src.slice(normStart, src.indexOf('function isValidBarcode'));
@@ -105,6 +110,11 @@ module.exports = {
   resolveProductType,
   productHasIngredients,
   scanAndCacheFood,
+  routeResolvedScan,
+  cachePayloadWithoutFoodCoercion,
+  buildUnsupportedScanResponse,
+  isExplicitFoodProductType,
+  hasExplicitOffFoodCategory,
   SCAN_LOGIC_VERSION,
   mapUsdaNutrientsToOff,
   computeNutritionSubscore,
@@ -523,7 +533,7 @@ const fettuccine = {
   assert(typeof scored.score === 'number' && scored.score !== null, 'merged food must score');
   assert(scored.productName === 'ORGANIC FETTUCCINE');
   assert(/ORGANIC DURUM WHEAT SEMOLINA/i.test(scored.ingredients), 'USDA ingredients displayed as-is');
-  assert(scored.scanLogicVersion === '13', 'logic version 13');
+  assert(scored.scanLogicVersion === '14', 'logic version 14');
 
   const offScored = await g.scanAndCacheFood('111', {
     product_name: 'Yogurt',
@@ -651,6 +661,169 @@ const fettuccine = {
   }, 'Pepperoni, Salami & Cold Cuts');
   assert(highN.available && highN.proteinSuppressed, 'high N must suppress protein');
   assert(highN.components.protein === 0, 'suppressed protein contributes 0');
+
+  // --- Food-only gate ---
+  assert(g.SCAN_LOGIC_VERSION === '14', 'logic version 14');
+  assert(typeof g.routeResolvedScan === 'function', 'routeResolvedScan exported');
+  assert(g.isExplicitFoodProductType('food') === true);
+  assert(g.isExplicitFoodProductType('unsupported') === false);
+  assert(g.isExplicitFoodProductType(undefined) === false);
+  assert(g.isExplicitFoodProductType(null) === false);
+  assert(g.hasExplicitOffFoodCategory({ categories_tags: ['en:pastas'] }) === true);
+  assert(g.hasExplicitOffFoodCategory({ categories_tags: [] }) === false);
+  assert(g.hasExplicitOffFoodCategory({ categories_tags: ['en:shampoos'] }) === false);
+  assert(g.hasExplicitOffFoodCategory({ categories_tags: ['en:detergents'] }) === false);
+  assert(g.hasExplicitOffFoodCategory({}) === false);
+
+  const unsupportedPayload = g.buildUnsupportedScanResponse({
+    productName: 'Head & Shoulders Classic Clean',
+    ingredients: 'Blue 1, red 33',
+  });
+  assert(unsupportedPayload.productType === 'unsupported');
+  assert(unsupportedPayload.score === null);
+  assert(unsupportedPayload.explanation === 'Purla currently scores food products only.');
+  assert(!/cosmetic/i.test(unsupportedPayload.explanation));
+  assert(!/household/i.test(unsupportedPayload.explanation));
+  assert(!/roadmap/i.test(unsupportedPayload.explanation));
+
+  // Known food still scores via food path.
+  const knownFood = await g.routeResolvedScan('0099482431112', 'food', mergedBoth, { skipExplanation: true });
+  assert(knownFood.productType === 'food', 'known food stays food');
+  assert(typeof knownFood.score === 'number' && knownFood.score !== null, 'known food scores');
+
+  // Known cosmetic / household → unsupported, scorers not used (route helper).
+  const gatedCosmetic = await g.routeResolvedScan('0000000000000', 'cosmetic', {
+    product_name: 'Dove Whole Body Deodorant',
+    ingredients_text: 'Aqua, Glycerin, Parfum',
+    source: 'obf',
+  }, { skipExplanation: true });
+  assert(gatedCosmetic.productType === 'unsupported', 'cosmetic routes to unsupported');
+  assert(gatedCosmetic.score === null, 'cosmetic must not be scored');
+  assert(gatedCosmetic.explanation === 'Purla currently scores food products only.');
+
+  const gatedHousehold = await g.routeResolvedScan('0000000000001', 'household', {
+    product_name: 'Dawn Ultra',
+    ingredients_text: 'Water, surfactants',
+    source: 'off',
+  }, { skipExplanation: true });
+  assert(gatedHousehold.productType === 'unsupported', 'household routes to unsupported');
+  assert(gatedHousehold.score === null);
+
+  const gatedMissing = await g.routeResolvedScan('0000000000002', undefined, {
+    product_name: 'Mystery',
+    ingredients_text: 'Blue 1, red 33',
+  }, { skipExplanation: true });
+  assert(gatedMissing.productType === 'unsupported', 'missing type must not enter food scoring');
+  assert(gatedMissing.score === null);
+
+  // Cache record with missing productType does not enter food scoring.
+  const missingCache = g.cachePayloadWithoutFoodCoercion({
+    productName: 'Legacy cache',
+    ingredients: 'Blue 1, red 33',
+    score: 88,
+    scoreLabel: 'Excellent',
+    cachedAt: Date.now(),
+    scanLogicVersion: '14',
+  });
+  assert(missingCache.productType === 'unsupported', 'missing cache type → unsupported');
+  assert(missingCache.score === null, 'missing cache type must not keep a food score');
+  assert(missingCache.explanation === 'Purla currently scores food products only.');
+
+  const foodCache = g.cachePayloadWithoutFoodCoercion({
+    productType: 'food',
+    productName: 'Yogurt',
+    score: 70,
+    cachedAt: 1,
+  });
+  assert(foodCache.productType === 'food' && foodCache.score === 70, 'explicit food cache unchanged');
+
+  // Head & Shoulders / empty OFF tags, no USDA → unsupported, not food.
+  process.env.USDA_API_KEY = 'test-key';
+  const hsOff = {
+    code: '0030772062791',
+    product_name: 'Head & Shoulders Classic Clean',
+    ingredients_text: 'Blue 1, red 33',
+    categories_tags: [],
+  };
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('api.nal.usda.gov')) {
+      return { ok: true, json: async () => ({ foods: [] }) };
+    }
+    if (u.includes('openfoodfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: hsOff }) };
+    }
+    if (u.includes('openbeautyfacts')) {
+      return { ok: true, json: async () => ({ status: 0 }) };
+    }
+    return { ok: false };
+  };
+  const hs = await g.resolveProductType('0030772062791');
+  assert(hs.productType === 'unsupported', 'Head & Shoulders empty tags → unsupported, got ' + hs.productType);
+  assert(hs.product && hs.product.product_name.includes('Head & Shoulders'), 'still has the OFF record');
+  const hsRouted = await g.routeResolvedScan('0030772062791', hs.productType, hs.product, { skipExplanation: true });
+  assert(hsRouted.productType === 'unsupported');
+  assert(hsRouted.score === null);
+
+  const absentTags = { ...hsOff, code: '0030772062792' };
+  delete absentTags.categories_tags;
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('api.nal.usda.gov')) return { ok: true, json: async () => ({ foods: [] }) };
+    if (u.includes('openfoodfacts')) return { ok: true, json: async () => ({ status: 1, product: absentTags }) };
+    return { ok: false };
+  };
+  const absentResolved = await g.resolveProductType('0030772062792');
+  assert(absentResolved.productType === 'unsupported', 'absent tags → unsupported, got ' + absentResolved.productType);
+
+  // USDA hit + no OFF still food.
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('api.nal.usda.gov')) {
+      return { ok: true, json: async () => ({ foods: [fettuccine] }) };
+    }
+    if (u.includes('openfoodfacts') || u.includes('openbeautyfacts')) {
+      return { ok: false, status: 404 };
+    }
+    return { ok: false };
+  };
+  const usdaOnlyGate = await g.resolveProductType('0099482431112');
+  assert(usdaOnlyGate.productType === 'food', 'USDA-only remains food');
+  const usdaOnlyScored = await g.routeResolvedScan('0099482431112', usdaOnlyGate.productType, usdaOnlyGate.product, { skipExplanation: true });
+  assert(usdaOnlyScored.productType === 'food');
+  assert(typeof usdaOnlyScored.score === 'number');
+
+  // USDA wins over OFF cosmetic tags; still merged.
+  const offShampoo = {
+    code: '0099482431112',
+    product_name: 'OFF says shampoo',
+    ingredients_text: 'Aqua',
+    categories_tags: ['en:shampoos', 'en:hair-care'],
+    nutriments: { 'energy-kcal_100g': 350, proteins_100g: 12, sodium_100g: 0.01, sugars_100g: 3, fat_100g: 1, fiber_100g: 3 },
+  };
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('api.nal.usda.gov')) {
+      return { ok: true, json: async () => ({ foods: [fettuccine] }) };
+    }
+    if (u.includes('openfoodfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: offShampoo }) };
+    }
+    if (u.includes('openbeautyfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: offShampoo }) };
+    }
+    return { ok: false };
+  };
+  const usdaWins = await g.resolveProductType('0099482431112');
+  assert(usdaWins.productType === 'food', 'USDA wins over OFF cosmetic tags, got ' + usdaWins.productType);
+  assert(usdaWins.product.source === 'usda', 'merged USDA source');
+  assert(usdaWins.product.product_name === 'ORGANIC FETTUCCINE');
+
+  // Both miss still null (404 path).
+  global.fetch = async () => ({ ok: false, status: 404 });
+  const bothMissGate = await g.resolveProductType('0099482431112');
+  assert(bothMissGate.productType === null && bothMissGate.product === null,
+    'both-miss still null for photo capture');
 
   if (prevKey === undefined) delete process.env.USDA_API_KEY;
   else process.env.USDA_API_KEY = prevKey;

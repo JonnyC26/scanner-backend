@@ -730,8 +730,13 @@ global.fetch = async function (...args) {
   assert(rescored.responseData.source === 'photo', 'source must stay photo');
   assert(rescored.responseData.productName === 'Rescued Toothpaste', 'preserve name');
   assert(rescored.responseData.ingredients === stalePhoto.ingredients, 'preserve ingredients text');
-  assert(rescored.responseData.tableVersion === COSMETIC_TABLE_VERSION,
-    'tableVersion must refresh to current: ' + rescored.responseData.tableVersion);
+  assert(rescored.responseData.productType === 'unsupported',
+    'non-food photo rescore must be unsupported, got ' + rescored.responseData.productType);
+  assert(rescored.responseData.score === null, 'unsupported photo rescore must not score');
+  assert(rescored.responseData.scoreLabel === 'Not enough data', 'unsupported scoreLabel');
+  assert(rescored.responseData.explanation ===
+    "Purla currently scores food products only.",
+    'unsupported photo copy');
   assert(rescored.responseData.cachedAt === undefined, 'cachedAt stripped from response payload');
   assert(rescored.responseData.photoCapturedAt === stalePhoto.photoCapturedAt,
     'photoCapturedAt must not refresh on re-score');
@@ -739,32 +744,7 @@ global.fetch = async function (...args) {
     'photoParsedCount must not refresh on re-score');
   assert(rescored.responseData.photoCapturedBy === 'uid-abc',
     'photoCapturedBy must not refresh on re-score');
-  assert(typeof rescored.responseData.score === 'number' || rescored.responseData.score === null,
-    'score must be recomputed');
-  assert(rescored.responseData.coverageTotal === 4, 'coverageTotal from re-parse');
-  assert(rescored.scored.coverageMatched >= 2, 'table should match aqua/glycerin/hexanediol');
-
-  // Outcome changed (score 50 / coverage 1 → live values) → drop stale explanation.
-  assert(rescored.responseData.score !== 50 || rescored.responseData.coverageMatched !== 1,
-    'test setup expects outcome to change from cached 50/1');
-  assert(!rescored.responseData.explanation,
-    'changed outcome must not retain previous explanation, got: ' + rescored.responseData.explanation);
-  assert(rescored.responseData.explanationPending === true,
-    'changed outcome must set explanationPending for deferred regeneration');
-
-  // Same score + coverage → keep explanation (no Haiku regen needed).
-  const live = scoreCosmeticProduct({ ingredients_text: stalePhoto.ingredients });
-  const unchanged = rescorePhotoCachedDocument({
-    ...stalePhoto,
-    score: live.score,
-    coverageMatched: live.coverageMatched,
-    coverageTotal: live.coverageTotal,
-    explanation: 'Still accurate for this score',
-  });
-  assert(unchanged.responseData.explanation === 'Still accurate for this score',
-    'unchanged outcome must keep explanation');
-  assert(unchanged.responseData.explanationPending === false,
-    'unchanged outcome must clear explanationPending');
+  assert(rescored.scored.coverageMatched === 0, 'no cosmetic coverage on non-food rescore');
 
   // Empty ingredients → null (caller falls through to upstream)
   assert(rescorePhotoCachedDocument({ source: 'photo', ingredients: '' }) === null);
@@ -826,9 +806,10 @@ global.fetch = async function (...args) {
   const fallback = staleCacheFallbackPayload(stale);
   assert(fallback, 'expected fallback payload');
   assert(fallback.productName === 'Stale Rescue');
-  assert(fallback.score === 90);
-  assert(fallback.explanation === 'Kept on fallback path',
-    'same-version stale FALLBACK keeps its explanation');
+  assert(fallback.productType === 'unsupported', 'cosmetic stale fallback must not stay cosmetic');
+  assert(fallback.score === null, 'non-food stale fallback must not keep a cosmetic score');
+  assert(fallback.explanation === "Purla currently scores food products only.",
+    'non-food stale fallback uses unsupported copy');
   assert(fallback.cachedAt === undefined, 'cachedAt must not leak into response');
   assert(staleCacheFallbackPayload(null) === null, 'no cache → no fallback');
   assert(staleCacheFallbackPayload(undefined) === null);
@@ -897,7 +878,9 @@ global.fetch = async function (...args) {
   const r1 = refreshOrFallback(stale, notFound);
   assert(r1.kind === 'stale-fallback', '404 must fall back to stale');
   assert(r1.data.productName === 'Stale Rescue');
-  assert(r1.data.explanation === 'Kept on fallback path', 'fallback keeps explanation');
+  assert(r1.data.productType === 'unsupported', 'cosmetic stale fallback is unsupported');
+  assert(r1.data.explanation === "Purla currently scores food products only.",
+    'fallback uses unsupported copy, not cached cosmetic explanation');
 
   const r2 = refreshOrFallback(stale, networkBoom);
   assert(r2.kind === 'stale-fallback', 'network error must fall back to stale');
@@ -1496,7 +1479,7 @@ assert(photoParsedCountWithin50Percent(0, 5) === true);
   assert(src.includes('[PHOTO CACHE KEPT UPSTREAM]'),
     'must still log PHOTO CACHE KEPT UPSTREAM for usable upstream');
   // Cosmetic photo only — food/household photo results always write (no score fight).
-  const keptIdx = src.indexOf('if (existing && existing.source !== \'photo\' && isCosmeticPhoto)');
+  const keptIdx = src.indexOf('if (existing && existing.source !== \'photo\' && !isFoodPhoto)');
   assert(keptIdx > 0, 'photo upstream keep/replace block missing');
   const slice = src.slice(keptIdx, keptIdx + 900);
   assert(slice.includes('isUnscoreableCacheEntry(existing)'),
@@ -3036,7 +3019,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '14', 'SCAN_LOGIC_VERSION must be 14, got ' + SCAN_LOGIC_VERSION);
 assert(src.includes('explanationForUnscoredFood(cached)'),
   'generateExplanationFromCached must use explanationForUnscoredFood');
 assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'),
@@ -3118,7 +3101,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '13', 'exported SCAN_LOGIC_VERSION must be 13');
+assert(g.SCAN_LOGIC_VERSION === '14', 'exported SCAN_LOGIC_VERSION must be 14');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3175,7 +3158,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '13', 'normal food stamps logic version 13');
+  assert(result.scanLogicVersion === '14', 'normal food stamps logic version 14');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -3277,7 +3260,7 @@ assert(g.nutritionReasonFromCachedBreakdown({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '13', 'Dawn stamps logic version 13');
+  assert(result.scanLogicVersion === '14', 'Dawn stamps logic version 14');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3343,7 +3326,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
+assert(logicMatch[1] === '14', 'SCAN_LOGIC_VERSION must be 14, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -3788,6 +3771,7 @@ module.exports = {
   FOOD_NO_INGREDIENTS_EXPLANATION,
   COSMETIC_NO_EXPLANATION,
   HOUSEHOLD_EXPLANATION,
+  UNSUPPORTED_EXPLANATION,
   fallbackExplanationForProductType,
   SCAN_LOGIC_VERSION: '${SCAN_LOGIC_VERSION}',
   CACHE_TTL_MS: ${CACHE_TTL_MS},
@@ -3867,7 +3851,7 @@ assert(g.productHasIngredients({ ingredients_text: '.' }) === false,
   assert(resolved.product === obfProduct, 'must use OBF product');
 }
 
-// Also: OFF "." without category → fall through to OBF
+// Also: OFF "." with explicit food tags must stay food — OBF must not override.
 {
   const offProduct = {
     product_name: 'Mystery Deodorant',
@@ -3890,9 +3874,9 @@ assert(g.productHasIngredients({ ingredients_text: '.' }) === false,
     return { ok: false };
   };
   const resolved = await g.resolveProductType('1111111111111');
-  assert(resolved.productType === 'cosmetic',
-    'OFF "." must fall through to OBF, got ' + resolved.productType);
-  assert(resolved.product.ingredients_text.includes('Aqua'), 'must use OBF ingredients');
+  assert(resolved.productType === 'food',
+    'OFF food-category tags must stay food even with empty ingredients + OBF, got ' + resolved.productType);
+  assert(resolved.product.product_name === 'Mystery Deodorant', 'must keep OFF product');
 }
 
 // 4. Food path: no usable ingredients → fixed sentence, no LLM, noIngredientData
@@ -3972,6 +3956,9 @@ assert(g.hasUsableExplanation({}) === false);
 assert(g.fallbackExplanationForProductType('food') === g.FOOD_NO_INGREDIENTS_EXPLANATION);
 assert(g.fallbackExplanationForProductType('cosmetic') === g.COSMETIC_NO_EXPLANATION);
 assert(g.fallbackExplanationForProductType('household') === g.HOUSEHOLD_EXPLANATION);
+assert(g.fallbackExplanationForProductType('unsupported') === g.UNSUPPORTED_EXPLANATION);
+assert(g.fallbackExplanationForProductType(undefined) === g.UNSUPPORTED_EXPLANATION);
+assert(g.fallbackExplanationForProductType('mystery') === g.UNSUPPORTED_EXPLANATION);
 assert(!/nutrition alone/i.test(g.COSMETIC_NO_EXPLANATION),
   'cosmetic fallback must not mention nutrition');
 assert(/summarise this product's ingredients/i.test(g.COSMETIC_NO_EXPLANATION));
@@ -4006,7 +3993,7 @@ assert(isCacheFresh({
   scanLogicVersion: '0',
 }, now) === false, 'mismatched scanLogicVersion must be stale');
 
-assert(g.SCAN_LOGIC_VERSION === '13', 'SCAN_LOGIC_VERSION must be 13 after explanation copy');
+assert(g.SCAN_LOGIC_VERSION === '14', 'SCAN_LOGIC_VERSION must be 14 after explanation copy');
 assert(isCacheFresh({
   productType: 'food',
   cachedAt: now - 1000,
@@ -4068,7 +4055,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '14', 'SCAN_LOGIC_VERSION must be 14, got ' + SCAN_LOGIC_VERSION);
 
 assert(src.includes('computeNutritionSubscore'), 'must compute a USDA nutrition subscore');
 assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'), 'must log unavailable nutrition subscore');
@@ -5040,7 +5027,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
+assert(logicMatch[1] === '14', 'SCAN_LOGIC_VERSION must be 14, got ' + logicMatch[1]);
 
 // --- Source: /scan/photo resolves type before scoring ---
 const photoStart = src.indexOf("app.post('/scan/photo'");
@@ -5052,14 +5039,16 @@ assert(photoBody.includes("resolvedType === 'food'") || photoBody.includes('isFo
   '/scan/photo must branch on food');
 assert(photoBody.includes('buildFoodPhotoScanResponse'),
   '/scan/photo must use buildFoodPhotoScanResponse for food');
-assert(photoBody.includes('buildHouseholdScanResponse'),
-  '/scan/photo must use household builder');
-// Scoring only on cosmetic path
-assert(photoBody.includes('isCosmeticPhoto ? scoreCosmeticProduct'),
-  'cosmetic scoring must be gated behind isCosmeticPhoto');
-assert(!/productType:\s*'cosmetic'/.test(
-  photoBody.slice(0, photoBody.indexOf('isFoodPhoto'))
-), 'must not hardcode cosmetic before classification');
+assert(photoBody.includes('buildUnsupportedScanResponse'),
+  '/scan/photo must use unsupported builder for non-food');
+assert(!photoBody.includes('scoreCosmeticProduct'),
+  '/scan/photo must not call scoreCosmeticProduct');
+assert(!photoBody.includes('scanAndCacheCosmetic'),
+  '/scan/photo must not call scanAndCacheCosmetic');
+assert(!photoBody.includes('scanAndCacheHousehold'),
+  '/scan/photo must not call scanAndCacheHousehold');
+assert(!/productType:\s*'cosmetic'/.test(photoBody),
+  'photo path must not assign productType cosmetic');
 
 // --- Source: /search requests categories_tags and classifies ---
 const searchStart = src.indexOf("app.get('/search'");
@@ -5090,7 +5079,7 @@ const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
-const SCAN_LOGIC_VERSION = '13';
+const SCAN_LOGIC_VERSION = '14';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 ${src.slice(helperStart, helperEnd)}
@@ -5098,7 +5087,9 @@ ${src.slice(scoreStart, scoreEnd)}
 module.exports = {
   buildFoodPhotoScanResponse,
   buildHouseholdScanResponse,
+  buildUnsupportedScanResponse,
   FOOD_PHOTO_EXPLANATION,
+  UNSUPPORTED_EXPLANATION,
   classifySearchProductType,
   tagIndicatesCosmetic,
   tagIndicatesHousehold,
@@ -5148,9 +5139,24 @@ const g = require('/tmp/batch2_helpers.js');
   assert(hh.score === null, 'household score null');
 }
 
-// 4. No-barcode cosmetic assumption: route still has productType cosmetic branch
-assert(photoBody.includes("productType: 'cosmetic'"),
-  'no-barcode / cosmetic branch still assigns cosmetic');
+// 4. No-barcode / unknown photo is unsupported, not cosmetic
+assert(photoBody.includes("isFoodPhoto ? 'food' : 'unsupported'"),
+  'non-food photo observation type must be unsupported');
+
+{
+  const unsupported = g.buildUnsupportedScanResponse({
+    productName: 'Head & Shoulders',
+    ingredients: 'Blue 1, red 33',
+  });
+  assert(unsupported.productType === 'unsupported', 'unsupported type');
+  assert(unsupported.score === null, 'unsupported score null');
+  assert(unsupported.scoreLabel === 'Not enough data', 'unsupported scoreLabel');
+  assert(unsupported.explanation === g.UNSUPPORTED_EXPLANATION, 'fixed unsupported copy');
+  assert(unsupported.explanation === 'Purla currently scores food products only.');
+  assert(!/cosmetic/i.test(unsupported.explanation), 'copy must not mention cosmetics');
+  assert(!/household/i.test(unsupported.explanation), 'copy must not mention household');
+  assert(unsupported.explanation !== g.FOOD_PHOTO_EXPLANATION, 'must not reuse food photo copy');
+}
 
 // 5. rescorePhotoCachedDocument leaves food as food
 {
@@ -5168,6 +5174,30 @@ assert(photoBody.includes("productType: 'cosmetic'"),
   assert(rescored.responseData.score === null, 'rescore food score null');
   const list = JSON.parse(rescored.responseData.ingredientList || '[]');
   assert(list.length === 0, 'rescore food empty list');
+}
+
+{
+  const missingType = g.rescorePhotoCachedDocument({
+    source: 'photo',
+    productName: 'Unknown cache',
+    ingredients: 'Aqua, Glycerin',
+  });
+  assert(missingType.responseData.productType === 'unsupported',
+    'missing productType on photo rescore must not become food');
+  assert(missingType.responseData.score === null, 'missing type rescore must not score');
+}
+
+{
+  const cosmeticPhoto = g.rescorePhotoCachedDocument({
+    productType: 'cosmetic',
+    source: 'photo',
+    productName: 'Shampoo',
+    ingredients: 'Aqua, Glycerin, Sodium Lauryl Sulfate',
+    score: 80,
+  });
+  assert(cosmeticPhoto.responseData.productType === 'unsupported',
+    'cosmetic photo rescore must be unsupported');
+  assert(cosmeticPhoto.responseData.score === null, 'cosmetic photo rescore must not score');
 }
 
 // 6–9. Search classification via categories_tags
@@ -5219,12 +5249,12 @@ assert(photoBody.includes("productType: 'cosmetic'"),
     'search unknown treated as food and scored');
 }
 
-// Hard check: photo handler must not set cosmetic before resolveProductType call.
+// Hard check: photo handler must not assign cosmetic productType.
 {
   const resolveIdx = photoBody.indexOf('resolveProductType');
-  const firstCosmeticAssign = photoBody.indexOf("productType: 'cosmetic'");
-  assert(resolveIdx >= 0 && firstCosmeticAssign > resolveIdx,
-    'photo path must resolve type before any productType: cosmetic assignment');
+  assert(resolveIdx >= 0, 'photo path must call resolveProductType');
+  assert(!photoBody.includes("productType: 'cosmetic'"),
+    'photo path must not assign productType cosmetic');
 }
 
 console.log('batch2 classification ok');
@@ -5255,7 +5285,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
+assert(logicMatch[1] === '14', 'SCAN_LOGIC_VERSION must be 14, got ' + logicMatch[1]);
 
 const catchStart = src.indexOf('const fallback = staleCacheFallbackPayload(staleCached);');
 const catchEnd = src.indexOf('if (responseData.noIngredientData)');
@@ -5371,7 +5401,7 @@ function isCacheFresh(cached, nowMs) {
       fiber_100g: 2.1,
     },
   }, { skipExplanation: false });
-  assert(regenerated.scanLogicVersion === '13', 'rescan stamps v13');
+  assert(regenerated.scanLogicVersion === '14', 'rescan stamps v14');
   assert(regenerated.explanation === REGENERATED,
     'successful rescan after bump must serve the regenerated explanation');
   assert(!/we've packed/i.test(regenerated.explanation),
@@ -5426,11 +5456,20 @@ function isCacheFresh(cached, nowMs) {
     scanLogicVersion: '13',
     cachedAt: now - 1000,
   };
-  assert(isCacheFresh(v13fresh, now) === true, 'fresh v13 record is a cache hit');
-  assert(isCacheFresh(v12fresh, now) === false, 'fresh v12 record is stale after the v13 bump');
-  const v13Fb = g.staleCacheFallbackPayload({ ...v13fresh, cachedAt: 1 });
-  assert(v13Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
-  assert(v13Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
+  const v14fresh = {
+    productType: 'food',
+    productName: 'Cadbury Dairy Milk',
+    score: 35,
+    sugar: '25.2g',
+    explanation: REGENERATED,
+    scanLogicVersion: '14',
+    cachedAt: now - 1000,
+  };
+  assert(isCacheFresh(v14fresh, now) === true, 'fresh v14 record is a cache hit');
+  assert(isCacheFresh(v13fresh, now) === false, 'fresh v13 record is stale after the v14 bump');
+  const v14Fb = g.staleCacheFallbackPayload({ ...v14fresh, cachedAt: 1 });
+  assert(v14Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
+  assert(v14Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
 
   console.log('scan logic v11 stale explanation ok');
 })().catch((err) => {
@@ -5468,7 +5507,7 @@ function assert(cond, msg) {
 const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '13', 'SCAN_LOGIC_VERSION must be 13, got ' + logicMatch[1]);
+assert(logicMatch[1] === '14', 'SCAN_LOGIC_VERSION must be 14, got ' + logicMatch[1]);
 
 const explainStart = src.indexOf("app.get('/explain/:barcode'");
 const explainEnd = src.indexOf("app.get('/search'");
@@ -5630,7 +5669,7 @@ const v10Doc = {
 
     productCache.set('7622210100586', {
       ...v10Doc,
-      scanLogicVersion: '13',
+      scanLogicVersion: '14',
       explanation: REGENERATED,
     });
     anthropicCalls = 0;
@@ -5672,7 +5711,7 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
 }
 
-assert(/const SCAN_LOGIC_VERSION = '13'/.test(src), 'SCAN_LOGIC_VERSION must be 13 so scoring changes reach cached products');
+assert(/const SCAN_LOGIC_VERSION = '14'/.test(src), 'SCAN_LOGIC_VERSION must be 14 so scoring changes reach cached products');
 assert(src.includes('max_tokens: 220'), 'food max_tokens must allow 3 sentences to finish');
 assert(src.includes('function trimFoodExplanation'), 'food path must trim to complete sentences');
 
