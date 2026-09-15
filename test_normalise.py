@@ -5812,6 +5812,335 @@ console.log('CADBURY_AFTER_TRIM=' + cadburyTrimmed);
     print(proc.stdout.strip())
 
 
+def test_account_delete():
+    """POST /account/delete — idempotent Auth/Firestore cleanup and photoCapturedBy unlink."""
+    script = r"""
+const http = require('http');
+const path = require('path');
+const Module = require('module');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const stores = {};
+const queriedCollections = [];
+const deleteUserUids = [];
+let deleteUserErrorCode = null;
+
+function store(name) {
+  if (!stores[name]) stores[name] = new Map();
+  return stores[name];
+}
+
+function makeRef(collectionName, id) {
+  const col = store(collectionName);
+  return {
+    id,
+    async get() {
+      const data = col.get(id);
+      return { exists: data !== undefined, id, data: () => data, ref: this };
+    },
+    async delete() {
+      col.delete(id);
+    },
+    async set(data, opts) {
+      if (opts && opts.merge) {
+        col.set(id, { ...(col.get(id) || {}), ...data });
+      } else {
+        col.set(id, { ...(typeof data === 'object' && data ? data : {}) });
+      }
+    },
+    async update(patch) {
+      const prev = col.get(id);
+      if (prev === undefined) {
+        const err = new Error('No document to update: ' + collectionName + '/' + id);
+        throw err;
+      }
+      const next = { ...prev };
+      for (const [k, v] of Object.entries(patch)) {
+        if (v && typeof v === 'object' && v._arrayRemove !== undefined) {
+          const arr = Array.isArray(next[k]) ? next[k] : [];
+          next[k] = arr.filter((x) => x !== v._arrayRemove);
+        } else {
+          next[k] = v;
+        }
+      }
+      col.set(id, next);
+    },
+  };
+}
+
+function matchesWhere(data, filters) {
+  return filters.every(([field, op, value]) => {
+    if (!Object.prototype.hasOwnProperty.call(data, field)) return false;
+    const v = data[field];
+    if (op === '==') return v === value;
+    if (op === 'array-contains') return Array.isArray(v) && v.includes(value);
+    throw new Error('unsupported op ' + op);
+  });
+}
+
+const mockFirestore = {
+  collection(name) {
+    queriedCollections.push(name);
+    const filters = [];
+    let lim = null;
+    const query = {
+      where(field, op, value) {
+        filters.push([field, op, value]);
+        return query;
+      },
+      limit(n) {
+        lim = n;
+        return query;
+      },
+      orderBy() { return query; },
+      doc(id) {
+        return makeRef(name, String(id));
+      },
+      async add(data) {
+        const id = 'auto-' + String(store(name).size + 1);
+        const ref = makeRef(name, id);
+        await ref.set(data);
+        return ref;
+      },
+      async get() {
+        const docs = [];
+        for (const [id, data] of store(name).entries()) {
+          if (matchesWhere(data, filters)) {
+            const ref = makeRef(name, id);
+            docs.push({ id, ref, data: () => data });
+          }
+        }
+        const limited = lim == null ? docs : docs.slice(0, lim);
+        return { empty: limited.length === 0, docs: limited, size: limited.length };
+      },
+    };
+    return query;
+  },
+  batch() {
+    const ops = [];
+    return {
+      delete(ref) { ops.push(() => ref.delete()); },
+      update(ref, data) { ops.push(() => ref.update(data)); },
+      async commit() {
+        for (const op of ops) await op();
+      },
+    };
+  },
+};
+mockFirestore.FieldValue = {
+  serverTimestamp: () => 'SERVER_TS',
+  increment: (n) => n,
+  arrayRemove: (v) => ({ _arrayRemove: v }),
+};
+
+const mockAdmin = {
+  initializeApp() {},
+  credential: { cert() { return {}; } },
+  auth() {
+    return {
+      async verifyIdToken(token) {
+        if (!token || token === 'bad') throw new Error('invalid token');
+        return { uid: 'uid-delete-me' };
+      },
+      async deleteUser(uid) {
+        deleteUserUids.push(uid);
+        if (deleteUserErrorCode) {
+          const err = new Error(deleteUserErrorCode);
+          err.code = deleteUserErrorCode;
+          throw err;
+        }
+      },
+    };
+  },
+  firestore() { return mockFirestore; },
+};
+mockAdmin.firestore.FieldValue = mockFirestore.FieldValue;
+
+const origRequire = Module.prototype.require;
+Module.prototype.require = function (id) {
+  if (id === 'firebase-admin') return mockAdmin;
+  return origRequire.apply(this, arguments);
+};
+
+process.env.FIREBASE_SERVICE_ACCOUNT = JSON.stringify({
+  project_id: 'demo',
+  client_email: 'demo@demo.iam.gserviceaccount.com',
+  private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg==\n-----END PRIVATE KEY-----\n',
+});
+process.env.ANTHROPIC_API_KEY = 'test-key';
+
+const appPath = path.join(process.cwd(), 'index.js');
+delete require.cache[appPath];
+const app = require(appPath);
+
+function request(method, urlPath, { headers } = {}) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: urlPath,
+          method,
+          headers: headers || {},
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            server.close();
+            const text = Buffer.concat(chunks).toString('utf8');
+            let json = null;
+            try { json = text ? JSON.parse(text) : null; } catch (_) { json = text; }
+            resolve({ status: res.statusCode, json });
+          });
+        }
+      );
+      req.on('error', (err) => { server.close(); reject(err); });
+      req.end();
+    });
+  });
+}
+
+function seedDoc(collectionName, id, data) {
+  store(collectionName).set(id, { ...data });
+}
+
+function resetStores() {
+  for (const k of Object.keys(stores)) stores[k].clear();
+  queriedCollections.length = 0;
+  deleteUserUids.length = 0;
+  deleteUserErrorCode = null;
+}
+
+(async () => {
+  const uid = 'uid-delete-me';
+
+  {
+    const noAuth = await request('POST', '/account/delete');
+    assert(noAuth.status === 401, 'missing token → 401, got ' + noAuth.status);
+    const badAuth = await request('POST', '/account/delete', {
+      headers: { Authorization: 'Bearer bad' },
+    });
+    assert(badAuth.status === 401, 'bad token → 401, got ' + badAuth.status);
+  }
+
+  resetStores();
+  seedDoc('scans', 's1', { userId: uid, barcode: '1' });
+  seedDoc('scans', 's2', { userId: uid, barcode: '2' });
+  seedDoc('scans', 's-other', { userId: 'uid-other', barcode: '3' });
+  seedDoc('users', uid, { email: 'me@example.com' });
+  seedDoc('productImages', 'img-me', { capturedBy: uid, reportedBy: [uid] });
+  seedDoc('productImages', 'img-other', { capturedBy: 'uid-other', reportedBy: ['uid-other'] });
+  seedDoc('imageReports', 'r1', { reportedBy: uid, barcode: '1' });
+  seedDoc('failedWrites', 'f1', { capturedBy: uid, collection: 'productCache' });
+  seedDoc('productCache', 'pc-me', { productName: 'Mine', photoCapturedBy: uid });
+  seedDoc('productCache', 'pc-other', { productName: 'Theirs', photoCapturedBy: 'uid-other' });
+  seedDoc('productCache', 'pc-null', { productName: 'Null', photoCapturedBy: null });
+  seedDoc('productCache', 'pc-absent', { productName: 'Absent' });
+  seedDoc('rawObservations', 'raw-me', { barcode: '1', photoCapturedBy: uid, payload: '{}' });
+  seedDoc('rawObservations', 'raw-other', { barcode: '2', photoCapturedBy: 'uid-other', payload: '{}' });
+  seedDoc('rawObservations', 'raw-null', { barcode: '3', photoCapturedBy: null, payload: '{}' });
+  seedDoc('rawObservations', 'raw-absent', { barcode: '4', payload: '{}' });
+  seedDoc('rawLatest', '1', { payloadHash: 'abc', observedAt: 't' });
+  seedDoc('unmatchedInci', 'aqua', { name: 'Aqua', count: 3, sampleBarcode: '1' });
+  seedDoc('diagnosticRuns', 'd1', { startedAt: 1, status: 'ok', productsAttempted: 1 });
+
+  const first = await request('POST', '/account/delete', {
+    headers: { Authorization: 'Bearer good-token' },
+  });
+  assert(first.status === 200 && first.json && first.json.ok === true,
+    'first delete → 200, got ' + first.status + ' ' + JSON.stringify(first.json));
+  assert(first.json.scansDeleted === 2, 'scansDeleted=2, got ' + first.json.scansDeleted);
+  assert(deleteUserUids.length === 1 && deleteUserUids[0] === uid, 'deleteUser called once');
+  assert(!store('scans').has('s1') && !store('scans').has('s2'), 'own scans deleted');
+  assert(store('scans').has('s-other'), 'other user scans kept');
+  assert(!store('users').has(uid), 'user doc deleted');
+  assert(store('productImages').get('img-me').capturedBy === null, 'image capturedBy nulled');
+  assert(store('productImages').get('img-other').capturedBy === 'uid-other', 'other image untouched');
+  assert(store('imageReports').get('r1').reportedBy === null, 'imageReports reportedBy nulled');
+  assert(store('failedWrites').get('f1').capturedBy === null, 'failedWrites capturedBy nulled');
+  assert(store('productCache').get('pc-me').photoCapturedBy === null, 'own cache photoCapturedBy nulled');
+  assert(store('productCache').get('pc-me').productName === 'Mine', 'cache record kept');
+  assert(store('productCache').get('pc-other').photoCapturedBy === 'uid-other', 'other cache uid untouched');
+  assert(store('productCache').get('pc-null').photoCapturedBy === null, 'null cache field unchanged');
+  assert(!Object.prototype.hasOwnProperty.call(store('productCache').get('pc-absent'), 'photoCapturedBy'),
+    'absent cache field stays absent');
+  assert(store('rawObservations').get('raw-me').photoCapturedBy === null, 'own raw photoCapturedBy nulled');
+  assert(store('rawObservations').get('raw-me').payload === '{}', 'raw record kept');
+  assert(store('rawObservations').get('raw-other').photoCapturedBy === 'uid-other', 'other raw uid untouched');
+  assert(store('rawObservations').get('raw-null').photoCapturedBy === null, 'null raw field unchanged');
+  assert(!Object.prototype.hasOwnProperty.call(store('rawObservations').get('raw-absent'), 'photoCapturedBy'),
+    'absent raw field stays absent');
+  assert(store('rawLatest').get('1').payloadHash === 'abc', 'rawLatest untouched');
+  assert(store('unmatchedInci').get('aqua').count === 3, 'unmatchedInci untouched');
+  assert(store('diagnosticRuns').get('d1').status === 'ok', 'diagnosticRuns untouched');
+  assert(!queriedCollections.includes('rawLatest'), 'must not query rawLatest');
+  assert(!queriedCollections.includes('unmatchedInci'), 'must not query unmatchedInci');
+  assert(!queriedCollections.includes('diagnosticRuns'), 'must not query diagnosticRuns');
+
+  // Retry after success: Auth user already gone; Firestore already empty.
+  queriedCollections.length = 0;
+  deleteUserUids.length = 0;
+  deleteUserErrorCode = 'auth/user-not-found';
+  const retry = await request('POST', '/account/delete', {
+    headers: { Authorization: 'Bearer good-token' },
+  });
+  assert(retry.status === 200 && retry.json && retry.json.ok === true,
+    'retry after user-not-found → 200, got ' + retry.status + ' ' + JSON.stringify(retry.json));
+  assert(retry.json.scansDeleted === 0, 'empty scans is not an error');
+  assert(deleteUserUids.length === 1, 'deleteUser still attempted on retry');
+  assert(store('productCache').get('pc-other').photoCapturedBy === 'uid-other',
+    'retry must not alter other users');
+
+  deleteUserErrorCode = 'auth/internal-error';
+  const otherErr = await request('POST', '/account/delete', {
+    headers: { Authorization: 'Bearer good-token' },
+  });
+  assert(otherErr.status === 500, 'other Auth delete error → 500, got ' + otherErr.status);
+
+  // 500-doc batching for photoCapturedBy on productCache.
+  resetStores();
+  for (let i = 0; i < 501; i++) {
+    seedDoc('productCache', 'batch-' + i, { photoCapturedBy: uid });
+  }
+  seedDoc('productCache', 'other', { photoCapturedBy: 'uid-other' });
+  const batched = await request('POST', '/account/delete', {
+    headers: { Authorization: 'Bearer good-token' },
+  });
+  assert(batched.status === 200, 'batch delete → 200, got ' + batched.status);
+  for (let i = 0; i < 501; i++) {
+    assert(store('productCache').get('batch-' + i).photoCapturedBy === null,
+      'batched cache ' + i + ' must be nulled');
+  }
+  assert(store('productCache').get('other').photoCapturedBy === 'uid-other',
+    'batched other uid untouched');
+
+  console.log('account delete ok');
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"account delete assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def test_usda_food_lookup():
     """USDA+OFF merge: parallel abort-bounded lookup, field precedence, source string."""
     proc = subprocess.run(
@@ -5879,6 +6208,7 @@ def main() -> int:
         test_scan_logic_v11_stale_explanation,
         test_explain_version_mismatch_regenerates,
         test_food_explanation_copy,
+        test_account_delete,
         test_usda_food_lookup,
         test_nutrition_subscore_validation,
     ]

@@ -5202,7 +5202,8 @@ app.post('/report/image', async (req, res) => {
 
 // Permanently delete the authenticated user's account data: scan history,
 // Firestore user doc, Auth user. Product photos are kept; capturedBy is
-// unlinked. Report identities are stripped (reportCount/suppressed unchanged);
+// unlinked. photoCapturedBy on productCache / rawObservations is nulled.
+// Report identities are stripped (reportCount/suppressed unchanged);
 // imageReports and failedWrites keep their docs with uid fields nulled.
 app.post('/account/delete', async (req, res) => {
   let uid;
@@ -5296,10 +5297,44 @@ app.post('/account/delete', async (req, res) => {
       failedWritesUnlinked += snap.size;
     }
 
-    await admin.auth().deleteUser(uid);
+    // Keep shared product data; anonymize photoCapturedBy only where it is this uid.
+    let cachePhotoUnlinked = 0;
+    while (true) {
+      const snap = await db.collection(CACHE_COLLECTION)
+        .where('photoCapturedBy', '==', uid)
+        .limit(500)
+        .get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.update(doc.ref, { photoCapturedBy: null }));
+      await batch.commit();
+      cachePhotoUnlinked += snap.size;
+    }
+
+    let rawPhotoUnlinked = 0;
+    while (true) {
+      const snap = await db.collection(RAW_COLLECTION)
+        .where('photoCapturedBy', '==', uid)
+        .limit(500)
+        .get();
+      if (snap.empty) break;
+      const batch = db.batch();
+      snap.docs.forEach((doc) => batch.update(doc.ref, { photoCapturedBy: null }));
+      await batch.commit();
+      rawPhotoUnlinked += snap.size;
+    }
+
+    // Retry / double-tap: Auth user already gone is success, not 500.
+    try {
+      await admin.auth().deleteUser(uid);
+    } catch (authDeleteErr) {
+      if (authDeleteErr.code !== 'auth/user-not-found') {
+        throw authDeleteErr;
+      }
+    }
 
     console.log(
-      `[ACCOUNT DELETE] uid=${uid} scansDeleted=${scansDeleted} imagesUnlinked=${imagesUnlinked} reportsUnlinked=${reportsUnlinked} imageReportsUnlinked=${imageReportsUnlinked} failedWritesUnlinked=${failedWritesUnlinked} userDocDeleted=true authDeleted=true`
+      `[ACCOUNT DELETE] uid=${uid} scansDeleted=${scansDeleted} imagesUnlinked=${imagesUnlinked} reportsUnlinked=${reportsUnlinked} imageReportsUnlinked=${imageReportsUnlinked} failedWritesUnlinked=${failedWritesUnlinked} cachePhotoUnlinked=${cachePhotoUnlinked} rawPhotoUnlinked=${rawPhotoUnlinked} userDocDeleted=true authDeleted=true`
     );
     return res.json({
       ok: true,
