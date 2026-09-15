@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '14';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '15';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1004,7 +1004,7 @@ function buildUnsupportedScanResponse({
     explanation: UNSUPPORTED_EXPLANATION,
     scoreColor: '#9E9E9E',
     imageUrl,
-    scoreLabel: 'Not enough data',
+    scoreLabel: 'Food products only',
     coverageMatched: 0,
     coverageTotal: 0,
     assessedCount: 0,

@@ -8,7 +8,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '14', 'SCAN_LOGIC_VERSION must be 14, got ' + logicMatch[1]);
+assert(logicMatch[1] === '15', 'SCAN_LOGIC_VERSION must be 15, got ' + logicMatch[1]);
 assert(!src.includes('default_off_ambiguous'), 'empty-tag food default must be removed');
 assert(!src.includes("cached.productType || 'food'"), 'cache hit must not coerce missing type to food');
 assert(!src.includes("responseData.productType || 'food'"), 'must not coerce missing productType to food');
@@ -533,7 +533,7 @@ const fettuccine = {
   assert(typeof scored.score === 'number' && scored.score !== null, 'merged food must score');
   assert(scored.productName === 'ORGANIC FETTUCCINE');
   assert(/ORGANIC DURUM WHEAT SEMOLINA/i.test(scored.ingredients), 'USDA ingredients displayed as-is');
-  assert(scored.scanLogicVersion === '14', 'logic version 14');
+  assert(scored.scanLogicVersion === '15', 'logic version 15');
 
   const offScored = await g.scanAndCacheFood('111', {
     product_name: 'Yogurt',
@@ -663,7 +663,7 @@ const fettuccine = {
   assert(highN.components.protein === 0, 'suppressed protein contributes 0');
 
   // --- Food-only gate ---
-  assert(g.SCAN_LOGIC_VERSION === '14', 'logic version 14');
+  assert(g.SCAN_LOGIC_VERSION === '15', 'logic version 15');
   assert(typeof g.routeResolvedScan === 'function', 'routeResolvedScan exported');
   assert(g.isExplicitFoodProductType('food') === true);
   assert(g.isExplicitFoodProductType('unsupported') === false);
@@ -681,6 +681,7 @@ const fettuccine = {
   });
   assert(unsupportedPayload.productType === 'unsupported');
   assert(unsupportedPayload.score === null);
+  assert(unsupportedPayload.scoreLabel === 'Food products only');
   assert(unsupportedPayload.explanation === 'Purla currently scores food products only.');
   assert(!/cosmetic/i.test(unsupportedPayload.explanation));
   assert(!/household/i.test(unsupportedPayload.explanation));
