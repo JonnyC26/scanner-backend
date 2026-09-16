@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '16';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '17';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1937,20 +1937,50 @@ function hasHouseholdCategory(product) {
   return tags.some(tagIndicatesHousehold);
 }
 
-// Affirmative OFF food evidence: non-empty tags that are neither household
-// nor cosmetic. Empty or absent tags are not food.
-function hasExplicitOffFoodCategory(product) {
+// OFF product-type tags that are explicit non-food, not missing taxonomy.
+function tagIndicatesOffNonFoodProductType(tag) {
+  const t = String(tag || '').replace(/^[a-z]{2}:/, '').toLowerCase();
+  return t === 'non-food-products' || t === 'incorrect-product-type';
+}
+
+function hasOffNonFoodProductTypeCategory(product) {
   const tags = (product && product.categories_tags) || [];
-  if (!Array.isArray(tags) || tags.length === 0) return false;
+  return tags.some(tagIndicatesOffNonFoodProductType);
+}
+
+// For the OFF food-category decision only: drop en:undefined (confirmed
+// non-evidence) and null / empty / non-string entries. Do not expand this list.
+function offCategoryTagsForFoodDecision(product) {
+  const tags = product && product.categories_tags;
+  if (!Array.isArray(tags)) return [];
+  const remaining = [];
+  for (const tag of tags) {
+    if (typeof tag !== 'string') continue;
+    const trimmed = tag.trim();
+    if (!trimmed) continue;
+    const bare = trimmed.replace(/^[a-z]{2}:/, '').toLowerCase();
+    if (bare === 'undefined') continue;
+    remaining.push(trimmed);
+  }
+  return remaining;
+}
+
+// Affirmative OFF food evidence after non-food vetoes: at least one remaining
+// category tag that is not household, cosmetic, or an explicit non-food type.
+// Absent, empty, or en:undefined-only tags are not food evidence.
+function hasExplicitOffFoodCategory(product) {
+  const tags = offCategoryTagsForFoodDecision(product);
+  if (tags.length === 0) return false;
   if (tags.some(tagIndicatesHousehold)) return false;
   if (tags.some(tagIndicatesCosmetic)) return false;
+  if (tags.some(tagIndicatesOffNonFoodProductType)) return false;
   return true;
 }
 
 // Search candidates: classify from OFF category tags only (no upstream fetch).
 // Household wins over cosmetic, matching resolveProductType.
-// Empty, absent, or non-array tags are not food — search requires the same
-// affirmative category evidence as hasExplicitOffFoodCategory.
+// Search is unchanged: empty, absent, or non-array tags are not food; remaining
+// non-household/non-cosmetic tags (including en:undefined) still classify food.
 function classifySearchProductType(categoriesTags) {
   const tags = Array.isArray(categoriesTags) ? categoriesTags : [];
   if (tags.some(tagIndicatesHousehold)) return 'household';
@@ -2108,9 +2138,10 @@ function lookupOutcome(settled, msFallback) {
 
 async function resolveProductType(barcode) {
   // Food-only gate classification. USDA is affirmative food evidence and wins
-  // before OFF household/cosmetic tags. Empty OFF tags are not food.
-  // Cosmetic/household types still resolve so the scan gate can map them to
-  // unsupported without 404 (true both-miss stays null → photo capture).
+  // before OFF household/cosmetic/non-food tags. After those vetoes, remaining
+  // OFF category tags are food; otherwise a genuine energy/protein/sodium|salt
+  // nutriment is food. Cosmetic/household types still resolve so the scan gate
+  // can map them to unsupported without 404 (true both-miss stays null → photo).
   let foodProduct = null;
   let cosmeticProduct = null;
 
@@ -2212,11 +2243,24 @@ async function resolveProductType(barcode) {
     return { productType: 'cosmetic', product: foodProduct };
   }
 
+  if (hasOffNonFoodProductTypeCategory(foodProduct)) {
+    console.log(`[PRODUCT TYPE] barcode=${barcode} type=unsupported reason=off_non_food_category`);
+    return { productType: 'unsupported', product: foodProduct };
+  }
+
   if (hasExplicitOffFoodCategory(foodProduct)) {
     console.log(
       `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
     );
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=off_food_category`);
+    return { productType: 'food', product: foodProduct };
+  }
+
+  if (hasScorableFoodNutriments(foodProduct.nutriments)) {
+    console.log(
+      `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
+    );
+    console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=off_nutrition_facts`);
     return { productType: 'food', product: foodProduct };
   }
 

@@ -8,12 +8,37 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '16', 'SCAN_LOGIC_VERSION must be 16, got ' + logicMatch[1]);
+assert(logicMatch[1] === '17', 'SCAN_LOGIC_VERSION must be 17, got ' + logicMatch[1]);
 assert(!src.includes('default_off_ambiguous'), 'empty-tag food default must be removed');
 assert(!src.includes("cached.productType || 'food'"), 'cache hit must not coerce missing type to food');
 assert(!src.includes("responseData.productType || 'food'"), 'must not coerce missing productType to food');
 assert(src.includes('routeResolvedScan'), 'scan routing helper must exist');
 assert(src.includes('buildUnsupportedScanResponse'), 'unsupported builder must exist');
+assert(src.includes('off_nutrition_facts'), 'OFF empty-tag nutrition fallback must exist');
+assert(src.includes('off_non_food_category'), 'explicit non-food type tags must veto');
+{
+  const searchFn = src.slice(
+    src.indexOf('function classifySearchProductType'),
+    src.indexOf('function attachProductSource')
+  );
+  assert(searchFn.includes("return 'food'"), 'search food classification must remain');
+  assert(!searchFn.includes('hasScorableFoodNutriments'),
+    'search must not use the scan nutrition fallback');
+}
+{
+  const mergeFn = src.slice(
+    src.indexOf('function mergeUsdaAndOffProducts'),
+    src.indexOf('function lookupOutcome')
+  );
+  assert(mergeFn.includes('pickUsdaThenOff'), 'USDA/OFF merge must stay field-by-field');
+  assert(!mergeFn.includes('hasExplicitOffFoodCategory'),
+    'merge must not classify product type');
+}
+{
+  const photoStart = src.indexOf("app.post('/scan/photo'");
+  const photoSlice = src.slice(photoStart, photoStart + 8000);
+  assert(photoSlice.includes('resolveProductType'), '/scan/photo must still call resolveProductType');
+}
 
 const normStart = src.indexOf('function normalizeBarcode(raw)');
 const normBody = src.slice(normStart, src.indexOf('function isValidBarcode'));
@@ -533,7 +558,7 @@ const fettuccine = {
   assert(typeof scored.score === 'number' && scored.score !== null, 'merged food must score');
   assert(scored.productName === 'ORGANIC FETTUCCINE');
   assert(/ORGANIC DURUM WHEAT SEMOLINA/i.test(scored.ingredients), 'USDA ingredients displayed as-is');
-  assert(scored.scanLogicVersion === '16', 'logic version 16');
+  assert(scored.scanLogicVersion === '17', 'logic version 17');
 
   const offScored = await g.scanAndCacheFood('111', {
     product_name: 'Yogurt',
@@ -663,7 +688,7 @@ const fettuccine = {
   assert(highN.components.protein === 0, 'suppressed protein contributes 0');
 
   // --- Food-only gate ---
-  assert(g.SCAN_LOGIC_VERSION === '16', 'logic version 16');
+  assert(g.SCAN_LOGIC_VERSION === '17', 'logic version 17');
   assert(typeof g.routeResolvedScan === 'function', 'routeResolvedScan exported');
   assert(g.isExplicitFoodProductType('food') === true);
   assert(g.isExplicitFoodProductType('unsupported') === false);
@@ -674,6 +699,17 @@ const fettuccine = {
   assert(g.hasExplicitOffFoodCategory({ categories_tags: ['en:shampoos'] }) === false);
   assert(g.hasExplicitOffFoodCategory({ categories_tags: ['en:detergents'] }) === false);
   assert(g.hasExplicitOffFoodCategory({}) === false);
+  assert(g.hasExplicitOffFoodCategory({ categories_tags: ['en:undefined'] }) === false,
+    'en:undefined is not food evidence');
+  assert(g.hasExplicitOffFoodCategory({
+    categories_tags: ['en:undefined', 'en:pastas'],
+  }) === true, 'remaining real tags after ignoring en:undefined are food evidence');
+  assert(g.hasExplicitOffFoodCategory({
+    categories_tags: ['en:incorrect-product-type', 'en:non-food-products'],
+  }) === false, 'explicit non-food type tags are not food evidence');
+  assert(g.hasExplicitOffFoodCategory({
+    categories_tags: [null, '', 12, { id: 'en:pastas' }, 'en:undefined'],
+  }) === false, 'null/empty/non-string/undefined entries leave no food evidence');
 
   const unsupportedPayload = g.buildUnsupportedScanResponse({
     productName: 'Head & Shoulders Classic Clean',
@@ -752,12 +788,18 @@ const fettuccine = {
   assert(foodCache.productType === 'food' && foodCache.score === 70, 'explicit food cache unchanged');
 
   // Head & Shoulders / empty OFF tags, no USDA → unsupported, not food.
+  // A nutriments object and ingredients_text must not prove food.
   process.env.USDA_API_KEY = 'test-key';
   const hsOff = {
     code: '0030772062791',
     product_name: 'Head & Shoulders Classic Clean',
     ingredients_text: 'Blue 1, red 33',
     categories_tags: [],
+    nutriments: {
+      'added-sugars': 0,
+      'added-sugars_100g': 0,
+      'fruits-vegetables-nuts-estimate-from-ingredients_100g': 0,
+    },
   };
   global.fetch = async (url) => {
     const u = String(url);
@@ -793,6 +835,18 @@ const fettuccine = {
       { ciqual_food_code: '18066', id: 'en:water', is_in_taxonomy: 1, text: 'water' },
     ],
     categories_tags: [],
+    nutriments: {
+      'energy-kcal_100g': 241,
+      'energy-kcal': 241,
+      proteins_100g: 2.2,
+      proteins: 2.2,
+      sugars_100g: 38,
+      sugars: 38,
+      'saturated-fat_100g': 0.1,
+      'saturated-fat': 0.1,
+      fat_100g: 0.4,
+      carbohydrates_100g: 64,
+    },
   };
   global.fetch = async (url) => {
     const u = String(url);
@@ -808,10 +862,12 @@ const fettuccine = {
     return { ok: false };
   };
   const sunny = await g.resolveProductType('0842515008474');
-  assert(sunny.productType === 'unsupported', 'Sunny Fruit empty tags → unsupported, got ' + sunny.productType);
+  assert(sunny.productType === 'food', 'Sunny Fruit empty tags + energy/protein → food, got ' + sunny.productType);
   const sunnyRouted = await g.routeResolvedScan('0842515008474', sunny.productType, sunny.product, { skipExplanation: true });
-  assert(sunnyRouted.productType === 'unsupported');
-  assert(sunnyRouted.scoreLabel === 'Food products only');
+  assert(sunnyRouted.productType === 'food', 'Sunny Fruit must stay food after routing');
+  assert(sunnyRouted.score === null, 'Sunny Fruit score must be null without sodium');
+  assert(sunnyRouted.scoreLabel === 'Not enough data',
+    'Sunny Fruit missing sodium → Not enough data, got ' + sunnyRouted.scoreLabel);
   assert(typeof sunnyRouted.ingredients === 'string', 'Sunny Fruit ingredients must be a string, got ' + typeof sunnyRouted.ingredients);
   assert(sunnyRouted.ingredients === 'Organic dried plums, water.',
     'Sunny Fruit must prefer ingredients_text over the structured array, got ' + JSON.stringify(sunnyRouted.ingredients));
@@ -830,6 +886,79 @@ const fettuccine = {
   };
   const absentResolved = await g.resolveProductType('0030772062792');
   assert(absentResolved.productType === 'unsupported', 'absent tags → unsupported, got ' + absentResolved.productType);
+
+  function usdaMissOffFetch(product) {
+    return async (url) => {
+      const u = String(url);
+      if (u.includes('api.nal.usda.gov')) return { ok: true, json: async () => ({ foods: [] }) };
+      if (u.includes('openfoodfacts')) return { ok: true, json: async () => ({ status: 1, product }) };
+      if (u.includes('openbeautyfacts')) return { ok: true, json: async () => ({ status: 0 }) };
+      return { ok: false };
+    };
+  }
+
+  // Lysol: explicit non-food type tags veto even if nutriments look like food.
+  const lysolOff = {
+    code: '0019200008884',
+    product_name: 'Lysol kitchen Pro Antibacterial Cleaner',
+    brands: 'Lysol',
+    categories_tags: ['en:incorrect-product-type', 'en:non-food-products'],
+    nutriments: { 'energy-kcal_100g': 0, proteins_100g: 0, sodium_100g: 0 },
+  };
+  global.fetch = usdaMissOffFetch(lysolOff);
+  const lysol = await g.resolveProductType('0019200008884');
+  assert(lysol.productType === 'unsupported', 'Lysol non-food tags must veto, got ' + lysol.productType);
+  const lysolRouted = await g.routeResolvedScan('0019200008884', lysol.productType, lysol.product, { skipExplanation: true });
+  assert(lysolRouted.productType === 'unsupported', 'Lysol must not be food after routing');
+  assert(lysolRouted.scoreLabel === 'Food products only');
+
+  // Four en:undefined-only foods reach the nutrition fallback.
+  const undefinedFoods = [
+    { code: '0024321915607', product_name: 'Whole Milk' },
+    { code: '0036632037251', product_name: 'Greek Yogurt' },
+    { code: '0011150514767', product_name: 'Cream Cheese' },
+    { code: '0041331023535', product_name: 'Black Beans' },
+  ];
+  for (const row of undefinedFoods) {
+    const product = {
+      code: row.code,
+      product_name: row.product_name,
+      categories_tags: ['en:undefined'],
+      nutriments: { 'energy-kcal_100g': 60, proteins_100g: 3.3, sodium_100g: 0.04 },
+    };
+    global.fetch = usdaMissOffFetch(product);
+    const resolved = await g.resolveProductType(row.code);
+    assert(resolved.productType === 'food',
+      row.product_name + ' en:undefined + nutrition → food, got ' + resolved.productType);
+  }
+
+  // Known cosmetic with cosmetic tags stays non-food even with nutriments.
+  const offSunscreen = {
+    code: '0303162062450',
+    product_name: 'KIDS mineral-based sunscreen',
+    categories_tags: ['en:sunscreen'],
+    nutriments: { 'energy-kcal_100g': 0, proteins_100g: 0, sodium_100g: 0 },
+  };
+  global.fetch = usdaMissOffFetch(offSunscreen);
+  const cosmeticTagged = await g.resolveProductType('0303162062450');
+  assert(cosmeticTagged.productType === 'cosmetic',
+    'cosmetic tags must veto nutrition fallback, got ' + cosmeticTagged.productType);
+  const cosmeticRouted = await g.routeResolvedScan(
+    '0303162062450', cosmeticTagged.productType, cosmeticTagged.product, { skipExplanation: true }
+  );
+  assert(cosmeticRouted.productType === 'unsupported', 'cosmetic-tagged OFF record routes to unsupported');
+
+  // Numeric 0 is a genuine nutrition fact when tags are empty.
+  const zeroEnergy = {
+    code: '0000000000099',
+    product_name: 'Zero-energy water',
+    categories_tags: [],
+    nutriments: { 'energy-kcal_100g': 0 },
+  };
+  global.fetch = usdaMissOffFetch(zeroEnergy);
+  const zeroResolved = await g.resolveProductType('0000000000099');
+  assert(zeroResolved.productType === 'food',
+    'numeric 0 energy with empty tags → food, got ' + zeroResolved.productType);
 
   // USDA hit + no OFF still food.
   global.fetch = async (url) => {
