@@ -5059,6 +5059,20 @@ assert(searchBody.includes('categories_tags'), '/search fields must include cate
 assert(searchBody.includes('classifySearchProductType'),
   '/search must classify via classifySearchProductType');
 assert(searchBody.includes('productType'), '/search results must include productType');
+assert(searchBody.includes('countries_tags:"en:united-states"'),
+  '/search must filter Search-a-licious with countries_tags:"en:united-states"');
+assert(!searchBody.includes('countries_tags_en'),
+  '/search must not use Product Opener countries_tags_en on Search-a-licious');
+assert(searchBody.includes('categories_tags:*'),
+  '/search must require categories_tags at query time');
+assert(searchBody.includes("classifySearchProductType(p.categories_tags) === 'food'"),
+  '/search must keep only affirmative food rows');
+assert(searchBody.includes('SEARCH_FETCH_PAGE_SIZE'),
+  '/search must over-fetch before food post-filter');
+assert(searchBody.includes('SEARCH_RESULT_LIMIT'),
+  '/search must slice to the existing result page size');
+assert(searchBody.includes('slice(0, SEARCH_RESULT_LIMIT)'),
+  '/search must cap results after filtering, not return a sparse first page');
 
 // --- Extract helpers for behavioural tests ---
 const start = src.indexOf('const cosmeticTable = JSON.parse');
@@ -5212,9 +5226,9 @@ assert(photoBody.includes("isFoodPhoto ? 'food' : 'unsupported'"),
     'detergents → household');
   assert(g.classifySearchProductType(['en:breads', 'en:plant-based-foods']) === 'food',
     'bread tags → food');
-  assert(g.classifySearchProductType([]) === 'food', 'empty tags → food');
-  assert(g.classifySearchProductType(undefined) === 'food', 'missing tags → food');
-  assert(g.classifySearchProductType(null) === 'food', 'null tags → food');
+  assert(g.classifySearchProductType([]) !== 'food', 'empty tags are not food');
+  assert(g.classifySearchProductType(undefined) !== 'food', 'missing tags are not food');
+  assert(g.classifySearchProductType(null) !== 'food', 'null tags are not food');
 
   // Household wins when both present
   assert(
@@ -5222,10 +5236,16 @@ assert(photoBody.includes("isFoodPhoto ? 'food' : 'unsupported'"),
     'household wins over cosmetic tags'
   );
 
-  // Mirror /search scoring gate
+  // Mirror /search: omit non-food entirely; score remaining food rows
+  function searchKeep(hits, limit) {
+    return hits
+      .filter(p => p.code && p.product_name)
+      .filter(p => g.classifySearchProductType(p.categories_tags) === 'food')
+      .slice(0, limit);
+  }
   function searchScoreFor(tags) {
     const productType = g.classifySearchProductType(tags);
-    if (productType === 'household' || productType === 'cosmetic') {
+    if (productType !== 'food') {
       return { productType, score: null, scoreLabel: 'Not enough data', scoreColor: '#9E9E9E' };
     }
     const score = g.calculateScore('b', 3, 0, false, 5, 5, 0.1, [], null, {
@@ -5239,14 +5259,34 @@ assert(photoBody.includes("isFoodPhoto ? 'food' : 'unsupported'"),
     };
   }
   const cos = searchScoreFor(['en:toothpastes']);
-  assert(cos.productType === 'cosmetic' && cos.score === null, 'search cosmetic unscored');
+  assert(cos.productType === 'cosmetic' && cos.score === null, 'search cosmetic not scored');
   const hh = searchScoreFor(['en:laundry-detergent']);
-  assert(hh.productType === 'household' && hh.score === null, 'search household unscored');
+  assert(hh.productType === 'household' && hh.score === null, 'search household not scored');
   const food = searchScoreFor(['en:yogurts']);
   assert(food.productType === 'food' && typeof food.score === 'number', 'search food scored');
   const unknown = searchScoreFor([]);
-  assert(unknown.productType === 'food' && typeof unknown.score === 'number',
-    'search unknown treated as food and scored');
+  assert(unknown.productType !== 'food' && unknown.score === null,
+    'search untagged is not food and not scored');
+
+  const kept = searchKeep([
+    { code: '1', product_name: 'Shampoo', categories_tags: ['en:shampoos'] },
+    { code: '2', product_name: 'Dawn', categories_tags: ['en:dishwashing', 'en:cleaning-products'] },
+    { code: '3', product_name: 'Mystery', categories_tags: [] },
+    { code: '4', product_name: 'No tags' },
+    { code: '5', product_name: 'Cheerios', categories_tags: ['en:breakfast-cereals'] },
+    { code: '6', product_name: 'Yogurt', categories_tags: ['en:yogurts'] },
+  ], 20);
+  assert(kept.length === 2, 'search omits cosmetic, household, and untagged, got ' + kept.length);
+  assert(kept[0].product_name === 'Cheerios' && kept[1].product_name === 'Yogurt',
+    'search keeps affirmative food in original order');
+
+  const denseHits = [];
+  for (let i = 0; i < 15; i++) denseHits.push({ code: String(i), product_name: 'Untagged ' + i, categories_tags: [] });
+  denseHits.push({ code: 'h', product_name: 'Detergent', categories_tags: ['en:detergents'] });
+  for (let i = 0; i < 25; i++) denseHits.push({ code: 'f' + i, product_name: 'Food ' + i, categories_tags: ['en:yogurts'] });
+  const dense = searchKeep(denseHits, 20);
+  assert(dense.length === 20, 'over-fetch window still fills 20 food rows, got ' + dense.length);
+  assert(dense[0].product_name === 'Food 0', 'skipped untagged/household before first food');
 }
 
 // Hard check: photo handler must not assign cosmetic productType.
@@ -6141,6 +6181,112 @@ function resetStores() {
     print(proc.stdout.strip())
 
 
+def test_search_food_us_filter():
+    """Live Search-a-licious: US + affirmative-food filter used by GET /search."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const searchStart = src.indexOf("app.get('/search'");
+const searchEnd = src.indexOf('const PRESCORE_SECRET');
+assert(searchStart >= 0 && searchEnd > searchStart, 'locate /search');
+const searchBody = src.slice(searchStart, searchEnd);
+assert(searchBody.includes('countries_tags:"en:united-states"'), 'US filter in /search query');
+assert(!searchBody.includes('countries_tags_en'), 'must not use Product Opener country param');
+assert(searchBody.includes('categories_tags:*'), 'exists filter in /search query');
+assert(searchBody.includes("classifySearchProductType(p.categories_tags) === 'food'"),
+  'post-filter keeps food only');
+
+const fragStart = src.indexOf('const COSMETIC_CATEGORY_FRAGMENTS');
+const fragEnd = src.indexOf('async function resolveProductType');
+if (fragStart < 0 || fragEnd < 0) throw new Error('could not locate category fragments');
+const block = `
+${src.slice(fragStart, fragEnd)}
+module.exports = { classifySearchProductType };
+`;
+fs.writeFileSync('/tmp/search_food_us_helpers.js', block);
+delete require.cache['/tmp/search_food_us_helpers.js'];
+const g = require('/tmp/search_food_us_helpers.js');
+
+function buildQ(userQuery) {
+  return `${userQuery} countries_tags:"en:united-states" categories_tags:*`;
+}
+
+async function fetchHits(userQuery) {
+  const q = buildQ(userQuery);
+  const fields = 'code,product_name,brands,categories_tags,countries_tags';
+  const url = 'https://search.openfoodfacts.org/search?q=' + encodeURIComponent(q) +
+    '&fields=' + fields + '&page_size=100&json=1';
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'PurlaFoodScanner/1.0 (search food/US tests)' },
+  });
+  assert(res.ok, userQuery + ' search HTTP ' + res.status);
+  const data = await res.json();
+  return data.hits || data.products || [];
+}
+
+function keepFood(hits) {
+  return hits
+    .filter(p => p.code && p.product_name)
+    .filter(p => g.classifySearchProductType(p.categories_tags) === 'food')
+    .slice(0, 20);
+}
+
+(async () => {
+  const shampooHits = await fetchHits('shampoo');
+  const shampooFood = keepFood(shampooHits);
+  for (const p of shampooFood) {
+    const t = g.classifySearchProductType(p.categories_tags);
+    assert(t !== 'cosmetic', 'shampoo must not return cosmetic: ' + p.product_name + ' ' + t);
+    assert(t === 'food', 'kept shampoo row must be food');
+  }
+
+  const mixed = keepFood([
+    ...shampooHits,
+    { code: 'hh1', product_name: 'Dawn Platinum', categories_tags: ['en:dishwashing', 'en:detergents'] },
+    { code: 'u1', product_name: 'Untagged bottle', categories_tags: [] },
+  ]);
+  assert(!mixed.some(p => p.product_name === 'Dawn Platinum'), 'known household product excluded');
+  assert(!mixed.some(p => p.product_name === 'Untagged bottle'), 'untagged product not returned as food');
+
+  for (const q of ['cereal', 'yogurt']) {
+    const hits = await fetchHits(q);
+    const food = keepFood(hits);
+    assert(food.length > 0, q + ' must still return food results, got ' + food.length);
+    for (const p of food) {
+      assert(g.classifySearchProductType(p.categories_tags) === 'food', q + ' row not food');
+      const countries = p.countries_tags || [];
+      assert(countries.includes('en:united-states'),
+        q + ' result missing en:united-states: ' + p.product_name + ' ' + JSON.stringify(countries));
+    }
+  }
+
+  console.log('search food US filter ok');
+})().catch((err) => {
+  console.error(err && err.stack || err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"search food US filter assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def test_usda_food_lookup():
     """USDA+OFF merge: parallel abort-bounded lookup, field precedence, source string."""
     proc = subprocess.run(
@@ -6209,6 +6355,7 @@ def main() -> int:
         test_explain_version_mismatch_regenerates,
         test_food_explanation_copy,
         test_account_delete,
+        test_search_food_us_filter,
         test_usda_food_lookup,
         test_nutrition_subscore_validation,
     ]
