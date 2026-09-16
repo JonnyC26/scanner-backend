@@ -8,7 +8,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '15', 'SCAN_LOGIC_VERSION must be 15, got ' + logicMatch[1]);
+assert(logicMatch[1] === '16', 'SCAN_LOGIC_VERSION must be 16, got ' + logicMatch[1]);
 assert(!src.includes('default_off_ambiguous'), 'empty-tag food default must be removed');
 assert(!src.includes("cached.productType || 'food'"), 'cache hit must not coerce missing type to food');
 assert(!src.includes("responseData.productType || 'food'"), 'must not coerce missing productType to food');
@@ -533,7 +533,7 @@ const fettuccine = {
   assert(typeof scored.score === 'number' && scored.score !== null, 'merged food must score');
   assert(scored.productName === 'ORGANIC FETTUCCINE');
   assert(/ORGANIC DURUM WHEAT SEMOLINA/i.test(scored.ingredients), 'USDA ingredients displayed as-is');
-  assert(scored.scanLogicVersion === '15', 'logic version 15');
+  assert(scored.scanLogicVersion === '16', 'logic version 16');
 
   const offScored = await g.scanAndCacheFood('111', {
     product_name: 'Yogurt',
@@ -663,7 +663,7 @@ const fettuccine = {
   assert(highN.components.protein === 0, 'suppressed protein contributes 0');
 
   // --- Food-only gate ---
-  assert(g.SCAN_LOGIC_VERSION === '15', 'logic version 15');
+  assert(g.SCAN_LOGIC_VERSION === '16', 'logic version 16');
   assert(typeof g.routeResolvedScan === 'function', 'routeResolvedScan exported');
   assert(g.isExplicitFoodProductType('food') === true);
   assert(g.isExplicitFoodProductType('unsupported') === false);
@@ -683,9 +683,20 @@ const fettuccine = {
   assert(unsupportedPayload.score === null);
   assert(unsupportedPayload.scoreLabel === 'Food products only');
   assert(unsupportedPayload.explanation === 'Purla currently scores food products only.');
+  assert(typeof unsupportedPayload.ingredients === 'string', 'unsupported ingredients must be a string');
+  assert(unsupportedPayload.ingredients === 'Blue 1, red 33');
   assert(!/cosmetic/i.test(unsupportedPayload.explanation));
   assert(!/household/i.test(unsupportedPayload.explanation));
   assert(!/roadmap/i.test(unsupportedPayload.explanation));
+
+  const arrayRejected = g.buildUnsupportedScanResponse({
+    productName: 'Sunny Fruit',
+    ingredients: [{ id: 'en:plum', text: 'plums' }],
+  });
+  assert(typeof arrayRejected.ingredients === 'string', 'builder must not emit an ingredients array');
+  assert(arrayRejected.ingredients === '', 'structured ingredients array must not be stringified');
+  assert(!Array.isArray(JSON.parse(JSON.stringify(arrayRejected)).ingredients),
+    'JSON ingredients field must not be an array');
 
   // Known food still scores via food path.
   const knownFood = await g.routeResolvedScan('0099482431112', 'food', mergedBoth, { skipExplanation: true });
@@ -701,6 +712,8 @@ const fettuccine = {
   assert(gatedCosmetic.productType === 'unsupported', 'cosmetic routes to unsupported');
   assert(gatedCosmetic.score === null, 'cosmetic must not be scored');
   assert(gatedCosmetic.explanation === 'Purla currently scores food products only.');
+  assert(typeof gatedCosmetic.ingredients === 'string', 'cosmetic-gated ingredients must be a string');
+  assert(gatedCosmetic.ingredients === 'Aqua, Glycerin, Parfum');
 
   const gatedHousehold = await g.routeResolvedScan('0000000000001', 'household', {
     product_name: 'Dawn Ultra',
@@ -765,6 +778,47 @@ const fettuccine = {
   const hsRouted = await g.routeResolvedScan('0030772062791', hs.productType, hs.product, { skipExplanation: true });
   assert(hsRouted.productType === 'unsupported');
   assert(hsRouted.score === null);
+  assert(typeof hsRouted.ingredients === 'string', 'H&S ingredients must be a display string, got ' + typeof hsRouted.ingredients);
+  assert(hsRouted.ingredients === 'Blue 1, red 33', 'H&S must prefer ingredients_text, got ' + JSON.stringify(hsRouted.ingredients));
+  assert(!Array.isArray(JSON.parse(JSON.stringify(hsRouted)).ingredients),
+    'H&S JSON ingredients must be a string');
+
+  const sunnyOff = {
+    code: '0842515008474',
+    product_name: 'Organic Dried Plums',
+    brands: 'Sunny fruit',
+    ingredients_text: 'Organic dried plums, water.',
+    ingredients: [
+      { ciqual_food_code: '13100', id: 'en:plum', is_in_taxonomy: 1, text: 'plums' },
+      { ciqual_food_code: '18066', id: 'en:water', is_in_taxonomy: 1, text: 'water' },
+    ],
+    categories_tags: [],
+  };
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('api.nal.usda.gov')) {
+      return { ok: true, json: async () => ({ foods: [] }) };
+    }
+    if (u.includes('openfoodfacts')) {
+      return { ok: true, json: async () => ({ status: 1, product: sunnyOff }) };
+    }
+    if (u.includes('openbeautyfacts')) {
+      return { ok: true, json: async () => ({ status: 0 }) };
+    }
+    return { ok: false };
+  };
+  const sunny = await g.resolveProductType('0842515008474');
+  assert(sunny.productType === 'unsupported', 'Sunny Fruit empty tags → unsupported, got ' + sunny.productType);
+  const sunnyRouted = await g.routeResolvedScan('0842515008474', sunny.productType, sunny.product, { skipExplanation: true });
+  assert(sunnyRouted.productType === 'unsupported');
+  assert(sunnyRouted.scoreLabel === 'Food products only');
+  assert(typeof sunnyRouted.ingredients === 'string', 'Sunny Fruit ingredients must be a string, got ' + typeof sunnyRouted.ingredients);
+  assert(sunnyRouted.ingredients === 'Organic dried plums, water.',
+    'Sunny Fruit must prefer ingredients_text over the structured array, got ' + JSON.stringify(sunnyRouted.ingredients));
+  assert(!Array.isArray(JSON.parse(JSON.stringify(sunnyRouted)).ingredients),
+    'Sunny Fruit JSON ingredients must be a string');
+  assert(!/ciqual_food_code/.test(sunnyRouted.ingredients),
+    'must not stringify the structured ingredients array');
 
   const absentTags = { ...hsOff, code: '0030772062792' };
   delete absentTags.categories_tags;
