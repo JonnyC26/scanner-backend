@@ -5226,11 +5226,23 @@ assert(photoBody.includes("isFoodPhoto ? 'food' : 'unsupported'"),
     'detergents → household');
   assert(g.classifySearchProductType(['en:breads', 'en:plant-based-foods']) === 'food',
     'bread tags → food');
-  assert(g.classifySearchProductType(['en:undefined']) === 'food',
-    'search still treats en:undefined as food; the scan gate is separate');
+  assert(g.classifySearchProductType(['en:undefined']) !== 'food',
+    'en:undefined-only is not food evidence in search');
   assert(g.classifySearchProductType([]) !== 'food', 'empty tags are not food');
   assert(g.classifySearchProductType(undefined) !== 'food', 'missing tags are not food');
   assert(g.classifySearchProductType(null) !== 'food', 'null tags are not food');
+  assert(
+    g.classifySearchProductType(['en:undefined', 'en:yogurts']) === 'food',
+    'en:undefined is ignored; remaining food tag stays food'
+  );
+  assert(
+    g.classifySearchProductType(['en:yogurts', 'en:non-food-products']) !== 'food',
+    'explicit non-food veto wins over a food tag'
+  );
+  assert(
+    g.classifySearchProductType(['en:incorrect-product-type', 'en:non-food-products']) !== 'food',
+    'Lysol-style non-food type tags are not food'
+  );
 
   // Household wins when both present
   assert(
@@ -5265,10 +5277,13 @@ assert(photoBody.includes("isFoodPhoto ? 'food' : 'unsupported'"),
   const hh = searchScoreFor(['en:laundry-detergent']);
   assert(hh.productType === 'household' && hh.score === null, 'search household not scored');
   const food = searchScoreFor(['en:yogurts']);
-  assert(food.productType === 'food' && typeof food.score === 'number', 'search food scored');
+  assert(food.productType === 'food', 'search food enters scoring path');
   const unknown = searchScoreFor([]);
   assert(unknown.productType !== 'food' && unknown.score === null,
     'search untagged is not food and not scored');
+  const undefinedOnly = searchScoreFor(['en:undefined']);
+  assert(undefinedOnly.productType !== 'food' && undefinedOnly.score === null,
+    'en:undefined-only is omitted from food scoring');
 
   const kept = searchKeep([
     { code: '1', product_name: 'Shampoo', categories_tags: ['en:shampoos'] },
@@ -5277,10 +5292,21 @@ assert(photoBody.includes("isFoodPhoto ? 'food' : 'unsupported'"),
     { code: '4', product_name: 'No tags' },
     { code: '5', product_name: 'Cheerios', categories_tags: ['en:breakfast-cereals'] },
     { code: '6', product_name: 'Yogurt', categories_tags: ['en:yogurts'] },
+    { code: '7', product_name: 'Undefined only', categories_tags: ['en:undefined'] },
+    { code: '0019200008884', product_name: 'Lysol', categories_tags: ['en:incorrect-product-type', 'en:non-food-products'] },
+    { code: '8', product_name: 'Yogurt with undefined', categories_tags: ['en:undefined', 'en:yogurts'] },
+    { code: '9', product_name: 'Yogurt tagged non-food', categories_tags: ['en:yogurts', 'en:non-food-products'] },
   ], 20);
-  assert(kept.length === 2, 'search omits cosmetic, household, and untagged, got ' + kept.length);
-  assert(kept[0].product_name === 'Cheerios' && kept[1].product_name === 'Yogurt',
+  assert(kept.length === 3, 'search omits cosmetic, household, untagged, undefined-only, and non-food veto, got ' + kept.length);
+  assert(kept[0].product_name === 'Cheerios' && kept[1].product_name === 'Yogurt'
+    && kept[2].product_name === 'Yogurt with undefined',
     'search keeps affirmative food in original order');
+  assert(!kept.some(p => p.code === '0019200008884' || p.product_name === 'Lysol'),
+    'Lysol 0019200008884 is omitted from search');
+  assert(!kept.some(p => p.product_name === 'Undefined only'),
+    'en:undefined-only is omitted from search');
+  assert(!kept.some(p => p.product_name === 'Yogurt tagged non-food'),
+    'food tag plus en:non-food-products is omitted');
 
   const denseHits = [];
   for (let i = 0; i < 15; i++) denseHits.push({ code: String(i), product_name: 'Untagged ' + i, categories_tags: [] });
@@ -6272,9 +6298,13 @@ function keepFood(hits) {
     ...shampooHits,
     { code: 'hh1', product_name: 'Dawn Platinum', categories_tags: ['en:dishwashing', 'en:detergents'] },
     { code: 'u1', product_name: 'Untagged bottle', categories_tags: [] },
+    { code: 'u2', product_name: 'Undefined only', categories_tags: ['en:undefined'] },
+    { code: '0019200008884', product_name: 'Lysol', categories_tags: ['en:incorrect-product-type', 'en:non-food-products'] },
   ]);
   assert(!mixed.some(p => p.product_name === 'Dawn Platinum'), 'known household product excluded');
   assert(!mixed.some(p => p.product_name === 'Untagged bottle'), 'untagged product not returned as food');
+  assert(!mixed.some(p => p.product_name === 'Undefined only'), 'en:undefined-only omitted');
+  assert(!mixed.some(p => p.code === '0019200008884'), 'Lysol 0019200008884 omitted');
 
   for (const q of ['cereal', 'yogurt']) {
     const hits = await fetchHits(q);

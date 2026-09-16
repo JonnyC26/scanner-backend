@@ -22,6 +22,10 @@ assert(src.includes('off_non_food_category'), 'explicit non-food type tags must 
     src.indexOf('function attachProductSource')
   );
   assert(searchFn.includes("return 'food'"), 'search food classification must remain');
+  assert(searchFn.includes('tagIndicatesOffNonFoodProductType'),
+    'search must veto explicit non-food type tags');
+  assert(searchFn.includes('offCategoryTagsForFoodDecision'),
+    'search must ignore en:undefined the same way as the scan classifier');
   assert(!searchFn.includes('hasScorableFoodNutriments'),
     'search must not use the scan nutrition fallback');
 }

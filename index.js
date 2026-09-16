@@ -1977,14 +1977,16 @@ function hasExplicitOffFoodCategory(product) {
   return true;
 }
 
-// Search candidates: classify from OFF category tags only (no upstream fetch).
-// Household wins over cosmetic, matching resolveProductType.
-// Search is unchanged: empty, absent, or non-array tags are not food; remaining
-// non-household/non-cosmetic tags (including en:undefined) still classify food.
+// Search candidates: classify from OFF category tags only (no upstream fetch,
+// no nutrition fallback). Household wins over cosmetic, matching
+// resolveProductType. Explicit non-food type tags are not food. en:undefined
+// is ignored as category evidence; if nothing meaningful remains, omit.
 function classifySearchProductType(categoriesTags) {
-  const tags = Array.isArray(categoriesTags) ? categoriesTags : [];
-  if (tags.some(tagIndicatesHousehold)) return 'household';
-  if (tags.some(tagIndicatesCosmetic)) return 'cosmetic';
+  const raw = Array.isArray(categoriesTags) ? categoriesTags : [];
+  if (raw.some(tagIndicatesHousehold)) return 'household';
+  if (raw.some(tagIndicatesCosmetic)) return 'cosmetic';
+  if (raw.some(tagIndicatesOffNonFoodProductType)) return 'unsupported';
+  const tags = offCategoryTagsForFoodDecision({ categories_tags: raw });
   if (tags.length === 0) return null;
   return 'food';
 }
@@ -5479,8 +5481,9 @@ app.get('/search', async (req, res) => {
     }
     const data = await response.json();
 
-    // Affirmative food only: omit cosmetic, household, and untagged. Over-fetch
-    // then slice so post-filter does not return a sparse first page.
+    // Affirmative food only: omit cosmetic, household, untagged, en:undefined-only,
+    // and explicit non-food type tags. Over-fetch then slice so post-filter does
+    // not return a sparse first page.
     const products = (data.hits || data.products || [])
       .filter(p => p.code && p.product_name)
       .filter(p => classifySearchProductType(p.categories_tags) === 'food')
