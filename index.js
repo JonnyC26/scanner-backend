@@ -1948,11 +1948,14 @@ function hasExplicitOffFoodCategory(product) {
 }
 
 // Search candidates: classify from OFF category tags only (no upstream fetch).
-// Household wins over cosmetic, matching resolveProductType. No tags → food.
+// Household wins over cosmetic, matching resolveProductType.
+// Empty, absent, or non-array tags are not food — search requires the same
+// affirmative category evidence as hasExplicitOffFoodCategory.
 function classifySearchProductType(categoriesTags) {
   const tags = Array.isArray(categoriesTags) ? categoriesTags : [];
   if (tags.some(tagIndicatesHousehold)) return 'household';
   if (tags.some(tagIndicatesCosmetic)) return 'cosmetic';
+  if (tags.length === 0) return null;
   return 'food';
 }
 
@@ -5392,6 +5395,9 @@ app.get('/explain/:barcode', async (req, res) => {
   }
 });
 
+const SEARCH_RESULT_LIMIT = 20;
+const SEARCH_FETCH_PAGE_SIZE = 100;
+
 app.get('/search', async (req, res) => {
   if (!enforceIpRateLimit(req, res, '/search', RATE_LIMIT_SCAN_SEARCH_PER_IP)) return;
 
@@ -5416,7 +5422,12 @@ app.get('/search', async (req, res) => {
   }
 
   try {
-    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&fields=code,product_name,image_front_thumb_url,image_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,ingredients,labels_tags,nutriments,serving_quantity,ingredients_text,allergens_tags,traces_tags,categories_tags&page_size=20&json=1`;
+    // US-only + must have category tags. countries_tags:"en:united-states" is
+    // the Search-a-licious field (the Product Opener v2 country parameter is
+    // ignored here). categories_tags:* is an exists filter so untagged
+    // rows are dropped upstream instead of thinning the first page.
+    const searchQ = `${query} countries_tags:"en:united-states" categories_tags:*`;
+    const searchUrl = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(searchQ)}&fields=code,product_name,image_front_thumb_url,image_url,brands,quantity,nutriscore_grade,nova_group,additives_tags,ingredients,labels_tags,nutriments,serving_quantity,ingredients_text,allergens_tags,traces_tags,categories_tags&page_size=${SEARCH_FETCH_PAGE_SIZE}&json=1`;
     const response = await fetch(searchUrl);
     if (!response.ok) {
       console.error(`Search-a-licious returned ${response.status}`);
@@ -5424,8 +5435,12 @@ app.get('/search', async (req, res) => {
     }
     const data = await response.json();
 
+    // Affirmative food only: omit cosmetic, household, and untagged. Over-fetch
+    // then slice so post-filter does not return a sparse first page.
     const products = (data.hits || data.products || [])
       .filter(p => p.code && p.product_name)
+      .filter(p => classifySearchProductType(p.categories_tags) === 'food')
+      .slice(0, SEARCH_RESULT_LIMIT)
       .map(p => {
         const productType = classifySearchProductType(p.categories_tags);
         const nutriScore = p.nutriscore_grade;
@@ -5456,11 +5471,11 @@ app.get('/search', async (req, res) => {
           return { riskLevel: details?.riskLevel || 'safe' };
         });
 
-        // Cosmetic/household must not receive a Nutri-Score food score.
+        // Search returns food only. Score food rows; never score a leaked non-food hit.
         let score;
         let scoreColor;
         let scoreLabel;
-        if (productType === 'household' || productType === 'cosmetic') {
+        if (productType !== 'food') {
           score = null;
           scoreColor = '#9E9E9E';
           scoreLabel = 'Not enough data';
