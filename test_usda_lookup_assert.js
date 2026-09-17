@@ -8,11 +8,15 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '17', 'SCAN_LOGIC_VERSION must be 17, got ' + logicMatch[1]);
+assert(logicMatch[1] === '18', 'SCAN_LOGIC_VERSION must be 18, got ' + logicMatch[1]);
 assert(!src.includes('default_off_ambiguous'), 'empty-tag food default must be removed');
 assert(!src.includes("cached.productType || 'food'"), 'cache hit must not coerce missing type to food');
 assert(!src.includes("responseData.productType || 'food'"), 'must not coerce missing productType to food');
-assert(src.includes('routeResolvedScan'), 'scan routing helper must exist');
+assert(src.includes('notFoundErr.statusCode = 404'), 'true miss must stay HTTP 404');
+assert(src.includes("Product not found"), 'true miss error copy unchanged');
+assert(src.includes('unsupportedReason'), 'unsupported payload must carry unsupportedReason');
+assert(src.includes('unverified_product'), 'unverified_product must be an app-facing value');
+assert(src.includes('known_non_food'), 'known_non_food must be an app-facing value');
 assert(src.includes('buildUnsupportedScanResponse'), 'unsupported builder must exist');
 assert(src.includes('off_nutrition_facts'), 'OFF empty-tag nutrition fallback must exist');
 assert(src.includes('off_non_food_category'), 'explicit non-food type tags must veto');
@@ -151,6 +155,9 @@ module.exports = {
   applyDerivedNutrientZeros,
   calculateScore,
   getScoreBreakdown,
+  resolveOrganicStatus,
+  formatOrganicDisplay,
+  appFacingUnsupportedReason,
 };
 `;
 fs.writeFileSync('/tmp/usda_lookup_helpers.js', block);
@@ -562,7 +569,7 @@ const fettuccine = {
   assert(typeof scored.score === 'number' && scored.score !== null, 'merged food must score');
   assert(scored.productName === 'ORGANIC FETTUCCINE');
   assert(/ORGANIC DURUM WHEAT SEMOLINA/i.test(scored.ingredients), 'USDA ingredients displayed as-is');
-  assert(scored.scanLogicVersion === '17', 'logic version 17');
+  assert(scored.scanLogicVersion === '18', 'logic version 18');
 
   const offScored = await g.scanAndCacheFood('111', {
     product_name: 'Yogurt',
@@ -692,7 +699,7 @@ const fettuccine = {
   assert(highN.components.protein === 0, 'suppressed protein contributes 0');
 
   // --- Food-only gate ---
-  assert(g.SCAN_LOGIC_VERSION === '17', 'logic version 17');
+  assert(g.SCAN_LOGIC_VERSION === '18', 'logic version 18');
   assert(typeof g.routeResolvedScan === 'function', 'routeResolvedScan exported');
   assert(g.isExplicitFoodProductType('food') === true);
   assert(g.isExplicitFoodProductType('unsupported') === false);
@@ -723,6 +730,8 @@ const fettuccine = {
   assert(unsupportedPayload.score === null);
   assert(unsupportedPayload.scoreLabel === 'Food products only');
   assert(unsupportedPayload.explanation === 'Purla currently scores food products only.');
+  assert(unsupportedPayload.unsupportedReason === 'known_non_food',
+    'builder default is known_non_food');
   assert(typeof unsupportedPayload.ingredients === 'string', 'unsupported ingredients must be a string');
   assert(unsupportedPayload.ingredients === 'Blue 1, red 33');
   assert(!/cosmetic/i.test(unsupportedPayload.explanation));
@@ -748,10 +757,13 @@ const fettuccine = {
     product_name: 'Dove Whole Body Deodorant',
     ingredients_text: 'Aqua, Glycerin, Parfum',
     source: 'obf',
-  }, { skipExplanation: true });
+  }, { skipExplanation: true, reason: 'obf_only' });
   assert(gatedCosmetic.productType === 'unsupported', 'cosmetic routes to unsupported');
   assert(gatedCosmetic.score === null, 'cosmetic must not be scored');
+  assert(gatedCosmetic.unsupportedReason === 'known_non_food', 'cosmetic is known_non_food');
+  assert(gatedCosmetic.scoreLabel === 'Food products only');
   assert(gatedCosmetic.explanation === 'Purla currently scores food products only.');
+  assert(gatedCosmetic.unsupportedReason !== 'obf_only', 'must not expose internal reason');
   assert(typeof gatedCosmetic.ingredients === 'string', 'cosmetic-gated ingredients must be a string');
   assert(gatedCosmetic.ingredients === 'Aqua, Glycerin, Parfum');
 
@@ -759,9 +771,13 @@ const fettuccine = {
     product_name: 'Dawn Ultra',
     ingredients_text: 'Water, surfactants',
     source: 'off',
-  }, { skipExplanation: true });
+  }, { skipExplanation: true, reason: 'category_off' });
   assert(gatedHousehold.productType === 'unsupported', 'household routes to unsupported');
   assert(gatedHousehold.score === null);
+  assert(gatedHousehold.unsupportedReason === 'known_non_food', 'household is known_non_food');
+  assert(gatedHousehold.scoreLabel === 'Food products only');
+  assert(gatedHousehold.explanation === 'Purla currently scores food products only.');
+  assert(gatedHousehold.unsupportedReason !== 'category_off', 'must not expose internal reason');
 
   const gatedMissing = await g.routeResolvedScan('0000000000002', undefined, {
     product_name: 'Mystery',
@@ -781,7 +797,8 @@ const fettuccine = {
   });
   assert(missingCache.productType === 'unsupported', 'missing cache type → unsupported');
   assert(missingCache.score === null, 'missing cache type must not keep a food score');
-  assert(missingCache.explanation === 'Purla currently scores food products only.');
+  assert(missingCache.unsupportedReason === 'unverified_product',
+    'missing cache type is unverified, not known non-food');
 
   const foodCache = g.cachePayloadWithoutFoodCoercion({
     productType: 'food',
@@ -820,10 +837,18 @@ const fettuccine = {
   };
   const hs = await g.resolveProductType('0030772062791');
   assert(hs.productType === 'unsupported', 'Head & Shoulders empty tags → unsupported, got ' + hs.productType);
+  assert(hs.reason === 'no_affirmative_food', 'H&S classifier reason stays no_affirmative_food');
   assert(hs.product && hs.product.product_name.includes('Head & Shoulders'), 'still has the OFF record');
-  const hsRouted = await g.routeResolvedScan('0030772062791', hs.productType, hs.product, { skipExplanation: true });
+  const hsRouted = await g.routeResolvedScan('0030772062791', hs.productType, hs.product, {
+    skipExplanation: true,
+    reason: hs.reason,
+  });
   assert(hsRouted.productType === 'unsupported');
   assert(hsRouted.score === null);
+  assert(hsRouted.unsupportedReason === 'unverified_product', 'H&S is unverified, not known non-food');
+  assert(hsRouted.scoreLabel === 'Unable to verify this product');
+  assert(hsRouted.explanation === "Purla couldn't verify enough product data to determine whether this item can be scored.");
+  assert(hsRouted.unsupportedReason !== 'no_affirmative_food', 'must not expose internal reason');
   assert(typeof hsRouted.ingredients === 'string', 'H&S ingredients must be a display string, got ' + typeof hsRouted.ingredients);
   assert(hsRouted.ingredients === 'Blue 1, red 33', 'H&S must prefer ingredients_text, got ' + JSON.stringify(hsRouted.ingredients));
   assert(!Array.isArray(JSON.parse(JSON.stringify(hsRouted)).ingredients),
@@ -912,9 +937,16 @@ const fettuccine = {
   global.fetch = usdaMissOffFetch(lysolOff);
   const lysol = await g.resolveProductType('0019200008884');
   assert(lysol.productType === 'unsupported', 'Lysol non-food tags must veto, got ' + lysol.productType);
-  const lysolRouted = await g.routeResolvedScan('0019200008884', lysol.productType, lysol.product, { skipExplanation: true });
+  assert(lysol.reason === 'off_non_food_category', 'Lysol classifier reason stays off_non_food_category');
+  const lysolRouted = await g.routeResolvedScan('0019200008884', lysol.productType, lysol.product, {
+    skipExplanation: true,
+    reason: lysol.reason,
+  });
   assert(lysolRouted.productType === 'unsupported', 'Lysol must not be food after routing');
+  assert(lysolRouted.unsupportedReason === 'known_non_food');
   assert(lysolRouted.scoreLabel === 'Food products only');
+  assert(lysolRouted.explanation === 'Purla currently scores food products only.');
+  assert(lysolRouted.unsupportedReason !== 'off_non_food_category', 'must not expose internal reason');
 
   // Four en:undefined-only foods reach the nutrition fallback.
   const undefinedFoods = [
@@ -948,9 +980,12 @@ const fettuccine = {
   assert(cosmeticTagged.productType === 'cosmetic',
     'cosmetic tags must veto nutrition fallback, got ' + cosmeticTagged.productType);
   const cosmeticRouted = await g.routeResolvedScan(
-    '0303162062450', cosmeticTagged.productType, cosmeticTagged.product, { skipExplanation: true }
+    '0303162062450', cosmeticTagged.productType, cosmeticTagged.product,
+    { skipExplanation: true, reason: cosmeticTagged.reason }
   );
   assert(cosmeticRouted.productType === 'unsupported', 'cosmetic-tagged OFF record routes to unsupported');
+  assert(cosmeticRouted.unsupportedReason === 'known_non_food');
+  assert(cosmeticRouted.scoreLabel === 'Food products only');
 
   // Numeric 0 is a genuine nutrition fact when tags are empty.
   const zeroEnergy = {
@@ -1012,6 +1047,105 @@ const fettuccine = {
   const bothMissGate = await g.resolveProductType('0099482431112');
   assert(bothMissGate.productType === null && bothMissGate.product === null,
     'both-miss still null for photo capture');
+  assert(bothMissGate.reason === 'not_found');
+
+  // Dried Fruit & NUT Bread: accepted residue — OFF hit, no tags, no nutriments.
+  const breadOff = {
+    code: '0000000000456',
+    product_name: 'Dried Fruit & NUT Bread',
+    categories_tags: [],
+    nutriments: {},
+  };
+  global.fetch = usdaMissOffFetch(breadOff);
+  const bread = await g.resolveProductType('0000000000456');
+  assert(bread.productType === 'unsupported', 'bread residue stays unsupported, got ' + bread.productType);
+  assert(bread.reason === 'no_affirmative_food', 'classifier reason unchanged');
+  const breadRouted = await g.routeResolvedScan('0000000000456', bread.productType, bread.product, {
+    skipExplanation: true,
+    reason: bread.reason,
+  });
+  assert(breadRouted.productType === 'unsupported');
+  assert(breadRouted.unsupportedReason === 'unverified_product');
+  assert(breadRouted.scoreLabel === 'Unable to verify this product');
+  assert(breadRouted.explanation === "Purla couldn't verify enough product data to determine whether this item can be scored.");
+  assert(!Object.prototype.hasOwnProperty.call(breadRouted, 'reason')
+    || breadRouted.reason !== 'no_affirmative_food',
+    'API payload must not carry the internal classifier reason');
+
+  // Organic: en:organic → yes; anything else (including Non-GMO labels) → unknown.
+  assert(typeof g.resolveOrganicStatus === 'function', 'resolveOrganicStatus exported');
+  assert(g.resolveOrganicStatus(['en:organic']) === 'yes');
+  assert(g.formatOrganicDisplay('yes') === 'Yes');
+  assert(g.resolveOrganicStatus(['en:no-gmos']) === 'unknown',
+    'Non-GMO-only labels must not assert not-organic');
+  assert(g.formatOrganicDisplay(g.resolveOrganicStatus(['en:no-gmos'])) === 'Unknown');
+  assert(g.resolveOrganicStatus(['en:no-gmos', 'en:non-gmo-project']) === 'unknown',
+    'Barilla label set must be unknown');
+  assert(g.resolveOrganicStatus([]) === 'unknown');
+  assert(g.resolveOrganicStatus(null) === 'unknown');
+  assert(g.resolveOrganicStatus(undefined) === 'unknown');
+  assert(g.formatOrganicDisplay('no') === 'No', 'display helper still maps no → No');
+  const orgFn = src.slice(src.indexOf('function resolveOrganicStatus'), src.indexOf('function formatOrganicDisplay'));
+  assert(!orgFn.includes("return 'no'"), 'resolveOrganicStatus must not return no');
+
+  const barillaNutriments = {
+    'energy-kcal_100g': 357,
+    proteins_100g: 12.5,
+    sugars_100g: 3,
+    'saturated-fat_100g': 0.5,
+    sodium_100g: 0.01,
+    fat_100g: 2.68,
+    fiber_100g: 3,
+    carbohydrates_100g: 73.2,
+  };
+  const barillaFood = {
+    product_name: 'Thin Spaghetti',
+    brands: 'Barilla',
+    ingredients_text: 'Semolina, water.',
+    labels_tags: ['en:no-gmos', 'en:non-gmo-project'],
+    nutriscore_grade: 'a',
+    nova_group: 1,
+    additives_tags: [],
+    nutriments: barillaNutriments,
+  };
+  const barillaScored = await g.scanAndCacheFood('076808534139', barillaFood, { skipExplanation: true });
+  assert(barillaScored.isOrganic === 'Unknown', 'Barilla isOrganic must be Unknown, got ' + barillaScored.isOrganic);
+  const barillaBreakdown = JSON.parse(barillaScored.scoreBreakdown);
+  assert(barillaBreakdown.isOrganic === false, 'Barilla breakdown isOrganic false');
+  assert(barillaBreakdown.organicPts === 0, 'Barilla organicPts stay 0');
+  assert(typeof barillaScored.score === 'number', 'Barilla still scores');
+
+  const organicTwin = await g.scanAndCacheFood('076808534139', {
+    ...barillaFood,
+    product_name: 'Organic Thin Spaghetti',
+    labels_tags: ['en:organic'],
+  }, { skipExplanation: true });
+  assert(organicTwin.isOrganic === 'Yes', 'confirmed organic displays Yes');
+  const organicBreakdown = JSON.parse(organicTwin.scoreBreakdown);
+  assert(organicBreakdown.isOrganic === true);
+  assert(organicBreakdown.organicPts === 10, 'organic points still awarded');
+  assert(organicTwin.score === barillaScored.score + 10,
+    'organic bonus is +10 vs unknown; scores otherwise identical: '
+    + organicTwin.score + ' vs ' + barillaScored.score);
+
+  const emptyLabels = await g.scanAndCacheFood('076808534139', {
+    ...barillaFood,
+    labels_tags: [],
+  }, { skipExplanation: true });
+  assert(emptyLabels.isOrganic === 'Unknown', 'empty labels_tags stay Unknown');
+  assert(emptyLabels.score === barillaScored.score, 'empty vs Non-GMO labels must not change the score');
+
+  const noGmoOnly = await g.scanAndCacheFood('076808534139', {
+    ...barillaFood,
+    labels_tags: ['en:no-gmos'],
+  }, { skipExplanation: true });
+  assert(noGmoOnly.isOrganic === 'Unknown', 'en:no-gmos alone is Unknown');
+  assert(noGmoOnly.score === barillaScored.score);
+
+  assert(g.appFacingUnsupportedReason('unsupported', 'no_affirmative_food') === 'unverified_product');
+  assert(g.appFacingUnsupportedReason('unsupported', 'off_non_food_category') === 'known_non_food');
+  assert(g.appFacingUnsupportedReason('household', 'category_off') === 'known_non_food');
+  assert(g.appFacingUnsupportedReason('cosmetic', 'obf_only') === 'known_non_food');
 
   if (prevKey === undefined) delete process.env.USDA_API_KEY;
   else process.env.USDA_API_KEY = prevKey;

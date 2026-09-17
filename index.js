@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '17';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '18';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -960,6 +960,22 @@ function buildHouseholdScanResponse({
 // Fixed copy for products that are not food. No cosmetics, roadmap, or coverage.
 const UNSUPPORTED_EXPLANATION =
   "Purla currently scores food products only.";
+const UNVERIFIED_EXPLANATION =
+  "Purla couldn't verify enough product data to determine whether this item can be scored.";
+const UNVERIFIED_SCORE_LABEL = 'Unable to verify this product';
+
+// App-facing unsupported reasons only. Internal classifier strings
+// (off_non_food_category, category_off, obf_only, …) stay off the wire.
+function appFacingUnsupportedReason(productType, reason) {
+  if (reason === 'no_affirmative_food') return 'unverified_product';
+  if (productType === 'household' || productType === 'cosmetic') return 'known_non_food';
+  if (reason === 'off_non_food_category') return 'known_non_food';
+  return 'unverified_product';
+}
+
+function normalizeUnsupportedReason(value) {
+  return value === 'unverified_product' ? 'unverified_product' : 'known_non_food';
+}
 
 function buildUnsupportedScanResponse({
   productName = 'Unknown Product',
@@ -967,6 +983,9 @@ function buildUnsupportedScanResponse({
   ingredients = '',
   extras = {},
 } = {}) {
+  const unsupportedReason = normalizeUnsupportedReason(extras.unsupportedReason);
+  const unverified = unsupportedReason === 'unverified_product';
+  const { unsupportedReason: _dropReason, ...restExtras } = extras;
   return {
     productType: 'unsupported',
     productName,
@@ -1001,10 +1020,10 @@ function buildUnsupportedScanResponse({
       coverage: 0,
     }),
     alternatives: JSON.stringify([]),
-    explanation: UNSUPPORTED_EXPLANATION,
+    explanation: unverified ? UNVERIFIED_EXPLANATION : UNSUPPORTED_EXPLANATION,
     scoreColor: '#9E9E9E',
     imageUrl,
-    scoreLabel: 'Food products only',
+    scoreLabel: unverified ? UNVERIFIED_SCORE_LABEL : 'Food products only',
     coverageMatched: 0,
     coverageTotal: 0,
     assessedCount: 0,
@@ -1015,7 +1034,8 @@ function buildUnsupportedScanResponse({
     ingredientList: JSON.stringify([]),
     tableVersion: COSMETIC_TABLE_VERSION,
     scanLogicVersion: SCAN_LOGIC_VERSION,
-    ...extras,
+    unsupportedReason,
+    ...restExtras,
   };
 }
 
@@ -1024,8 +1044,13 @@ function isExplicitFoodProductType(productType) {
 }
 
 function unsupportedScanFromRecord(record, extras = {}) {
+  const fromRecord = record && record.unsupportedReason;
+  const extrasWithReason = {
+    ...(fromRecord ? { unsupportedReason: fromRecord } : {}),
+    ...extras,
+  };
   if (!record || typeof record !== 'object') {
-    return buildUnsupportedScanResponse({ extras });
+    return buildUnsupportedScanResponse({ extras: extrasWithReason });
   }
   return buildUnsupportedScanResponse({
     productName: record.productName || record.product_name || 'Unknown Product',
@@ -1036,7 +1061,7 @@ function unsupportedScanFromRecord(record, extras = {}) {
       ...(record.photoParsedCount != null ? { photoParsedCount: record.photoParsedCount } : {}),
       ...(record.photoCapturedAt != null ? { photoCapturedAt: record.photoCapturedAt } : {}),
       ...(record.photoCapturedBy != null ? { photoCapturedBy: record.photoCapturedBy } : {}),
-      ...extras,
+      ...extrasWithReason,
     },
   });
 }
@@ -1047,7 +1072,9 @@ function cachePayloadWithoutFoodCoercion(cached) {
   const { cachedAt, ...responseData } = cached;
   if (isExplicitFoodProductType(responseData.productType)) return responseData;
   if (responseData.productType === 'unsupported') return responseData;
-  return unsupportedScanFromRecord(responseData);
+  return unsupportedScanFromRecord(responseData, {
+    unsupportedReason: appFacingUnsupportedReason(responseData.productType, null),
+  });
 }
 
 // Fixed copy when a food label is photographed — ingredients alone cannot score food.
@@ -2187,11 +2214,11 @@ async function resolveProductType(barcode) {
         `[LOOKUP FIELDS] barcode=${barcode} name=usda brand=usda ingredients=usda nutrition=usda additives=none allergens=none nutriscore=none nova=none image=none`
       );
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda`);
-      return { productType: 'food', product: usdaProduct };
+      return { productType: 'food', product: usdaProduct, reason: 'usda' };
     }
     const merged = mergeUsdaAndOffProducts(barcode, usdaProduct, foodProduct);
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda_off_merge`);
-    return { productType: 'food', product: merged };
+    return { productType: 'food', product: merged, reason: 'usda_off_merge' };
   }
 
   if (!foodProduct) {
@@ -2205,15 +2232,15 @@ async function resolveProductType(barcode) {
     }
     if (cosmeticProduct) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=obf_only`);
-      return { productType: 'cosmetic', product: cosmeticProduct };
+      return { productType: 'cosmetic', product: cosmeticProduct, reason: 'obf_only' };
     }
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=null reason=not_found`);
-    return { productType: null, product: null };
+    return { productType: null, product: null, reason: 'not_found' };
   }
 
   if (hasHouseholdCategory(foodProduct)) {
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=household reason=category_off`);
-    return { productType: 'household', product: foodProduct };
+    return { productType: 'household', product: foodProduct, reason: 'category_off' };
   }
 
   const offCosmeticCategory = hasCosmeticCategory(foodProduct);
@@ -2235,19 +2262,19 @@ async function resolveProductType(barcode) {
         ? 'category_no_nutriments_obf_ingredients'
         : 'category_obf_ingredients';
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=${reason}`);
-      return { productType: 'cosmetic', product: cosmeticProduct };
+      return { productType: 'cosmetic', product: cosmeticProduct, reason };
     }
     if (cosmeticProduct) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=category_obf_record`);
-      return { productType: 'cosmetic', product: cosmeticProduct };
+      return { productType: 'cosmetic', product: cosmeticProduct, reason: 'category_obf_record' };
     }
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=category_off_as_cosmetic`);
-    return { productType: 'cosmetic', product: foodProduct };
+    return { productType: 'cosmetic', product: foodProduct, reason: 'category_off_as_cosmetic' };
   }
 
   if (hasOffNonFoodProductTypeCategory(foodProduct)) {
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=unsupported reason=off_non_food_category`);
-    return { productType: 'unsupported', product: foodProduct };
+    return { productType: 'unsupported', product: foodProduct, reason: 'off_non_food_category' };
   }
 
   if (hasExplicitOffFoodCategory(foodProduct)) {
@@ -2255,7 +2282,7 @@ async function resolveProductType(barcode) {
       `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
     );
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=off_food_category`);
-    return { productType: 'food', product: foodProduct };
+    return { productType: 'food', product: foodProduct, reason: 'off_food_category' };
   }
 
   if (hasScorableFoodNutriments(foodProduct.nutriments)) {
@@ -2263,11 +2290,11 @@ async function resolveProductType(barcode) {
       `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
     );
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=off_nutrition_facts`);
-    return { productType: 'food', product: foodProduct };
+    return { productType: 'food', product: foodProduct, reason: 'off_nutrition_facts' };
   }
 
   console.log(`[PRODUCT TYPE] barcode=${barcode} type=unsupported reason=no_affirmative_food`);
-  return { productType: 'unsupported', product: foodProduct };
+  return { productType: 'unsupported', product: foodProduct, reason: 'no_affirmative_food' };
 }
 
 function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, barcode, nutriments, foodCategory) {
@@ -2541,12 +2568,14 @@ function computeNutritionSubscore(nutriments, foodCategory) {
   };
 }
 
-// OFF labels_tags is crowd-entered and often absent. Empty/missing is
-// "unknown", not "not organic". Never infer from the product name.
+// OFF labels_tags is crowd-entered and often absent. Only an explicit
+// en:organic tag is "yes". Anything else — empty, missing, or unrelated
+// labels such as Non-GMO — is "unknown", not "not organic".
+// Never infer from the product name. formatOrganicDisplay still maps
+// 'no' → "No" if an explicit non-organic signal is added later.
 function resolveOrganicStatus(labelsTags) {
-  if (!Array.isArray(labelsTags) || labelsTags.length === 0) return 'unknown';
-  if (labelsTags.includes('en:organic')) return 'yes';
-  return 'no';
+  if (Array.isArray(labelsTags) && labelsTags.includes('en:organic')) return 'yes';
+  return 'unknown';
 }
 
 // Display-cased values for the Organic row — shipped app builds render this
@@ -3513,10 +3542,11 @@ function explanationForUnscoredFood(cached) {
 const COSMETIC_NO_EXPLANATION =
   "We couldn't summarise this product's ingredients.";
 
-function fallbackExplanationForProductType(productType) {
+function fallbackExplanationForProductType(productType, cached) {
   if (productType === 'food') return FOOD_NO_INGREDIENTS_EXPLANATION;
   if (productType === 'household') return HOUSEHOLD_EXPLANATION;
   if (productType === 'cosmetic') return COSMETIC_NO_EXPLANATION;
+  if (cached && cached.unsupportedReason === 'unverified_product') return UNVERIFIED_EXPLANATION;
   return UNSUPPORTED_EXPLANATION;
 }
 
@@ -3592,7 +3622,9 @@ async function generateExplanationFromCached(cached) {
         scoreBreakdown: breakdown,
       }, cached.ingredients || '');
     }
-    return UNSUPPORTED_EXPLANATION;
+    return cached.unsupportedReason === 'unverified_product'
+      ? UNVERIFIED_EXPLANATION
+      : UNSUPPORTED_EXPLANATION;
   }
 
   // Food — null score: photo rescue, incomplete subscore, or no nutrition at all.
@@ -3703,7 +3735,7 @@ function ensureExplanation(barcode, cached) {
       let explanation = await generateExplanationFromCached(cached);
       if (!hasUsableExplanation({ explanation })) {
         console.log(`[EXPLAIN UNUSABLE] barcode=${barcode} excerpt=${String(explanation || '').slice(0, 120)}`);
-        explanation = fallbackExplanationForProductType(cached && cached.productType);
+        explanation = fallbackExplanationForProductType(cached && cached.productType, cached);
       }
       try {
         await db.collection(CACHE_COLLECTION).doc(barcode).set({
@@ -4051,11 +4083,13 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
 // Food scoring only for explicit productType === 'food'. Cosmetic and household
 // resolve types, missing types, and unsupported all return the unsupported
 // payload — scanAndCacheCosmetic / scanAndCacheHousehold are not called.
-async function routeResolvedScan(barcode, productType, product, { skipExplanation = false } = {}) {
+async function routeResolvedScan(barcode, productType, product, { skipExplanation = false, reason = null } = {}) {
   if (isExplicitFoodProductType(productType) && product) {
     return scanAndCacheFood(barcode, product, { skipExplanation });
   }
-  return unsupportedScanFromRecord(product || {});
+  return unsupportedScanFromRecord(product || {}, {
+    unsupportedReason: appFacingUnsupportedReason(productType, reason),
+  });
 }
 
 // Photo-rescued cache docs have no upstream to re-fetch from. Re-score from
@@ -4103,6 +4137,8 @@ function rescorePhotoCachedDocument(cached) {
       photoParsedCount: cached.photoParsedCount,
       photoCapturedAt: cached.photoCapturedAt,
       photoCapturedBy: cached.photoCapturedBy,
+      unsupportedReason: cached.unsupportedReason
+        || appFacingUnsupportedReason(cached && cached.productType, null),
     },
   });
   return { responseData: unsupported, scored: scoredStub, unmatchedNames: [] };
@@ -4264,7 +4300,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
                   barcode,
                   resolved.productType,
                   resolved.product,
-                  { skipExplanation }
+                  { skipExplanation, reason: resolved.reason }
                 );
 
                 // Same unscoreable rule as [PHOTO CACHE REPLACED UNSCOREABLE],
@@ -4376,14 +4412,17 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
 
   let responseData;
   try {
-    const { productType, product } = await resolveProductType(barcode);
+    const { productType, product, reason: classificationReason } = await resolveProductType(barcode);
     if (!product) {
       const notFoundErr = new Error('Product not found');
       notFoundErr.statusCode = 404;
       throw notFoundErr;
     }
 
-    responseData = await routeResolvedScan(barcode, productType, product, { skipExplanation });
+    responseData = await routeResolvedScan(barcode, productType, product, {
+      skipExplanation,
+      reason: classificationReason,
+    });
   } catch (refreshErr) {
     // Stale beats nothing: a slightly old answer is better than a false 404
     // (photo-rescued products, OFF/OBF outages, network errors).
@@ -4856,6 +4895,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
     // Classify when a barcode is supplied — never assume cosmetic for known foods.
     // No barcode / unknown barcode is unsupported (food-only gate).
     let resolvedType = null;
+    let resolvedReason = null;
     let upstreamProduct = null;
     let productName = '';
     let imageUrl = '';
@@ -4863,6 +4903,7 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
       try {
         const resolved = await resolveProductType(String(normalizedBarcode));
         resolvedType = resolved.productType || null;
+        resolvedReason = resolved.reason || null;
         upstreamProduct = resolved.product || null;
         if (upstreamProduct) {
           const upstreamName = String(upstreamProduct.product_name || '').trim();
@@ -4984,7 +5025,10 @@ app.post('/scan/photo', photoJsonParser, async (req, res) => {
         productName,
         imageUrl,
         ingredients: ingredientsText,
-        extras: photoExtras,
+        extras: {
+          ...photoExtras,
+          unsupportedReason: appFacingUnsupportedReason(resolvedType, resolvedReason),
+        },
       });
     }
 
