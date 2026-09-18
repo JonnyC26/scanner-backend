@@ -3019,7 +3019,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '18', 'SCAN_LOGIC_VERSION must be 18, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '19', 'SCAN_LOGIC_VERSION must be 19, got ' + SCAN_LOGIC_VERSION);
 assert(src.includes('explanationForUnscoredFood(cached)'),
   'generateExplanationFromCached must use explanationForUnscoredFood');
 assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'),
@@ -3070,6 +3070,7 @@ async function getCategoryAlternatives() { return []; }
 async function generateFoodExplanation() {
   throw new Error('Haiku must not be called');
 }
+function foodExplanationScoringContext() { return {}; }
 const additiveMap = {};
 const additiveDetails = {};
 const SCAN_LOGIC_VERSION = '${SCAN_LOGIC_VERSION}';
@@ -3101,7 +3102,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '18', 'exported SCAN_LOGIC_VERSION must be 18');
+assert(g.SCAN_LOGIC_VERSION === '19', 'exported SCAN_LOGIC_VERSION must be 19');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3158,7 +3159,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '18', 'normal food stamps logic version 18');
+  assert(result.scanLogicVersion === '19', 'normal food stamps logic version 19');
   assert(result.protein != null, 'scored food keeps protein display');
   assert(result.scoreBasis === 'per100g', 'scored food keeps scoreBasis');
 }
@@ -3260,7 +3261,7 @@ assert(g.nutritionReasonFromCachedBreakdown({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '18', 'Dawn stamps logic version 18');
+  assert(result.scanLogicVersion === '19', 'Dawn stamps logic version 19');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3326,7 +3327,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '18', 'SCAN_LOGIC_VERSION must be 18, got ' + logicMatch[1]);
+assert(logicMatch[1] === '19', 'SCAN_LOGIC_VERSION must be 19, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -3997,7 +3998,7 @@ assert(isCacheFresh({
   scanLogicVersion: '0',
 }, now) === false, 'mismatched scanLogicVersion must be stale');
 
-assert(g.SCAN_LOGIC_VERSION === '18', 'SCAN_LOGIC_VERSION must be 18 after nutrition-fallback food gate');
+assert(g.SCAN_LOGIC_VERSION === '19', 'SCAN_LOGIC_VERSION must be 19 after food-explanation scoring-context change');
 assert(isCacheFresh({
   productType: 'food',
   cachedAt: now - 1000,
@@ -4023,6 +4024,12 @@ assert(g.buildFoodExplanationPromptSource.includes('Never use first-person singu
   'food prompt must ban first-person singular');
 assert(g.buildFoodExplanationPromptSource.includes('Write at most 3 complete sentences'),
   'food prompt must cap length at 3 sentences');
+assert(g.buildFoodExplanationPromptSource.includes("Purla's nutrition component of this score"),
+  'food prompt must steer from Purla nutrition component');
+assert(!g.buildFoodExplanationPromptSource.includes('middling'),
+  'food prompt must not use default-C middling guidance');
+assert(!/Nutri-Score/i.test(g.buildFoodExplanationPromptSource),
+  'food prompt must not mention Nutri-Score');
 
 console.log('phase0 batch c ok');
 })().catch((err) => {
@@ -4059,7 +4066,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '18', 'SCAN_LOGIC_VERSION must be 18, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '19', 'SCAN_LOGIC_VERSION must be 19, got ' + SCAN_LOGIC_VERSION);
 
 assert(src.includes('computeNutritionSubscore'), 'must compute a USDA nutrition subscore');
 assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'), 'must log unavailable nutrition subscore');
@@ -4113,7 +4120,11 @@ const path = require('path');
 const __cosmeticDir = process.cwd();
 function recordRawObservation() {}
 async function getCategoryAlternatives() { return []; }
-async function requestFoodExplanation(prompt) { return 'We noted the numbers in the data.'; }
+const capturedPrompts = [];
+async function requestFoodExplanation(prompt) {
+  capturedPrompts.push(prompt);
+  return 'We noted the numbers in the data.';
+}
 function hasUsableIngredientText(text) {
   const t = String(text || '').trim();
   if (!t) return false;
@@ -4142,8 +4153,10 @@ module.exports = {
   calculateScore,
   getScoreBreakdown,
   buildFoodExplanationPrompt,
+  foodExplanationScoringContext,
   generateFoodExplanation,
   scanAndCacheFood,
+  capturedPrompts,
   SCAN_LOGIC_VERSION,
 };
 `;
@@ -4232,7 +4245,7 @@ function loggedNutritionUnavailable(barcode) {
     sugar: '12g', sodium: '800mg', protein: '4g',
     sugarTier: 'medium', sodiumTier: 'high',
     additivesPhrase: '0 additives', isOrganic: 'unknown',
-    novaGroup: 4, ingredients: 'Oats', nutriScoreGrade: 'c',
+    novaGroup: 4, ingredients: 'Oats', nutriPts: 40, nutriMax: 60,
     basisLabel: 'per 100g',
   });
   assert(prompt.includes('per 100g'), 'prompt labels per 100g when serving unknown');
@@ -4351,7 +4364,8 @@ function loggedNutritionUnavailable(barcode) {
     isOrganic: 'no',
     novaGroup: 4,
     ingredients: 'Oats, sugar',
-    nutriScoreGrade: 'c',
+    nutriPts: 40,
+    nutriMax: 60,
     basisLabel: 'per serving',
   });
   // generateFoodExplanation returns model text; check the prompt builder instead
@@ -4359,7 +4373,7 @@ function loggedNutritionUnavailable(barcode) {
     sugar: '15g', sodium: '500mg', protein: '10g',
     sugarTier: 'medium', sodiumTier: 'medium', proteinTier: 'high',
     additivesPhrase: '0 additives', isOrganic: 'no',
-    novaGroup: 4, ingredients: 'Oats', nutriScoreGrade: 'c',
+    novaGroup: 4, ingredients: 'Oats', nutriPts: 40, nutriMax: 60,
     basisLabel: 'per serving',
   });
   assert(built.includes('per serving'), 'serving basis labeled per serving');
@@ -4402,7 +4416,8 @@ function loggedNutritionUnavailable(barcode) {
     isOrganic: 'no',
     novaGroup: 4,
     ingredients: 'Oats',
-    nutriScoreGrade: 'c',
+    nutriPts: 40,
+    nutriMax: 60,
     basisLabel: 'per serving',
   });
   assert(omitPrompt.includes('sugar 4g per serving (low tier)'), 'known sugar kept in prompt');
@@ -4424,13 +4439,183 @@ function loggedNutritionUnavailable(barcode) {
     isOrganic: 'no',
     novaGroup: 4,
     ingredients: 'Salt',
-    nutriScoreGrade: 'd',
+    nutriPts: 18,
+    nutriMax: 60,
     basisLabel: 'per serving',
   });
   const naDataLine = naPrompt.split('\n').find(l => l.startsWith('Product data:'));
   assert(naDataLine.includes('sodium 500mg per serving (medium tier)'), 'known sodium kept');
   assert(!/\bsugar\b/.test(naDataLine), 'N/A sugar omitted from Product data');
   assert(!/\bprotein\b/.test(naDataLine), 'N/A protein omitted from Product data');
+}
+
+// 7. Food explanation is steered by Purla nutriPts, not OFF Nutri-Score
+{
+  const promptSrc = src.slice(
+    src.indexOf('function buildFoodExplanationPrompt'),
+    src.indexOf('async function requestFoodExplanation')
+  );
+  assert(promptSrc.includes("Purla's nutrition component of this score"),
+    'prompt must identify Purla nutrition component');
+  assert(!promptSrc.includes('nutriScoreGrade'),
+    'prompt builder must not read nutriScoreGrade');
+  assert(!promptSrc.includes("|| 'c'"),
+    'must not default missing OFF grade to C');
+  assert(!promptSrc.includes("grade === 'd'") && !promptSrc.includes("grade === 'e'"),
+    'must not branch on OFF letter grades');
+  assert(!/middling/i.test(promptSrc), 'must not classify nutrition as middling');
+  assert(!/relatively strong/i.test(promptSrc), 'must not classify nutrition as relatively strong');
+  assert(!/nutriPts\s*[<>]=?/.test(promptSrc),
+    'must not introduce nutriPts thresholds');
+  assert(!/Nutri-Score/i.test(promptSrc),
+    'prompt must not mention Nutri-Score');
+
+  const liveFn = src.slice(
+    src.indexOf('async function scanAndCacheFood'),
+    src.indexOf('// Photo-rescued cache docs have no upstream')
+  );
+  assert(liveFn.includes('foodExplanationScoringContext(scoreBreakdown)'),
+    'live scan must pass Purla scoring context from scoreBreakdown');
+  assert(!liveFn.includes('nutriScoreGrade: nutriScore'),
+    'live scan must not pass OFF grade into the explanation prompt');
+
+  const rebuildFn = src.slice(
+    src.indexOf('async function generateExplanationFromCached'),
+    src.indexOf('function hasUsableExplanation')
+  );
+  assert(rebuildFn.includes('foodExplanationScoringContext(breakdown)'),
+    'rebuild must pass Purla scoring context from cached scoreBreakdown');
+  assert(!rebuildFn.includes("|| 'c'"),
+    'rebuild must not default missing OFF grade to C');
+  assert(!rebuildFn.includes('nutriScoreGrade'),
+    'rebuild must not steer explanations with nutriScoreGrade');
+
+  const oatsNutriments = {
+    'energy-kcal_100g': 379,
+    proteins_100g: 13.2,
+    sugars_100g: 0.8,
+    sodium_100g: 0.002,
+    fat_100g: 6.5,
+    'saturated-fat_100g': 1.1,
+    fiber_100g: 10.1,
+  };
+  const chocolateNutriments = {
+    'energy-kcal_100g': 530,
+    proteins_100g: 7.3,
+    sugars_100g: 56,
+    sodium_100g: 0.18,
+    fat_100g: 30,
+    'saturated-fat_100g': 18,
+    fiber_100g: 2.1,
+  };
+
+  g.capturedPrompts.length = 0;
+  const usdaOnly = await g.scanAndCacheFood('usda-oats', {
+    product_name: 'Rolled Oats',
+    ingredients_text: 'Whole grain oats',
+    source: 'usda',
+    nutriments: oatsNutriments,
+    additives_tags: [],
+    labels_tags: [],
+  }, { skipExplanation: false });
+  assert(usdaOnly.nutriScore == null, 'USDA-only product has no OFF grade');
+  const usdaPrompt = g.capturedPrompts[g.capturedPrompts.length - 1];
+  assert(usdaPrompt, 'USDA-only scan must call Haiku');
+  const usdaBreakdown = JSON.parse(usdaOnly.scoreBreakdown);
+  assert(typeof usdaBreakdown.nutriPts === 'number' && usdaBreakdown.nutriPts > 40,
+    'oats fixture must have a strong Purla nutrition component, got ' + usdaBreakdown.nutriPts);
+  assert(usdaPrompt.includes(usdaBreakdown.nutriPts + ' out of 60'),
+    'prompt must include Purla nutriPts out of 60');
+  assert(!/middling/i.test(usdaPrompt), 'USDA-only strong subscore must not be described as middling');
+  assert(!/Nutri-Score/i.test(usdaPrompt), 'USDA-only prompt must not mention Nutri-Score');
+  assert(!/nutritional grade behind most/i.test(usdaPrompt),
+    'must not claim an OFF grade is behind most of the score');
+
+  g.capturedPrompts.length = 0;
+  const noGrade = await g.scanAndCacheFood('same-inputs-a', {
+    product_name: 'Yogurt',
+    ingredients_text: 'Milk',
+    nutriments: oatsNutriments,
+    additives_tags: [],
+    labels_tags: [],
+  }, { skipExplanation: false });
+  const promptNoGrade = g.capturedPrompts[g.capturedPrompts.length - 1];
+  g.capturedPrompts.length = 0;
+  const gradeE = await g.scanAndCacheFood('same-inputs-e', {
+    product_name: 'Yogurt',
+    ingredients_text: 'Milk',
+    nutriscore_grade: 'e',
+    nutriments: oatsNutriments,
+    additives_tags: [],
+    labels_tags: [],
+  }, { skipExplanation: false });
+  const promptGradeE = g.capturedPrompts[g.capturedPrompts.length - 1];
+  const scoreLine = (p) => (p.split('\n').find(l => l.startsWith('Score context:')) || '');
+  assert(scoreLine(promptNoGrade) === scoreLine(promptGradeE),
+    'changing only nutriscore_grade must not change Score context');
+  assert(JSON.stringify(g.foodExplanationScoringContext(JSON.parse(noGrade.scoreBreakdown))) ===
+    JSON.stringify(g.foodExplanationScoringContext(JSON.parse(gradeE.scoreBreakdown))),
+    'Purla scoring context must ignore legacy nutriScoreGrade');
+  assert(!('nutriScoreGrade' in g.foodExplanationScoringContext(JSON.parse(gradeE.scoreBreakdown))),
+    'scoring context must not include nutriScoreGrade');
+
+  const liveCtx = g.foodExplanationScoringContext(JSON.parse(usdaOnly.scoreBreakdown));
+  const rebuildCtx = g.foodExplanationScoringContext(
+    typeof usdaOnly.scoreBreakdown === 'string'
+      ? JSON.parse(usdaOnly.scoreBreakdown)
+      : usdaOnly.scoreBreakdown
+  );
+  assert(JSON.stringify(liveCtx) === JSON.stringify(rebuildCtx),
+    'live payload and cached breakdown must yield identical Purla scoring context');
+  assert(liveCtx.nutriPts === usdaBreakdown.nutriPts && liveCtx.nutriMax === 60,
+    'context nutriPts/nutriMax come from scoreBreakdown');
+
+  const strongPrompt = g.buildFoodExplanationPrompt({
+    sugar: '0.8g', sodium: '2mg', protein: '13.2g',
+    sugarTier: 'low', sodiumTier: 'low', proteinTier: 'high',
+    additivesPhrase: '0 additives', isOrganic: 'unknown',
+    novaGroup: null, ingredients: 'Oats',
+    nutriPts: usdaBreakdown.nutriPts, nutriMax: 60,
+    basisLabel: 'per 100g',
+  });
+  g.capturedPrompts.length = 0;
+  const chocolate = await g.scanAndCacheFood('chocolate-weak', {
+    product_name: 'Milk Chocolate',
+    ingredients_text: 'Sugar, cocoa butter',
+    nutriscore_grade: 'a',
+    nutriments: chocolateNutriments,
+    additives_tags: [],
+    labels_tags: [],
+  }, { skipExplanation: false });
+  const chocolatePrompt = g.capturedPrompts[g.capturedPrompts.length - 1];
+  const chocolateBreakdown = JSON.parse(chocolate.scoreBreakdown);
+  assert(typeof chocolateBreakdown.nutriPts === 'number' && chocolateBreakdown.nutriPts < usdaBreakdown.nutriPts,
+    'chocolate nutrition component must be weaker than oats');
+  assert(chocolatePrompt.includes(chocolateBreakdown.nutriPts + ' out of 60'),
+    'weak-subscore prompt must include its Purla component');
+  assert(scoreLine(strongPrompt) !== scoreLine(chocolatePrompt),
+    'different Purla components must produce different Score context');
+  assert(!/Nutri-Score/i.test(chocolatePrompt),
+    'OFF grade A must not inject Nutri-Score wording into a weak-subscore prompt');
+
+  const gradeIgnoredA = g.buildFoodExplanationPrompt({
+    sugar: '0.8g', sodium: '2mg', protein: '13.2g',
+    sugarTier: 'low', sodiumTier: 'low', proteinTier: 'high',
+    additivesPhrase: '0 additives', isOrganic: 'unknown',
+    novaGroup: null, ingredients: 'Oats',
+    nutriPts: 48, nutriMax: 60, nutriScoreGrade: 'a',
+    basisLabel: 'per 100g',
+  });
+  const gradeIgnoredE = g.buildFoodExplanationPrompt({
+    sugar: '0.8g', sodium: '2mg', protein: '13.2g',
+    sugarTier: 'low', sodiumTier: 'low', proteinTier: 'high',
+    additivesPhrase: '0 additives', isOrganic: 'unknown',
+    novaGroup: null, ingredients: 'Oats',
+    nutriPts: 48, nutriMax: 60, nutriScoreGrade: 'e',
+    basisLabel: 'per 100g',
+  });
+  assert(gradeIgnoredA === gradeIgnoredE,
+    'legacy nutriScoreGrade on the prompt args must not change the prompt');
 }
 
 console.log = origLog;
@@ -5031,7 +5216,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '18', 'SCAN_LOGIC_VERSION must be 18, got ' + logicMatch[1]);
+assert(logicMatch[1] === '19', 'SCAN_LOGIC_VERSION must be 19, got ' + logicMatch[1]);
 
 // --- Source: /scan/photo resolves type before scoring ---
 const photoStart = src.indexOf("app.post('/scan/photo'");
@@ -5374,7 +5559,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '18', 'SCAN_LOGIC_VERSION must be 18, got ' + logicMatch[1]);
+assert(logicMatch[1] === '19', 'SCAN_LOGIC_VERSION must be 19, got ' + logicMatch[1]);
 
 const catchStart = src.indexOf('const fallback = staleCacheFallbackPayload(staleCached);');
 const catchEnd = src.indexOf('if (responseData.noIngredientData)');
@@ -5421,6 +5606,7 @@ const __cosmeticDir = process.cwd();
 function recordRawObservation() {}
 async function getCategoryAlternatives() { return []; }
 async function generateFoodExplanation() { return ${JSON.stringify(REGENERATED)}; }
+function foodExplanationScoringContext() { return {}; }
 const additiveMap = {};
 const additiveDetails = {};
 const SCAN_LOGIC_VERSION = '${logicMatch[1]}';
@@ -5490,7 +5676,7 @@ function isCacheFresh(cached, nowMs) {
       fiber_100g: 2.1,
     },
   }, { skipExplanation: false });
-  assert(regenerated.scanLogicVersion === '18', 'rescan stamps v18');
+  assert(regenerated.scanLogicVersion === '19', 'rescan stamps v19');
   assert(regenerated.explanation === REGENERATED,
     'successful rescan after bump must serve the regenerated explanation');
   assert(!/we've packed/i.test(regenerated.explanation),
@@ -5590,14 +5776,24 @@ function isCacheFresh(cached, nowMs) {
     scanLogicVersion: '18',
     cachedAt: now - 1000,
   };
-  assert(isCacheFresh(v18fresh, now) === true, 'fresh v18 record is a cache hit');
-  assert(isCacheFresh(v17fresh, now) === false, 'fresh v17 record is stale after the v18 bump');
-  assert(isCacheFresh(v16fresh, now) === false, 'fresh v16 record is stale after the v18 bump');
-  assert(isCacheFresh(v15fresh, now) === false, 'fresh v15 record is stale after the v18 bump');
-  assert(isCacheFresh(v14fresh, now) === false, 'fresh v14 record is stale after the v18 bump');
-  const v18Fb = g.staleCacheFallbackPayload({ ...v18fresh, cachedAt: 1 });
-  assert(v18Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
-  assert(v18Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
+  const v19fresh = {
+    productType: 'food',
+    productName: 'Cadbury Dairy Milk',
+    score: 35,
+    sugar: '25.2g',
+    explanation: REGENERATED,
+    scanLogicVersion: '19',
+    cachedAt: now - 1000,
+  };
+  assert(isCacheFresh(v19fresh, now) === true, 'fresh v19 record is a cache hit');
+  assert(isCacheFresh(v18fresh, now) === false, 'fresh v18 record is stale after the v19 bump');
+  assert(isCacheFresh(v17fresh, now) === false, 'fresh v17 record is stale after the v19 bump');
+  assert(isCacheFresh(v16fresh, now) === false, 'fresh v16 record is stale after the v19 bump');
+  assert(isCacheFresh(v15fresh, now) === false, 'fresh v15 record is stale after the v19 bump');
+  assert(isCacheFresh(v14fresh, now) === false, 'fresh v14 record is stale after the v19 bump');
+  const v19Fb = g.staleCacheFallbackPayload({ ...v19fresh, cachedAt: 1 });
+  assert(v19Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
+  assert(v19Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
 
   console.log('scan logic v11 stale explanation ok');
 })().catch((err) => {
@@ -5635,7 +5831,7 @@ function assert(cond, msg) {
 const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '18', 'SCAN_LOGIC_VERSION must be 18, got ' + logicMatch[1]);
+assert(logicMatch[1] === '19', 'SCAN_LOGIC_VERSION must be 19, got ' + logicMatch[1]);
 
 const explainStart = src.indexOf("app.get('/explain/:barcode'");
 const explainEnd = src.indexOf("app.get('/search'");
@@ -5797,7 +5993,7 @@ const v10Doc = {
 
     productCache.set('7622210100586', {
       ...v10Doc,
-      scanLogicVersion: '18',
+      scanLogicVersion: '19',
       explanation: REGENERATED,
     });
     anthropicCalls = 0;
@@ -5839,7 +6035,7 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
 }
 
-assert(/const SCAN_LOGIC_VERSION = '18'/.test(src), 'SCAN_LOGIC_VERSION must be 18 so cached classifications re-scan');
+assert(/const SCAN_LOGIC_VERSION = '19'/.test(src), 'SCAN_LOGIC_VERSION must be 19 so cached explanations re-generate');
 assert(src.includes('max_tokens: 220'), 'food max_tokens must allow 3 sentences to finish');
 assert(src.includes('function trimFoodExplanation'), 'food path must trim to complete sentences');
 
@@ -5898,7 +6094,8 @@ const prompt = g.buildFoodExplanationPrompt({
   additivesPhrase: '2 additives', isOrganic: 'no',
   novaGroup: 4,
   ingredients: 'Sugar, cocoa butter, emulsifiers (E442, E476)',
-  nutriScoreGrade: 'e',
+  nutriPts: 22,
+  nutriMax: 60,
   basisLabel: 'per serving',
 });
 assert(prompt.includes('25.2g'), 'Cadbury fixture numbers reach the prompt');
@@ -5908,6 +6105,14 @@ assert(!/Always write in the first-person plural/.test(prompt),
 assert(/Purla may use "we" ONLY for an evaluation Purla performs/.test(prompt),
   'evaluation we is still allowed');
 assert(/always third person/.test(prompt), 'composition must be third person');
+assert(/Write at most 3 complete sentences/.test(prompt), 'three-sentence cap remains');
+assert(/Do not restate an overall product score or Excellent\/Good\/Poor\/Bad tier/.test(prompt),
+  'must still ban restating the score tier');
+assert(/match your wording to them exactly/.test(prompt), 'tier-matching instruction remains');
+assert(/Never say "NOVA group"/.test(prompt), 'no-jargon rule remains');
+assert(prompt.includes('22 out of 60'), 'Purla nutrition component reaches the prompt');
+assert(!/middling/i.test(prompt), 'must not describe Cadbury via default-C middling');
+assert(!/Nutri-Score/i.test(prompt), 'food prompt must not mention Nutri-Score');
 assert(!/\bwe've packed\b/i.test(fourTrimmed), 'composition text must not use first-person plural');
 assert(!/\bwe've\b/i.test(fourTrimmed) && !/\bwe have\b/i.test(fourTrimmed),
   'manufacturer/composition fixture must not contain first-person plural');
