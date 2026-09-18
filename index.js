@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '18';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '19';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -3395,6 +3395,18 @@ function trimFoodExplanation(text, maxSentences = 3) {
   return sentences.slice(0, maxSentences).join(' ');
 }
 
+// Purla scoring fields already on scoreBreakdown that the food-explanation
+// prompt may use. Live scan and cache rebuild must spread this so Haiku sees
+// the same nutrition component regardless of path. Do not add OFF grade
+// metadata here.
+function foodExplanationScoringContext(scoreBreakdown) {
+  const breakdown = scoreBreakdown && typeof scoreBreakdown === 'object' ? scoreBreakdown : {};
+  return {
+    nutriPts: breakdown.nutriPts,
+    nutriMax: breakdown.nutriMax,
+  };
+}
+
 function buildFoodExplanationPrompt({
   sugar,
   sodium,
@@ -3406,16 +3418,15 @@ function buildFoodExplanationPrompt({
   isOrganic,
   novaGroup,
   ingredients,
-  nutriScoreGrade,
+  nutriPts,
+  nutriMax,
   basisLabel = 'per serving',
 }) {
-  const grade = String(nutriScoreGrade || 'c').toLowerCase();
-  const nutriGuidance =
-    grade === 'd' || grade === 'e'
-      ? 'The nutritional grade behind most of this score is poor. Your explanation MUST reflect that poor nutritional profile — do not write an entirely positive sentence listing only upsides. Say "poor nutritional profile" in plain English; never say "Nutri-Score" or the letter grade.'
-      : grade === 'c'
-        ? 'The nutritional grade behind most of this score is middling. Do not claim the product is highly healthy overall; balance any positives with that context. Never say "Nutri-Score" or the letter grade.'
-        : 'The nutritional grade behind most of this score is relatively strong. You may mention a genuine benefit when supported by the data. Never say "Nutri-Score" or the letter grade.';
+  const pts = Number(nutriPts);
+  const max = Number(nutriMax);
+  const nutriGuidance = Number.isFinite(pts) && Number.isFinite(max)
+    ? `Purla's nutrition component of this score is ${pts} out of ${max}. That figure is an internal scoring input, not a public grade — do not mention it, "out of ${max}", or any letter grade. Describe the nutritional profile in a way that is consistent with that component and with the nutrient figures above.`
+    : 'Describe the nutritional profile from the nutrient figures above. Do not mention any letter grade.';
 
   // Omit nutrients with no data — never invent "N/A (low/unknown tier)".
   const nutrientParts = [];
@@ -3567,7 +3578,8 @@ async function generateFoodExplanation({
   isOrganic,
   novaGroup,
   ingredients,
-  nutriScoreGrade,
+  nutriPts,
+  nutriMax,
   basisLabel = 'per serving',
 }) {
   const hasIngredients = hasUsableIngredientText(ingredients);
@@ -3585,7 +3597,7 @@ async function generateFoodExplanation({
     isOrganic,
     novaGroup,
     ingredients,
-    nutriScoreGrade,
+    ...foodExplanationScoringContext({ nutriPts, nutriMax }),
     basisLabel,
   });
   const explanation = await requestFoodExplanation(prompt);
@@ -3650,7 +3662,6 @@ async function generateExplanationFromCached(cached) {
   const breakdown = typeof cached.scoreBreakdown === 'string'
     ? (() => { try { return JSON.parse(cached.scoreBreakdown || '{}'); } catch (_) { return {}; } })()
     : (cached.scoreBreakdown || {});
-  const nutriScoreGrade = cached.nutriScore || breakdown.nutriScoreGrade || 'c';
   // Match the number's basis: per-serving when known, otherwise the per-100g fields.
   const basisLabel = cached.servingKnown ? 'per serving' : 'per 100g';
   const sugar = cached.servingKnown ? cached.sugar : (cached.sugar100g || cached.sugar);
@@ -3667,7 +3678,7 @@ async function generateExplanationFromCached(cached) {
     isOrganic: organicStatus,
     novaGroup: cached.novaGroup,
     ingredients: cached.ingredients || '',
-    nutriScoreGrade,
+    ...foodExplanationScoringContext(breakdown),
     basisLabel,
   });
   const explanation = await requestFoodExplanation(prompt);
@@ -4029,7 +4040,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
       isOrganic: organicStatus,
       novaGroup,
       ingredients,
-      nutriScoreGrade: nutriScore,
+      ...foodExplanationScoringContext(scoreBreakdown),
       basisLabel,
     });
   }
