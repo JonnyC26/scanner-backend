@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '21';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '22';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1645,21 +1645,22 @@ function usdaGtinMatches(barcode, gtinUpc) {
   return a === b;
 }
 
-// Prefer the 12-digit UPC-A USDA actually indexes. Canonical 13-digit
-// (0 + UPC-A) is tried second so a 13-digit stored GTIN can still hit.
+// Prefer the 12-digit UPC-A USDA commonly indexes, then EAN-13, then
+// GTIN-14. Some branded rows are stored only as 14-digit zero-padded
+// GTINs (Coca-Cola 049000050103 → 00049000050103). All-zero after
+// strip is not a query. pickUsdaGtinMatch still requires an exact
+// gtinUpc match (leading zeros ignored) — this is not a fuzzy search.
 function usdaGtinQueryCandidates(barcode) {
   const digits = digitsOnly(barcode);
+  const stripped = digits.replace(/^0+/, '');
   const candidates = [];
   const add = (q) => {
     if (q && !candidates.includes(q)) candidates.push(q);
   };
-  if (digits.length === 13 && digits.charAt(0) === '0') {
-    add(digits.slice(1));
-    add(digits);
-  } else {
-    add(digits);
-    if (digits.length === 12) add(`0${digits}`);
-  }
+  if (!stripped) return candidates;
+  add(stripped.padStart(12, '0'));
+  add(stripped.padStart(13, '0'));
+  add(stripped.padStart(14, '0'));
   return candidates;
 }
 
@@ -1771,6 +1772,7 @@ function mapUsdaFoodToProduct(food, barcode) {
     image_front_url: '',
     image_url: '',
     source: 'usda',
+    nutritionSource: 'usda',
     fdcId: food.fdcId != null ? food.fdcId : null,
   };
 }
@@ -1823,24 +1825,32 @@ async function usdaLookup(barcode) {
     }
     return null;
   }
-  // Exactly one USDA request per scan. Candidates[0] is the 12-digit UPC
-  // USDA indexes; do not retry the 13-digit form.
-  const query = usdaGtinQueryCandidates(barcode)[0];
-  if (!query) return null;
+  // Try 12-digit, then 13-digit, then 14-digit zero-padding. Stop at the
+  // first pickUsdaGtinMatch hit (exact gtinUpc). Continue only after a
+  // successful response with no verified GTIN — do not retry on timeout
+  // or HTTP error. Extra variants add USDA-branch RTTs only on those
+  // misses; USDA still starts in parallel with OFF.
+  const candidates = usdaGtinQueryCandidates(barcode);
+  if (candidates.length === 0) return null;
 
+  const tried = [];
   try {
-    const foods = await usdaSearchBranded(query, apiKey);
-    const match = pickUsdaGtinMatch(foods, barcode);
-    if (match) {
-      const product = mapUsdaFoodToProduct(match, barcode);
-      console.log(
-        `[USDA HIT] barcode=${barcode} fdcId=${product.fdcId} query=${query} gtin=${match.gtinUpc}`
-      );
-      return product;
+    for (const query of candidates) {
+      tried.push(query);
+      const foods = await usdaSearchBranded(query, apiKey);
+      const match = pickUsdaGtinMatch(foods, barcode);
+      if (match) {
+        const product = mapUsdaFoodToProduct(match, barcode);
+        console.log(
+          `[USDA HIT] barcode=${barcode} fdcId=${product.fdcId} query=${query} gtin=${match.gtinUpc} tried=${tried.join(',')}`
+        );
+        return product;
+      }
     }
-    console.log(`[USDA MISS] barcode=${barcode} query=${query} foods=${foods.length}`);
+    console.log(`[USDA MISS] barcode=${barcode} query=${tried.join(',')} foods=0`);
     return null;
   } catch (err) {
+    const query = tried.join(',') || candidates[0];
     const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
     if (timedOut) {
       console.log(`[USDA TIMEOUT] barcode=${barcode} query=${query}`);
@@ -2072,6 +2082,19 @@ async function fetchOffFoodProduct(barcode) {
   return attachProductSource(product, 'off');
 }
 
+function isServingConvenienceKey(key) {
+  return typeof key === 'string' && key.endsWith('_serving');
+}
+
+function omitServingConvenienceFields(nutriments) {
+  const out = {};
+  const src = nutriments && typeof nutriments === 'object' ? nutriments : {};
+  for (const key of Object.keys(src)) {
+    if (!isServingConvenienceKey(key)) out[key] = src[key];
+  }
+  return out;
+}
+
 function mergeNutrimentMaps(usdaNutriments, offNutriments) {
   const usda = usdaNutriments && typeof usdaNutriments === 'object' ? usdaNutriments : {};
   const off = offNutriments && typeof offNutriments === 'object' ? offNutriments : {};
@@ -2088,7 +2111,13 @@ function mergeNutrimentMaps(usdaNutriments, offNutriments) {
       usedOff = true;
     }
   }
-  return { nutriments: merged, source: usedUsda ? 'usda' : (usedOff ? 'off' : null) };
+  // Nutrition source is USDA when any USDA nutriment key was used. OFF
+  // *_serving panels must not sit beside USDA per-100g values.
+  const source = usedUsda ? 'usda' : (usedOff ? 'off' : null);
+  return {
+    nutriments: source === 'usda' ? omitServingConvenienceFields(merged) : merged,
+    source,
+  };
 }
 
 // Merge USDA identity/nutrition with OFF additives / allergens / Nutri-Score / NOVA.
@@ -2097,8 +2126,14 @@ function mergeNutrimentMaps(usdaNutriments, offNutriments) {
 // extractAdditiveCodes(additives_tags + ingredients[].id), and labels_tags.
 // Do not parse USDA ingredient strings for additives or allergens.
 function mergeUsdaAndOffProducts(barcode, usdaProduct, offProduct) {
-  if (usdaProduct && !offProduct) return usdaProduct;
-  if (!usdaProduct && offProduct) return offProduct;
+  if (usdaProduct && !offProduct) {
+    if (usdaProduct.nutritionSource == null) usdaProduct.nutritionSource = 'usda';
+    return usdaProduct;
+  }
+  if (!usdaProduct && offProduct) {
+    if (offProduct.nutritionSource == null) offProduct.nutritionSource = 'off';
+    return offProduct;
+  }
   if (!usdaProduct && !offProduct) return null;
 
   const namePick = pickUsdaThenOff(usdaProduct.product_name, offProduct.product_name);
@@ -2123,6 +2158,7 @@ function mergeUsdaAndOffProducts(barcode, usdaProduct, offProduct) {
     categories_tags: Array.isArray(offProduct.categories_tags) ? offProduct.categories_tags : [],
     nutriments: nutriPick.nutriments,
     serving_quantity: servingPick.source ? servingPick.value : (usdaProduct.serving_quantity != null ? usdaProduct.serving_quantity : offProduct.serving_quantity),
+    nutritionSource: nutriPick.source,
     foodCategory: usdaProduct.foodCategory || '',
     nutriscore_grade: offProduct.nutriscore_grade == null ? null : offProduct.nutriscore_grade,
     nutriscore_score: offProduct.nutriscore_score,
@@ -2600,10 +2636,29 @@ function normalizeOrganicStatus(value) {
   return 'unknown';
 }
 
+// Empirical display guard from the 302-product OFF coverage sample: every
+// legitimate serving was ≤ 500g/ml, with a clean gap to this Coke bottle's
+// 2000ml whole-package "serving". Not a nutritional standard.
+const MAX_TRUSTED_SERVING_QUANTITY = 500;
+// Absolute floor is half the display quantum for that field — a formatting
+// / units tolerance, not a nutritional threshold. formatGrams and
+// formatCalories round to 0.1; formatSodiumMg rounds stored grams to 1mg.
+// Relative 25% is unchanged: ordinary rounding plus Liquid I.V. labeled
+// vs scaled-100g (~19%). Mixed-source Coke (780g vs 11×355/100) still fails.
+const SERVING_CONSISTENCY_ABS_GRAMS = 0.05;
+const SERVING_CONSISTENCY_ABS_SODIUM_G = 0.0005;
+const SERVING_CONSISTENCY_REL = 0.25;
+
+function servingConsistencyAbs(kind) {
+  return kind === 'sodium' ? SERVING_CONSISTENCY_ABS_SODIUM_G : SERVING_CONSISTENCY_ABS_GRAMS;
+}
+
 function parseServingQuantity(raw) {
   if (raw == null || raw === '') return null;
   const n = parseFloat(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n > MAX_TRUSTED_SERVING_QUANTITY) return null;
+  return n;
 }
 
 function hasServingNutrientData(nutriments) {
@@ -2613,12 +2668,25 @@ function hasServingNutrientData(nutriments) {
     || nutriments.sodium_serving != null;
 }
 
+function servingValueIsConsistent(val100g, servingVal, servingQuantity, kind) {
+  const expected = Number(val100g) * Number(servingQuantity) / 100;
+  const actual = Number(servingVal);
+  if (!Number.isFinite(expected) || !Number.isFinite(actual)) return false;
+  const delta = Math.abs(actual - expected);
+  const scale = Math.max(Math.abs(expected), Math.abs(actual));
+  return delta <= Math.max(servingConsistencyAbs(kind), SERVING_CONSISTENCY_REL * scale);
+}
+
 // Convert a per-100g nutrient to per-serving. Never disguise per-100g as serving.
-function toServing(val100g, servingVal, servingQuantity) {
+// Explicit *_serving is used only when it matches 100g × trusted quantity
+// within the rounding tolerance; otherwise derive from that pair.
+function toServing(val100g, servingVal, servingQuantity, kind) {
   if (val100g === null) return null;
-  if (servingVal != null) return servingVal;
-  if (servingQuantity) return val100g * servingQuantity / 100;
-  return null;
+  if (servingQuantity == null) return null;
+  if (servingVal != null && servingValueIsConsistent(val100g, servingVal, servingQuantity, kind)) {
+    return servingVal;
+  }
+  return val100g * servingQuantity / 100;
 }
 
 // Threshold values are unchanged — only which figure they are applied to.
@@ -2639,7 +2707,9 @@ function computeNutrientTiers(sugarVal, sodiumVal, proteinVal) {
 // Shared by /scan and /search so tiers and servingKnown stay aligned.
 function resolveFoodServingNutrition(nutriments, servingQuantityRaw) {
   const servingQuantity = parseServingQuantity(servingQuantityRaw);
-  const servingKnown = hasServingNutrientData(nutriments) || servingQuantity != null;
+  // Trusted quantity only. Explicit *_serving without a trusted quantity
+  // is not enough — same fallback as a missing serving size.
+  const servingKnown = servingQuantity != null;
   const proteinRaw = nutriments?.proteins_100g ?? null;
   const sugarRaw = nutriments?.sugars_100g ?? null;
   const sodiumRaw = nutriments?.sodium_100g ?? null;
@@ -2650,12 +2720,12 @@ function resolveFoodServingNutrition(nutriments, servingQuantityRaw) {
   const energyKcal = getNumericNutrimentValue(nutriments, ['energy-kcal_100g', 'energy-kcal']);
   const energyKj = energyKcal == null ? null : energyKcal * KJ_PER_KCAL;
   const caloriesRaw = energyKj == null ? null : energyKj / KJ_PER_KCAL;
-  const proteinDisplay = toServing(proteinRaw, nutriments?.proteins_serving, servingQuantity);
-  const sugarDisplay = toServing(sugarRaw, nutriments?.sugars_serving, servingQuantity);
-  const sodiumDisplay = toServing(sodiumRaw, nutriments?.sodium_serving, servingQuantity);
-  const saturatedFatDisplay = toServing(saturatedFatRaw, nutriments?.['saturated-fat_serving'], servingQuantity);
-  const fiberDisplay = toServing(fiberRaw, nutriments?.fiber_serving, servingQuantity);
-  const caloriesDisplay = toServing(caloriesRaw, nutriments?.['energy-kcal_serving'], servingQuantity);
+  const proteinDisplay = toServing(proteinRaw, nutriments?.proteins_serving, servingQuantity, 'grams');
+  const sugarDisplay = toServing(sugarRaw, nutriments?.sugars_serving, servingQuantity, 'grams');
+  const sodiumDisplay = toServing(sodiumRaw, nutriments?.sodium_serving, servingQuantity, 'sodium');
+  const saturatedFatDisplay = toServing(saturatedFatRaw, nutriments?.['saturated-fat_serving'], servingQuantity, 'grams');
+  const fiberDisplay = toServing(fiberRaw, nutriments?.fiber_serving, servingQuantity, 'grams');
+  const caloriesDisplay = toServing(caloriesRaw, nutriments?.['energy-kcal_serving'], servingQuantity, 'calories');
   // Tiers share a basis with the numbers shown: per-serving when known, else per-100g.
   const tiers = computeNutrientTiers(
     servingKnown ? sugarDisplay : sugarRaw,

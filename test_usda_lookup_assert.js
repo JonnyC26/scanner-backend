@@ -8,7 +8,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '21', 'SCAN_LOGIC_VERSION must be 21, got ' + logicMatch[1]);
+assert(logicMatch[1] === '22', 'SCAN_LOGIC_VERSION must be 22, got ' + logicMatch[1]);
 assert(!src.includes('default_off_ambiguous'), 'empty-tag food default must be removed');
 assert(!src.includes("cached.productType || 'food'"), 'cache hit must not coerce missing type to food');
 assert(!src.includes("responseData.productType || 'food'"), 'must not coerce missing productType to food');
@@ -72,8 +72,11 @@ assert(!src.includes('normalizeFoodSource'), 'must not change API source into an
 assert(src.includes("dataType: ['Branded']") || src.includes('dataType: ["Branded"]'),
   'USDA search must filter to Branded');
 assert(src.includes('usdaGtinMatches'), 'gtinUpc verification must remain');
-assert(src.includes('Exactly one USDA request per scan') || src.includes('Exactly one USDA request'),
-  'usdaLookup must document one request per scan');
+assert(src.includes('padStart(14, \'0\')') || src.includes('padStart(14, "0")'),
+  'USDA GTIN candidates must include GTIN-14 zero-padding');
+assert(src.includes('pickUsdaGtinMatch'), 'gtinUpc verification must remain after padding variants');
+assert(!src.includes('do not retry the 13-digit form'),
+  'usdaLookup must retry zero-padding variants after a verified miss');
 
 const lookupSlice = src.slice(
   src.indexOf('async function fetchProductFromFacts'),
@@ -149,6 +152,9 @@ module.exports = {
   buildUnsupportedScanResponse,
   isExplicitFoodProductType,
   hasExplicitOffFoodCategory,
+  resolveFoodServingNutrition,
+  parseServingQuantity,
+  servingValueIsConsistent,
   SCAN_LOGIC_VERSION,
   mapUsdaNutrientsToOff,
   computeNutritionSubscore,
@@ -199,6 +205,15 @@ const fettuccine = {
 
   const candidates = g.usdaGtinQueryCandidates('0099482431112');
   assert(candidates[0] === '099482431112', 'canonical EAN-13 must query 12-digit UPC first, got ' + JSON.stringify(candidates));
+  assert(candidates[1] === '0099482431112', 'second candidate is EAN-13, got ' + JSON.stringify(candidates));
+  assert(candidates[2] === '00099482431112', 'third candidate is GTIN-14, got ' + JSON.stringify(candidates));
+  assert(candidates.length === 3, 'exactly 12/13/14 padding variants, got ' + JSON.stringify(candidates));
+
+  const cokeCandidates = g.usdaGtinQueryCandidates('049000050103');
+  assert(cokeCandidates[0] === '049000050103', 'Coke 12-digit first, got ' + JSON.stringify(cokeCandidates));
+  assert(cokeCandidates[1] === '0049000050103', 'Coke EAN-13 second');
+  assert(cokeCandidates[2] === '00049000050103', 'Coke GTIN-14 third — the form USDA indexes');
+  assert(g.usdaGtinQueryCandidates('0000000000000').length === 0, 'all-zero barcode yields no queries');
 
   const mapped = g.mapUsdaFoodToProduct(fettuccine, '0099482431112');
   assert(mapped.product_name === 'ORGANIC FETTUCCINE', 'name from description');
@@ -214,6 +229,7 @@ const fettuccine = {
   assert(mapped.nutriments.carbohydrates_100g === 71.4, 'carbohydrate mapped');
   assert(mapped.foodCategory === 'Pasta by Shape & Type', 'foodCategory mapped');
   assert(mapped.serving_quantity === 56, 'serving grams');
+  assert(mapped.nutritionSource === 'usda', 'USDA-only nutritionSource is usda');
   assert(Array.isArray(mapped.additives_tags) && mapped.additives_tags.length === 0, 'no invented additives');
   assert(mapped.source === 'usda', 'USDA mapped source is string usda');
   assert(g.productHasIngredients(mapped) === true, 'mapped ingredients are usable');
@@ -245,10 +261,12 @@ const fettuccine = {
   assert(usdaOnly === mapped, 'USDA-only returns the USDA product unchanged');
   const offOnlyMerge = g.mergeUsdaAndOffProducts('0099482431112', null, offForMerge);
   assert(offOnlyMerge === offForMerge, 'OFF-only returns the OFF product unchanged');
+  assert(offOnlyMerge.nutritionSource === 'off', 'OFF-only nutritionSource is off');
   assert(g.mergeUsdaAndOffProducts('0099482431112', null, null) === null, 'neither → null');
 
   const mergedBoth = g.mergeUsdaAndOffProducts('0099482431112', mapped, offForMerge);
   assert(mergedBoth.source === 'usda', 'merged API source stays string usda, got ' + JSON.stringify(mergedBoth.source));
+  assert(mergedBoth.nutritionSource === 'usda', 'nutrition source is usda when any USDA nutriment key is used');
   assert(mergedBoth.product_name === 'ORGANIC FETTUCCINE', 'name from USDA');
   assert(mergedBoth.brands.includes('365 WHOLE FOODS MARKET'), 'brand from USDA');
   assert(mergedBoth.ingredients_text === 'ORGANIC DURUM WHEAT SEMOLINA.',
@@ -276,6 +294,7 @@ const fettuccine = {
   const usdaNoNutri = Object.assign({}, mapped, { nutriments: {} });
   const mergedNutriOff = g.mergeUsdaAndOffProducts('0099482431112', usdaNoNutri, offForMerge);
   assert(mergedNutriOff.nutriments.proteins_100g === 12, 'missing USDA nutrition → OFF');
+  assert(mergedNutriOff.nutritionSource === 'off', 'empty USDA nutriments → nutrition source off');
 
   const usdaZero = Object.assign({}, mapped, {
     nutriments: { proteins_100g: 0, sodium_100g: 0, 'energy-kcal_100g': 0, sugars_100g: 1 },
@@ -322,13 +341,16 @@ const fettuccine = {
 
   process.env.USDA_API_KEY = 'test-key-not-real';
 
+  let timeoutFetches = 0;
   global.fetch = async () => {
+    timeoutFetches += 1;
     const err = new Error('aborted');
     err.name = 'TimeoutError';
     throw err;
   };
   const timedOut = await g.usdaLookup('0099482431112');
   assert(timedOut === null, 'timeout returns null');
+  assert(timeoutFetches === 1, 'timeout must not try further padding variants, got ' + timeoutFetches);
 
   global.fetch = async (url, opts) => {
     fetches.push(String(url));
@@ -347,7 +369,7 @@ const fettuccine = {
   assert(hit.fdcId === 2419828);
   assert(fetches.length === 1, 'exactly one USDA request on hit, got ' + fetches.length);
 
-  // Miss still only one request — do not retry the 13-digit form.
+  // Miss tries every padding variant; pickUsdaGtinMatch still rejects fuzzy hits.
   global.fetch = async (url, opts) => {
     fetches.push(JSON.parse(opts.body).query);
     return { ok: true, json: async () => ({ foods: [{ gtinUpc: '999', description: 'NOPE' }] }) };
@@ -355,8 +377,10 @@ const fettuccine = {
   fetches = [];
   const miss = await g.usdaLookup('0099482431112');
   assert(miss === null, 'unmatched gtin is a miss');
-  assert(fetches.length === 1, 'exactly one USDA request on miss, got ' + fetches.length);
-  assert(fetches[0] === '099482431112' || true, 'query is 12-digit');
+  assert(fetches.length === 3, 'miss tries 12 then 13 then 14, got ' + fetches.length);
+  assert(fetches[0] === '099482431112', 'first miss query is 12-digit');
+  assert(fetches[1] === '0099482431112', 'second miss query is EAN-13');
+  assert(fetches[2] === '00099482431112', 'third miss query is GTIN-14');
 
   const offProduct = {
     code: '0099482431112',
@@ -570,7 +594,7 @@ const fettuccine = {
   assert(typeof scored.score === 'number' && scored.score !== null, 'merged food must score');
   assert(scored.productName === 'ORGANIC FETTUCCINE');
   assert(/ORGANIC DURUM WHEAT SEMOLINA/i.test(scored.ingredients), 'USDA ingredients displayed as-is');
-  assert(scored.scanLogicVersion === '21', 'logic version 21');
+  assert(scored.scanLogicVersion === '22', 'logic version 22');
   assert(scored.calories100g === '357', 'fettuccine calories100g from energy-kcal_100g, got ' + scored.calories100g);
   assert(scored.calories === '199.9', 'fettuccine calories per 56g serving, got ' + scored.calories);
   assert(scored.saturatedFat100g === '0.4g', 'fettuccine saturatedFat100g from saturated-fat_100g, got ' + scored.saturatedFat100g);
@@ -709,7 +733,7 @@ const fettuccine = {
   assert(highN.components.protein === 0, 'suppressed protein contributes 0');
 
   // --- Food-only gate ---
-  assert(g.SCAN_LOGIC_VERSION === '21', 'logic version 21');
+  assert(g.SCAN_LOGIC_VERSION === '22', 'logic version 22');
   assert(typeof g.routeResolvedScan === 'function', 'routeResolvedScan exported');
   assert(g.isExplicitFoodProductType('food') === true);
   assert(g.isExplicitFoodProductType('unsupported') === false);
@@ -1151,6 +1175,161 @@ const fettuccine = {
   }, { skipExplanation: true });
   assert(noGmoOnly.isOrganic === 'Unknown', 'en:no-gmos alone is Unknown');
   assert(noGmoOnly.score === barillaScored.score);
+
+  const cokeUsdaFood = {
+    fdcId: 2742541,
+    gtinUpc: '00049000050103',
+    description: 'Coca-Cola Bottle, 2 Liters',
+    brandOwner: 'Coca-Cola',
+    brandName: 'Coca-Cola',
+    ingredients: 'CARBONATED WATER, HIGH FRUCTOSE CORN SYRUP, CARAMEL COLOR, PHOSPHORIC ACID, NATURAL FLAVORS, CAFFEINE.',
+    servingSize: 355.0,
+    servingSizeUnit: 'MLT',
+    householdServingFullText: '12 fl oz (360 mL)',
+    foodCategory: 'Non Alcoholic Beverages - Ready to Drink',
+    foodNutrients: [
+      { nutrientId: 1003, unitName: 'G', value: 0.0 },
+      { nutrientId: 1004, unitName: 'G', value: 0.0 },
+      { nutrientId: 1005, unitName: 'G', value: 11.0 },
+      { nutrientId: 1008, unitName: 'KCAL', value: 39.0 },
+      { nutrientId: 2000, unitName: 'G', value: 11.0 },
+      { nutrientId: 1093, unitName: 'MG', value: 13.0 },
+      { nutrientId: 1258, unitName: 'G', value: 0.0 },
+    ],
+  };
+  const cokeOff = {
+    code: '0049000050103',
+    product_name: 'Coca Cola',
+    brands: 'Coca-Cola',
+    ingredients_text: 'Carbonated water, high fructose corn syrup, caramel color, phosphoric acid, natural flavors, caffeine.',
+    additives_tags: ['en:e150d'],
+    ingredients: [{ id: 'en:e150d' }],
+    nutriscore_grade: 'e',
+    nova_group: 4,
+    labels_tags: [],
+    serving_quantity: 2000,
+    nutriments: {
+      'energy-kcal_100g': 140,
+      proteins_100g: 0,
+      sugars_100g: 39,
+      sodium_100g: 0.045,
+      fat_100g: 0,
+      'saturated-fat_100g': 0,
+      sugars_serving: 780,
+      'energy-kcal_serving': 2800,
+      sodium_serving: 0.9,
+      proteins_serving: 0,
+    },
+  };
+
+  fetches = [];
+  global.fetch = async (url, opts) => {
+    if (String(url).includes('api.nal.usda.gov')) {
+      const q = JSON.parse(opts.body).query;
+      fetches.push(q);
+      if (q === '00049000050103') {
+        return { ok: true, json: async () => ({ foods: [cokeUsdaFood] }) };
+      }
+      return { ok: true, json: async () => ({ foods: [] }) };
+    }
+    return { ok: false };
+  };
+  const cokeLookup = await g.usdaLookup('049000050103');
+  assert(cokeLookup && cokeLookup.fdcId === 2742541, 'Coke GTIN-14 padding must hit USDA');
+  assert(fetches[0] === '049000050103', 'Coke first query is 12-digit UPC');
+  assert(fetches[fetches.length - 1] === '00049000050103', 'Coke hit is the 14-digit query');
+  assert(cokeLookup.serving_quantity === 355, 'USDA MLT serving maps 1:1');
+  assert(cokeLookup.nutriments.sugars_100g === 11, 'USDA sugar per 100g');
+  assert(cokeLookup.nutritionSource === 'usda');
+
+  const cokeUsdaMapped = g.mapUsdaFoodToProduct(cokeUsdaFood, '049000050103');
+  const cokeMerged = g.mergeUsdaAndOffProducts('049000050103', cokeUsdaMapped, cokeOff);
+  assert(cokeMerged.nutritionSource === 'usda', 'Coke nutrition source is USDA — any USDA 100g key won mergeNutrimentMaps');
+  assert(cokeMerged.nutriments.sugars_100g === 11, 'USDA 100g sugar wins');
+  assert(cokeMerged.nutriments['energy-kcal_100g'] === 39, 'USDA 100g energy wins');
+  assert(cokeMerged.nutriments.sodium_100g === 0.013, 'USDA 13mg sodium → grams');
+  assert(!Object.prototype.hasOwnProperty.call(cokeMerged.nutriments, 'sugars_serving'),
+    'OFF sugars_serving must not survive a USDA nutrition win');
+  assert(!Object.prototype.hasOwnProperty.call(cokeMerged.nutriments, 'energy-kcal_serving'),
+    'OFF energy-kcal_serving must not survive a USDA nutrition win');
+  assert(!Object.prototype.hasOwnProperty.call(cokeMerged.nutriments, 'sodium_serving'),
+    'OFF sodium_serving must not survive a USDA nutrition win');
+  assert(cokeMerged.serving_quantity === 355, 'USDA serving quantity wins over OFF 2000');
+  assert(cokeMerged.additives_tags.includes('en:e150d'), 'OFF additives kept');
+  assert(cokeMerged.nova_group === 4, 'OFF NOVA kept');
+
+  const cokeServing = g.resolveFoodServingNutrition(cokeMerged.nutriments, cokeMerged.serving_quantity);
+  assert(cokeServing.servingKnown === true, 'Coke serving known from USDA 355ml');
+  assert(cokeServing.sugarDisplay === 11 * 355 / 100, 'Coke sugar from USDA 100g × 355, got ' + cokeServing.sugarDisplay);
+  assert(cokeServing.caloriesDisplay === 39 * 355 / 100, 'Coke kcal from USDA 100g × 355, got ' + cokeServing.caloriesDisplay);
+  assert(Math.abs(cokeServing.sodiumDisplay - 0.013 * 355 / 100) < 1e-12, 'Coke sodium from USDA 100g × 355');
+  assert(cokeServing.sugarDisplay < 50 && cokeServing.caloriesDisplay < 200, 'Coke per-serving figures are sane');
+
+  const cokeScored = await g.scanAndCacheFood('049000050103', cokeMerged, { skipExplanation: true });
+  assert(cokeScored.sugar === '39.1g', 'Coke sugar display 11×355/100, got ' + cokeScored.sugar);
+  assert(cokeScored.calories === '138.5', 'Coke calories 39×355/100, got ' + cokeScored.calories);
+  assert(cokeScored.sodium === '46mg', 'Coke sodium 13mg/100g × 355, got ' + cokeScored.sodium);
+  assert(cokeScored.sugar100g === '11g', 'Coke per-100g sugar is USDA');
+  assert(cokeScored.calories100g === '39', 'Coke per-100g calories are USDA');
+  assert(cokeScored.servingKnown === true);
+  assert(cokeScored.scanLogicVersion === '22');
+  const cokeOffOnly = await g.scanAndCacheFood('049000050103', cokeOff, { skipExplanation: true });
+  assert(cokeOffOnly.servingKnown === false, 'OFF 2000ml serving is untrusted');
+  assert(cokeOffOnly.sugar === 'N/A', 'untrusted serving → per-100g fallback, got ' + cokeOffOnly.sugar);
+  assert(cokeOffOnly.calories === 'N/A', 'untrusted serving → calories N/A');
+  assert(cokeOffOnly.sodium === 'N/A', 'untrusted serving → sodium N/A');
+  assert(cokeOffOnly.sugar100g === '39g', 'OFF per-100g still shown when serving rejected');
+  const cokeList = JSON.parse(cokeScored.additiveList || '[]');
+  const cokeExpected = g.calculateScore(
+    cokeMerged.nutriscore_grade, cokeMerged.nova_group, cokeList.length, false,
+    0, 11, 0.013, cokeList, '049000050103', cokeMerged.nutriments, cokeMerged.foodCategory
+  );
+  assert(cokeScored.score === cokeExpected, 'Coke score must use USDA 100g, got ' + cokeScored.score + ' expected ' + cokeExpected);
+  assert(cokeScored.score !== 47, 'Coke must not keep the previously observed OFF-100g score of 47, got ' + cokeScored.score);
+  const offBevExpected = g.calculateScore(
+    cokeOff.nutriscore_grade, cokeOff.nova_group, cokeList.length, false,
+    0, 39, 0.045, cokeList, '049000050103', cokeOff.nutriments, cokeMerged.foodCategory
+  );
+  assert(cokeScored.score > offBevExpected,
+    'USDA 11g/100g must outscore OFF 39g/100g on the same beverage path: '
+    + cokeScored.score + ' vs ' + offBevExpected);
+
+  assert(g.parseServingQuantity(500) === 500, '500 is trusted (bound is exclusive above)');
+  assert(g.parseServingQuantity(500.1) === null, 'quantities above 500 are untrusted');
+  assert(g.parseServingQuantity(2000) === null, '2000ml whole-bottle serving is untrusted');
+  assert(g.servingValueIsConsistent(11, 39.05, 355) === true, 'exact 100g × qty is consistent');
+  assert(g.servingValueIsConsistent(3.85, 0.5, 16, 'sodium') === true, 'Liquid I.V. 0.5 vs 0.616 is ordinary labeled-vs-scaled');
+  assert(g.servingValueIsConsistent(11, 780, 355) === false, 'OFF 780g vs USDA-derived 39g is inconsistent');
+  // Shared 0.05g floor used to accept this: |0.05-0.004|=0.046 < 0.05, yet 12.5×.
+  assert(g.servingValueIsConsistent(0.004, 0.05, 100, 'sodium') === false,
+    'low-sodium 0.05g explicit vs 0.004g expected must not pass on a gram-sized floor');
+  const lowNa = g.resolveFoodServingNutrition({
+    proteins_100g: 0,
+    sugars_100g: 0,
+    sodium_100g: 0.004,
+    sodium_serving: 0.05,
+  }, 100);
+  assert(lowNa.servingKnown === true, 'trusted 100g quantity still known');
+  assert(lowNa.sodiumDisplay === 0.004,
+    'inconsistent low-sodium *_serving must derive 0.004g, got ' + lowNa.sodiumDisplay);
+  assert(lowNa.sodiumDisplay !== 0.05, 'must not keep the 0.05g explicit serving');
+
+  const liquidIv = g.resolveFoodServingNutrition({
+    proteins_100g: 0, sugars_100g: 0, sodium_100g: 3.85,
+    proteins_serving: 0, sugars_serving: 0, sodium_serving: 0.5,
+  }, 16);
+  assert(liquidIv.servingKnown === true && liquidIv.sodiumDisplay === 0.5,
+    'legitimate OFF *_serving is unchanged');
+
+  const viaQty = g.resolveFoodServingNutrition({
+    proteins_100g: 20, sugars_100g: 30, sodium_100g: 1.0,
+  }, 50);
+  assert(viaQty.proteinDisplay === 10 && viaQty.sugarDisplay === 15 && viaQty.sodiumDisplay === 0.5,
+    'legitimate serving quantity derivation is unchanged');
+
+  const usdaOnlyServing = g.resolveFoodServingNutrition(mapped.nutriments, mapped.serving_quantity);
+  assert(usdaOnlyServing.servingKnown === true, 'USDA-only serving still known');
+  assert(usdaOnlyServing.caloriesDisplay === 357 * 56 / 100, 'USDA-only calories still 56g of 357 kcal/100g');
 
   assert(g.appFacingUnsupportedReason('unsupported', 'no_affirmative_food') === 'unverified_product');
   assert(g.appFacingUnsupportedReason('unsupported', 'off_non_food_category') === 'known_non_food');
