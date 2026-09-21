@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '19';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '20';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1100,6 +1100,12 @@ function buildFoodPhotoScanResponse({
     protein: null,
     sugar: null,
     sodium: null,
+    calories: null,
+    calories100g: null,
+    saturatedFat: null,
+    saturatedFat100g: null,
+    fiber: null,
+    fiber100g: null,
     sugarTier: null,
     sodiumTier: null,
     proteinTier: null,
@@ -2637,9 +2643,19 @@ function resolveFoodServingNutrition(nutriments, servingQuantityRaw) {
   const proteinRaw = nutriments?.proteins_100g ?? null;
   const sugarRaw = nutriments?.sugars_100g ?? null;
   const sodiumRaw = nutriments?.sodium_100g ?? null;
+  const saturatedFatRaw = getNumericNutrimentValue(nutriments, FOOD_SAT_FAT_NUTRIMENT_KEYS);
+  const fiberRaw = getNumericNutrimentValue(nutriments, FOOD_FIBER_NUTRIMENT_KEYS);
+  // Same keys and kJ normalisation as computeNutritionSubscore. Display-only:
+  // kcal = kJ / 4.184. Do not read energy_100g / energy-kj.
+  const energyKcal = getNumericNutrimentValue(nutriments, ['energy-kcal_100g', 'energy-kcal']);
+  const energyKj = energyKcal == null ? null : energyKcal * KJ_PER_KCAL;
+  const caloriesRaw = energyKj == null ? null : energyKj / KJ_PER_KCAL;
   const proteinDisplay = toServing(proteinRaw, nutriments?.proteins_serving, servingQuantity);
   const sugarDisplay = toServing(sugarRaw, nutriments?.sugars_serving, servingQuantity);
   const sodiumDisplay = toServing(sodiumRaw, nutriments?.sodium_serving, servingQuantity);
+  const saturatedFatDisplay = toServing(saturatedFatRaw, nutriments?.['saturated-fat_serving'], servingQuantity);
+  const fiberDisplay = toServing(fiberRaw, nutriments?.fiber_serving, servingQuantity);
+  const caloriesDisplay = toServing(caloriesRaw, nutriments?.['energy-kcal_serving'], servingQuantity);
   // Tiers share a basis with the numbers shown: per-serving when known, else per-100g.
   const tiers = computeNutrientTiers(
     servingKnown ? sugarDisplay : sugarRaw,
@@ -2652,9 +2668,15 @@ function resolveFoodServingNutrition(nutriments, servingQuantityRaw) {
     proteinRaw,
     sugarRaw,
     sodiumRaw,
+    saturatedFatRaw,
+    fiberRaw,
+    caloriesRaw,
     proteinDisplay,
     sugarDisplay,
     sodiumDisplay,
+    saturatedFatDisplay,
+    fiberDisplay,
+    caloriesDisplay,
     sugarTier: tiers.sugarTier,
     sodiumTier: tiers.sodiumTier,
     proteinTier: tiers.proteinTier,
@@ -2669,6 +2691,11 @@ function formatGrams(val) {
 function formatSodiumMg(val) {
   if (val === null || val === undefined) return 'N/A';
   return Math.round(val * 1000) + 'mg';
+}
+
+function formatCalories(val) {
+  if (val === null || val === undefined) return 'N/A';
+  return Math.round(val * 10) / 10 + 'kcal';
 }
 
 const additiveMap = {'e100':'Curcumin','e101':'Riboflavin','e102':'Tartrazine','e104':'Quinoline Yellow','e110':'Sunset Yellow','e120':'Carmine','e122':'Carmoisine','e123':'Amaranth','e124':'Ponceau 4R','e127':'Erythrosine','e129':'Allura Red','e131':'Patent Blue','e132':'Indigo Carmine','e133':'Brilliant Blue','e140':'Chlorophyll','e150a':'Caramel Color','e150b':'Caustic Sulfite Caramel','e150c':'Ammonia Caramel','e150d':'Sulfite Ammonia Caramel','e153':'Vegetable Carbon','e160a':'Beta-Carotene','e160b':'Annatto','e161b':'Lutein','e162':'Beetroot Red','e163':'Anthocyanins','e170':'Calcium Carbonate','e171':'Titanium Dioxide','e172':'Iron Oxides','e200':'Sorbic Acid','e202':'Potassium Sorbate','e210':'Benzoic Acid','e211':'Sodium Benzoate','e212':'Potassium Benzoate','e213':'Calcium Benzoate','e220':'Sulfur Dioxide','e221':'Sodium Sulfite','e222':'Sodium Bisulfite','e223':'Sodium Metabisulfite','e224':'Potassium Metabisulfite','e249':'Potassium Nitrite','e250':'Sodium Nitrite','e251':'Sodium Nitrate','e252':'Potassium Nitrate','e260':'Acetic Acid','e261':'Potassium Acetate','e262':'Sodium Acetate','e270':'Lactic Acid','e280':'Propionic Acid','e281':'Sodium Propionate','e282':'Calcium Propionate','e283':'Potassium Propionate','e290':'Carbon Dioxide','e296':'Malic Acid','e297':'Fumaric Acid','e300':'Vitamin C','e301':'Sodium Ascorbate','e302':'Calcium Ascorbate','e306':'Vitamin E','e307':'Alpha-Tocopherol','e310':'Propyl Gallate','e311':'Octyl Gallate','e312':'Dodecyl Gallate','e319':'TBHQ','e320':'BHA','e321':'BHT','e322':'Lecithin','e330':'Citric Acid','e331':'Sodium Citrate','e332':'Potassium Citrate','e333':'Calcium Citrate','e334':'Tartaric Acid','e335':'Sodium Tartrate','e336':'Potassium Tartrate','e337':'Sodium Potassium Tartrate','e338':'Phosphoric Acid','e339':'Sodium Phosphate','e340':'Potassium Phosphate','e341':'Calcium Phosphate','e343':'Magnesium Phosphate','e350':'Sodium Malate','e351':'Potassium Malate','e352':'Calcium Malate','e353':'Metatartaric Acid','e380':'Triammonium Citrate','e400':'Alginic Acid','e401':'Sodium Alginate','e402':'Potassium Alginate','e403':'Ammonium Alginate','e404':'Calcium Alginate','e405':'Propylene Glycol Alginate','e406':'Agar','e407':'Carrageenan','e410':'Locust Bean Gum','e412':'Guar Gum','e413':'Tragacanth','e414':'Acacia Gum','e415':'Xanthan Gum','e416':'Karaya Gum','e417':'Tara Gum','e418':'Gellan Gum','e420':'Sorbitol','e421':'Mannitol','e422':'Glycerol','e432':'Polysorbate 20','e433':'Polysorbate 80','e440':'Pectin','e442':'Ammonium Phosphatides','e450':'Diphosphates','e451':'Triphosphates','e452':'Polyphosphates','e460':'Cellulose','e461':'Methyl Cellulose','e462':'Ethyl Cellulose','e463':'Hydroxypropyl Cellulose','e464':'Hydroxypropyl Methyl Cellulose','e465':'Methyl Ethyl Cellulose','e466':'Carboxymethyl Cellulose','e470':'Fatty Acid Salts','e471':'Mono and Diglycerides','e472a':'Acetic Acid Esters','e472b':'Lactic Acid Esters','e472c':'Citric Acid Esters','e472e':'Diacetyl Tartaric Esters','e473':'Sucrose Esters','e474':'Sucroglycerides','e475':'Polyglycerol Esters','e476':'Polyglycerol Polyricinoleate','e477':'Propylene Glycol Esters','e481':'Sodium Stearoyl Lactylate','e482':'Calcium Stearoyl Lactylate','e491':'Sorbitan Monostearate','e500':'Sodium Carbonates','e501':'Potassium Carbonates','e503':'Ammonium Carbonates','e504':'Magnesium Carbonates','e507':'Hydrochloric Acid','e508':'Potassium Chloride','e509':'Calcium Chloride','e511':'Magnesium Chloride','e512':'Stannous Chloride','e514':'Sodium Sulfates','e515':'Potassium Sulfates','e516':'Calcium Sulfate','e524':'Sodium Hydroxide','e525':'Potassium Hydroxide','e526':'Calcium Hydroxide','e527':'Ammonium Hydroxide','e528':'Magnesium Hydroxide','e529':'Calcium Oxide','e530':'Magnesium Oxide','e535':'Sodium Ferrocyanide','e536':'Potassium Ferrocyanide','e538':'Calcium Ferrocyanide','e541':'Sodium Aluminum Phosphate','e551':'Silicon Dioxide','e552':'Calcium Silicate','e553a':'Magnesium Silicate','e553b':'Talc','e554':'Sodium Aluminosilicate','e555':'Potassium Aluminum Silicate','e556':'Calcium Aluminosilicate','e558':'Bentonite','e559':'Aluminum Silicate','e570':'Fatty Acids','e574':'Gluconic Acid','e575':'Glucono Delta Lactone','e576':'Sodium Gluconate','e577':'Potassium Gluconate','e578':'Calcium Gluconate','e579':'Ferrous Gluconate','e585':'Ferrous Lactate','e620':'Glutamic Acid','e621':'MSG','e622':'Potassium Glutamate','e623':'Calcium Glutamate','e624':'Monoammonium Glutamate','e625':'Magnesium Glutamate','e626':'Guanylic Acid','e627':'Disodium Guanylate','e628':'Dipotassium Guanylate','e629':'Calcium Guanylate','e630':'Inosinic Acid','e631':'Disodium Inosinate','e632':'Dipotassium Inosinate','e633':'Calcium Inosinate','e635':'Disodium Ribonucleotides','e640':'Glycine','e650':'Zinc Acetate','e900':'Dimethyl Polysiloxane','e901':'Beeswax','e902':'Candelilla Wax','e903':'Carnauba Wax','e904':'Shellac','e905':'Microcrystalline Wax','e912':'Montan Acid Esters','e914':'Oxidized Polyethylene Wax','e920':'L-Cysteine','e927b':'Carbamide','e938':'Argon','e939':'Helium','e941':'Nitrogen','e942':'Nitrous Oxide','e943a':'Butane','e943b':'Isobutane','e944':'Propane','e948':'Oxygen','e949':'Hydrogen','e950':'Acesulfame K','e951':'Aspartame','e952':'Cyclamates','e953':'Isomalt','e954':'Saccharin','e955':'Sucralose','e957':'Thaumatin','e959':'Neohesperidin','e960':'Steviol Glycosides','e961':'Neotame','e962':'Aspartame-Acesulfame Salt','e965':'Maltitol','e966':'Lactitol','e967':'Xylitol','e968':'Erythritol','e999':'Quillaia Extract','e1103':'Invertase','e1200':'Polydextrose','e1201':'Polyvinylpyrrolidone','e1202':'Polyvinylpolypyrrolidone','e1404':'Oxidized Starch','e1410':'Monostarch Phosphate','e1412':'Distarch Phosphate','e1413':'Phosphated Distarch Phosphate','e1414':'Acetylated Distarch Phosphate','e1420':'Acetylated Starch','e1422':'Acetylated Distarch Adipate','e1440':'Hydroxypropyl Starch','e1442':'Hydroxypropyl Distarch Phosphate','e1450':'Starch Sodium Octenyl Succinate','e1451':'Acetylated Oxidized Starch'};
@@ -3917,6 +3944,12 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
       protein100g: null,
       sugar100g: null,
       sodium100g: null,
+      calories: null,
+      calories100g: null,
+      saturatedFat: null,
+      saturatedFat100g: null,
+      fiber: null,
+      fiber100g: null,
       servingQuantity: null,
       servingKnown: false,
       scoreBasis: null,
@@ -3982,9 +4015,15 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     proteinRaw,
     sugarRaw,
     sodiumRaw,
+    saturatedFatRaw,
+    fiberRaw,
+    caloriesRaw,
     proteinDisplay,
     sugarDisplay,
     sodiumDisplay,
+    saturatedFatDisplay,
+    fiberDisplay,
+    caloriesDisplay,
     sugarTier,
     sodiumTier,
     proteinTier,
@@ -4014,6 +4053,12 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   const fmtProtein100g = formatGrams(proteinRaw);
   const fmtSugar100g = formatGrams(sugarRaw);
   const fmtSodium100g = formatSodiumMg(sodiumRaw);
+  const fmtCalories = formatCalories(caloriesDisplay);
+  const fmtCalories100g = formatCalories(caloriesRaw);
+  const fmtSaturatedFat = formatGrams(saturatedFatDisplay);
+  const fmtSaturatedFat100g = formatGrams(saturatedFatRaw);
+  const fmtFiber = formatGrams(fiberDisplay);
+  const fmtFiber100g = formatGrams(fiberRaw);
 
   // Explanation numbers must share a basis with their tiers.
   const basisLabel = servingKnown ? 'per serving' : 'per 100g';
@@ -4065,6 +4110,12 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
     protein100g: fmtProtein100g,
     sugar100g: fmtSugar100g,
     sodium100g: fmtSodium100g,
+    calories: fmtCalories,
+    calories100g: fmtCalories100g,
+    saturatedFat: fmtSaturatedFat,
+    saturatedFat100g: fmtSaturatedFat100g,
+    fiber: fmtFiber,
+    fiber100g: fmtFiber100g,
     servingQuantity,
     servingKnown,
     scoreBasis: 'per100g',
@@ -5558,9 +5609,15 @@ app.get('/search', async (req, res) => {
           proteinRaw,
           sugarRaw,
           sodiumRaw,
+          saturatedFatRaw,
+          fiberRaw,
+          caloriesRaw,
           proteinDisplay,
           sugarDisplay,
           sodiumDisplay,
+          saturatedFatDisplay,
+          fiberDisplay,
+          caloriesDisplay,
           sugarTier,
           sodiumTier,
           proteinTier,
@@ -5606,6 +5663,12 @@ app.get('/search', async (req, res) => {
           protein100g: formatGrams(proteinRaw),
           sugar100g: formatGrams(sugarRaw),
           sodium100g: formatSodiumMg(sodiumRaw),
+          calories: formatCalories(caloriesDisplay),
+          calories100g: formatCalories(caloriesRaw),
+          saturatedFat: formatGrams(saturatedFatDisplay),
+          saturatedFat100g: formatGrams(saturatedFatRaw),
+          fiber: formatGrams(fiberDisplay),
+          fiber100g: formatGrams(fiberRaw),
           servingQuantity,
           servingKnown,
           scoreBasis: 'per100g',
