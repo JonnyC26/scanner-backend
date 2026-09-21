@@ -8,7 +8,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '19', 'SCAN_LOGIC_VERSION must be 19, got ' + logicMatch[1]);
+assert(logicMatch[1] === '20', 'SCAN_LOGIC_VERSION must be 20, got ' + logicMatch[1]);
 assert(!src.includes('default_off_ambiguous'), 'empty-tag food default must be removed');
 assert(!src.includes("cached.productType || 'food'"), 'cache hit must not coerce missing type to food');
 assert(!src.includes("responseData.productType || 'food'"), 'must not coerce missing productType to food');
@@ -570,7 +570,16 @@ const fettuccine = {
   assert(typeof scored.score === 'number' && scored.score !== null, 'merged food must score');
   assert(scored.productName === 'ORGANIC FETTUCCINE');
   assert(/ORGANIC DURUM WHEAT SEMOLINA/i.test(scored.ingredients), 'USDA ingredients displayed as-is');
-  assert(scored.scanLogicVersion === '19', 'logic version 19');
+  assert(scored.scanLogicVersion === '20', 'logic version 20');
+  assert(scored.calories100g === '357kcal', 'fettuccine calories100g from energy-kcal_100g, got ' + scored.calories100g);
+  assert(scored.calories === '199.9kcal', 'fettuccine calories per 56g serving, got ' + scored.calories);
+  assert(scored.saturatedFat100g === '0.4g', 'fettuccine saturatedFat100g from saturated-fat_100g, got ' + scored.saturatedFat100g);
+  assert(scored.saturatedFat === '0.2g', 'fettuccine saturatedFat per serving, got ' + scored.saturatedFat);
+  assert(scored.fiber100g === '3.6g', 'fettuccine fiber100g from fiber_100g, got ' + scored.fiber100g);
+  assert(scored.fiber === '2g', 'fettuccine fiber per serving, got ' + scored.fiber);
+  assert(scored.caloriesTier === undefined, 'must not invent caloriesTier');
+  assert(scored.saturatedFatTier === undefined, 'must not invent saturatedFatTier');
+  assert(scored.fiberTier === undefined, 'must not invent fiberTier');
 
   const offScored = await g.scanAndCacheFood('111', {
     product_name: 'Yogurt',
@@ -700,7 +709,7 @@ const fettuccine = {
   assert(highN.components.protein === 0, 'suppressed protein contributes 0');
 
   // --- Food-only gate ---
-  assert(g.SCAN_LOGIC_VERSION === '19', 'logic version 19');
+  assert(g.SCAN_LOGIC_VERSION === '20', 'logic version 20');
   assert(typeof g.routeResolvedScan === 'function', 'routeResolvedScan exported');
   assert(g.isExplicitFoodProductType('food') === true);
   assert(g.isExplicitFoodProductType('unsupported') === false);
