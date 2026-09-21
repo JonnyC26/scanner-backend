@@ -2640,13 +2640,18 @@ function normalizeOrganicStatus(value) {
 // legitimate serving was ≤ 500g/ml, with a clean gap to this Coke bottle's
 // 2000ml whole-package "serving". Not a nutritional standard.
 const MAX_TRUSTED_SERVING_QUANTITY = 500;
-// Unified consistency check (no per-nutrient limits). Absolute 0.05 is half
-// of formatGrams' 0.1g display quantum. Relative 25% covers ordinary
-// 1-decimal / integer-kcal rounding and the existing Liquid I.V. labeled
-// serving vs scaled-100g gap (0.5g vs 0.616g, ~19%). Mixed-source Coke
-// (780g vs 11×355/100) is ~20× and fails.
-const SERVING_CONSISTENCY_ABS = 0.05;
+// Absolute floor is half the display quantum for that field — a formatting
+// / units tolerance, not a nutritional threshold. formatGrams and
+// formatCalories round to 0.1; formatSodiumMg rounds stored grams to 1mg.
+// Relative 25% is unchanged: ordinary rounding plus Liquid I.V. labeled
+// vs scaled-100g (~19%). Mixed-source Coke (780g vs 11×355/100) still fails.
+const SERVING_CONSISTENCY_ABS_GRAMS = 0.05;
+const SERVING_CONSISTENCY_ABS_SODIUM_G = 0.0005;
 const SERVING_CONSISTENCY_REL = 0.25;
+
+function servingConsistencyAbs(kind) {
+  return kind === 'sodium' ? SERVING_CONSISTENCY_ABS_SODIUM_G : SERVING_CONSISTENCY_ABS_GRAMS;
+}
 
 function parseServingQuantity(raw) {
   if (raw == null || raw === '') return null;
@@ -2663,22 +2668,22 @@ function hasServingNutrientData(nutriments) {
     || nutriments.sodium_serving != null;
 }
 
-function servingValueIsConsistent(val100g, servingVal, servingQuantity) {
+function servingValueIsConsistent(val100g, servingVal, servingQuantity, kind) {
   const expected = Number(val100g) * Number(servingQuantity) / 100;
   const actual = Number(servingVal);
   if (!Number.isFinite(expected) || !Number.isFinite(actual)) return false;
   const delta = Math.abs(actual - expected);
   const scale = Math.max(Math.abs(expected), Math.abs(actual));
-  return delta <= Math.max(SERVING_CONSISTENCY_ABS, SERVING_CONSISTENCY_REL * scale);
+  return delta <= Math.max(servingConsistencyAbs(kind), SERVING_CONSISTENCY_REL * scale);
 }
 
 // Convert a per-100g nutrient to per-serving. Never disguise per-100g as serving.
 // Explicit *_serving is used only when it matches 100g × trusted quantity
 // within the rounding tolerance; otherwise derive from that pair.
-function toServing(val100g, servingVal, servingQuantity) {
+function toServing(val100g, servingVal, servingQuantity, kind) {
   if (val100g === null) return null;
   if (servingQuantity == null) return null;
-  if (servingVal != null && servingValueIsConsistent(val100g, servingVal, servingQuantity)) {
+  if (servingVal != null && servingValueIsConsistent(val100g, servingVal, servingQuantity, kind)) {
     return servingVal;
   }
   return val100g * servingQuantity / 100;
@@ -2715,12 +2720,12 @@ function resolveFoodServingNutrition(nutriments, servingQuantityRaw) {
   const energyKcal = getNumericNutrimentValue(nutriments, ['energy-kcal_100g', 'energy-kcal']);
   const energyKj = energyKcal == null ? null : energyKcal * KJ_PER_KCAL;
   const caloriesRaw = energyKj == null ? null : energyKj / KJ_PER_KCAL;
-  const proteinDisplay = toServing(proteinRaw, nutriments?.proteins_serving, servingQuantity);
-  const sugarDisplay = toServing(sugarRaw, nutriments?.sugars_serving, servingQuantity);
-  const sodiumDisplay = toServing(sodiumRaw, nutriments?.sodium_serving, servingQuantity);
-  const saturatedFatDisplay = toServing(saturatedFatRaw, nutriments?.['saturated-fat_serving'], servingQuantity);
-  const fiberDisplay = toServing(fiberRaw, nutriments?.fiber_serving, servingQuantity);
-  const caloriesDisplay = toServing(caloriesRaw, nutriments?.['energy-kcal_serving'], servingQuantity);
+  const proteinDisplay = toServing(proteinRaw, nutriments?.proteins_serving, servingQuantity, 'grams');
+  const sugarDisplay = toServing(sugarRaw, nutriments?.sugars_serving, servingQuantity, 'grams');
+  const sodiumDisplay = toServing(sodiumRaw, nutriments?.sodium_serving, servingQuantity, 'sodium');
+  const saturatedFatDisplay = toServing(saturatedFatRaw, nutriments?.['saturated-fat_serving'], servingQuantity, 'grams');
+  const fiberDisplay = toServing(fiberRaw, nutriments?.fiber_serving, servingQuantity, 'grams');
+  const caloriesDisplay = toServing(caloriesRaw, nutriments?.['energy-kcal_serving'], servingQuantity, 'calories');
   // Tiers share a basis with the numbers shown: per-serving when known, else per-100g.
   const tiers = computeNutrientTiers(
     servingKnown ? sugarDisplay : sugarRaw,

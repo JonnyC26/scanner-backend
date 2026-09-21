@@ -1298,8 +1298,21 @@ const fettuccine = {
   assert(g.parseServingQuantity(500.1) === null, 'quantities above 500 are untrusted');
   assert(g.parseServingQuantity(2000) === null, '2000ml whole-bottle serving is untrusted');
   assert(g.servingValueIsConsistent(11, 39.05, 355) === true, 'exact 100g × qty is consistent');
-  assert(g.servingValueIsConsistent(3.85, 0.5, 16) === true, 'Liquid I.V. 0.5 vs 0.616 is ordinary labeled-vs-scaled');
+  assert(g.servingValueIsConsistent(3.85, 0.5, 16, 'sodium') === true, 'Liquid I.V. 0.5 vs 0.616 is ordinary labeled-vs-scaled');
   assert(g.servingValueIsConsistent(11, 780, 355) === false, 'OFF 780g vs USDA-derived 39g is inconsistent');
+  // Shared 0.05g floor used to accept this: |0.05-0.004|=0.046 < 0.05, yet 12.5×.
+  assert(g.servingValueIsConsistent(0.004, 0.05, 100, 'sodium') === false,
+    'low-sodium 0.05g explicit vs 0.004g expected must not pass on a gram-sized floor');
+  const lowNa = g.resolveFoodServingNutrition({
+    proteins_100g: 0,
+    sugars_100g: 0,
+    sodium_100g: 0.004,
+    sodium_serving: 0.05,
+  }, 100);
+  assert(lowNa.servingKnown === true, 'trusted 100g quantity still known');
+  assert(lowNa.sodiumDisplay === 0.004,
+    'inconsistent low-sodium *_serving must derive 0.004g, got ' + lowNa.sodiumDisplay);
+  assert(lowNa.sodiumDisplay !== 0.05, 'must not keep the 0.05g explicit serving');
 
   const liquidIv = g.resolveFoodServingNutrition({
     proteins_100g: 0, sugars_100g: 0, sodium_100g: 3.85,
