@@ -4664,6 +4664,30 @@ app.get('/scan/:barcode', async (req, res) => {
 
     const responseData = await scanAndCache(barcode, { skipExplanation: deferExplanation });
 
+    // Contributed fronts are stored in productImages and served at GET /image.
+    // Cache hits return imageUrl from write time, which is '' for USDA-only
+    // foods. Fill that one field on the way out. Skip the read when a URL is
+    // already present. If PUBLIC_BASE_URL is unset, leave imageUrl empty —
+    // never build a host from request headers.
+    if (responseData && !responseData.imageUrl) {
+      try {
+        const imageDoc = await getDocWithBarcodeMigration(PRODUCT_IMAGES_COLLECTION, barcode);
+        const imageBase = resolvePublicBaseUrl();
+        const imageData = imageDoc.exists ? (imageDoc.data() || null) : null;
+        const servable = !!(
+          imageData &&
+          imageData.suppressed !== true &&
+          imageData.data &&
+          imageData.bytes > 0
+        );
+        if (servable && imageBase) {
+          responseData.imageUrl = `${imageBase}/image/${barcode}`;
+        }
+      } catch (imageLookupErr) {
+        console.log(`[SCAN IMAGE URL] barcode=${barcode} ${imageLookupErr.message}`);
+      }
+    }
+
     // Diet warning detection — food only. Needs raw OFF product data (labels,
     // allergens etc.) which isn't stored in the cache. Cosmetics skip this.
     let dietWarnings = '';
@@ -4785,6 +4809,23 @@ async function callVisionJson(imageBase64, mediaType, prompt, { maxTokens = 1500
   try {
     parsed = JSON.parse(stripJsonFences(text));
   } catch (_) {
+    const blocks = Array.isArray(claudeData.content) ? claudeData.content : [];
+    const firstBlock = blocks[0] && typeof blocks[0] === 'object' ? blocks[0] : null;
+    const rawText = text == null ? '' : String(text);
+    const prefix = rawText.replace(/\r\n|\r|\n/g, ' ').slice(0, 160);
+    const outputTokens = claudeData.usage && claudeData.usage.output_tokens != null
+      ? claudeData.usage.output_tokens
+      : 'none';
+    console.log(
+      '[VISION JSON PARSE]'
+      + ` stop_reason=${claudeData.stop_reason == null ? 'none' : claudeData.stop_reason}`
+      + ` content.length=${blocks.length}`
+      + ` content0.type=${firstBlock && firstBlock.type ? firstBlock.type : 'none'}`
+      + ` output_tokens=${outputTokens}`
+      + ` max_tokens=${maxTokens}`
+      + ` text.length=${rawText.length}`
+      + ` prefix=${JSON.stringify(prefix)}`
+    );
     const err = new Error('Could not parse vision model JSON');
     err.statusCode = 502;
     throw err;

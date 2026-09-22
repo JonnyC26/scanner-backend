@@ -6781,6 +6781,476 @@ def test_nutrition_subscore_validation():
         )
 
 
+def test_scan_contributed_image_url():
+    """GET /scan fills an empty imageUrl from a servable productImages doc.
+
+    An already-populated imageUrl must not read productImages.
+    """
+    script = r"""
+const http = require('http');
+const path = require('path');
+const Module = require('module');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const productCache = new Map();
+const productImages = new Map();
+const collectionGets = [];
+
+function docSnap(data) {
+  return {
+    exists: data !== undefined,
+    data: () => (data === undefined ? undefined : data),
+  };
+}
+
+function makeDoc(collectionName, id) {
+  const store = collectionName === 'productImages' ? productImages
+    : collectionName === 'productCache' ? productCache
+    : null;
+  return {
+    async get() {
+      collectionGets.push({ collection: collectionName, id: String(id) });
+      if (!store) return docSnap(undefined);
+      return docSnap(store.get(String(id)));
+    },
+    async set(data) {
+      if (!store) return;
+      store.set(String(id), { ...(typeof data === 'object' && data ? data : {}) });
+    },
+    async delete() {
+      if (store) store.delete(String(id));
+    },
+    async update(data) {
+      if (!store) return;
+      const prev = store.get(String(id)) || {};
+      store.set(String(id), { ...prev, ...data });
+    },
+  };
+}
+
+const mockFirestore = {
+  collection(name) {
+    return {
+      doc(id) { return makeDoc(name, String(id)); },
+      limit() { return { async get() { return { empty: true, docs: [] }; } }; },
+      orderBy() { return this; },
+      async add() { return { id: 'x' }; },
+      async get() { return { empty: true, docs: [] }; },
+    };
+  },
+};
+mockFirestore.FieldValue = {
+  serverTimestamp: () => 'SERVER_TS',
+  increment: (n) => n,
+};
+
+const mockAdmin = {
+  initializeApp() {},
+  credential: { cert() { return {}; } },
+  auth() {
+    return { async verifyIdToken() { return { uid: 'uid-image-fill' }; } };
+  },
+  firestore() { return mockFirestore; },
+};
+mockAdmin.firestore.FieldValue = mockFirestore.FieldValue;
+
+const origRequire = Module.prototype.require;
+Module.prototype.require = function (id) {
+  if (id === 'firebase-admin') return mockAdmin;
+  return origRequire.apply(this, arguments);
+};
+
+process.env.FIREBASE_SERVICE_ACCOUNT = JSON.stringify({
+  project_id: 'demo',
+  client_email: 'demo@demo.iam.gserviceaccount.com',
+  private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg==\n-----END PRIVATE KEY-----\n',
+});
+process.env.ANTHROPIC_API_KEY = 'test-key';
+process.env.PUBLIC_BASE_URL = 'https://api.example.com/';
+
+global.fetch = async function mockFetch(url) {
+  throw new Error('upstream blocked in image-url test: ' + url);
+};
+
+const appPath = path.join(process.cwd(), 'index.js');
+delete require.cache[appPath];
+const app = require(appPath);
+
+function withServer(fn) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, '127.0.0.1', async () => {
+      try {
+        const result = await fn(server.address().port);
+        server.close(() => resolve(result));
+      } catch (err) {
+        server.close(() => reject(err));
+      }
+    });
+  });
+}
+
+function request(port, urlPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, path: urlPath, method: 'GET' },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try { json = text ? JSON.parse(text) : null; } catch (_) { json = text; }
+          resolve({ status: res.statusCode, json });
+        });
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function imageGets() {
+  return collectionGets.filter(g => g.collection === 'productImages');
+}
+
+function seedFood(barcode, imageUrl) {
+  productCache.set(barcode, {
+    productType: 'food',
+    productName: 'Test Cereal',
+    imageUrl,
+    ingredients: 'Wheat, Sugar',
+    explanation: 'A short food explanation.',
+    explanationPending: false,
+    score: 70,
+    scoreLabel: 'Good',
+    cachedAt: Date.now(),
+    scanLogicVersion: '23',
+    source: 'usda',
+  });
+}
+
+const imageData = Buffer.from('front-bytes').toString('base64');
+
+(async () => {
+  // Empty cached imageUrl + servable productImages doc → public URL.
+  {
+    productCache.clear();
+    productImages.clear();
+    collectionGets.length = 0;
+    const barcode = '3017620422003';
+    seedFood(barcode, '');
+    productImages.set(barcode, {
+      data: imageData,
+      bytes: Buffer.from('front-bytes').length,
+      mediaType: 'image/jpeg',
+      suppressed: false,
+    });
+    await withServer(async (port) => {
+      const res = await request(port, '/scan/' + barcode);
+      assert(res.status === 200, 'empty imageUrl scan → 200, got ' + res.status);
+      assert(res.json && res.json.imageUrl === 'https://api.example.com/image/' + barcode,
+        'filled imageUrl: ' + JSON.stringify(res.json && res.json.imageUrl));
+      assert(res.json.productType === 'food', 'productType unchanged');
+      assert(res.json.score === 70, 'score unchanged');
+      assert(res.json.productName === 'Test Cereal', 'name unchanged');
+      assert(res.json.ingredients === 'Wheat, Sugar', 'ingredients unchanged');
+    });
+    assert(imageGets().length === 1, 'empty imageUrl must read productImages once, got ' + imageGets().length);
+    assert(imageGets()[0].id === barcode, 'read the scanned barcode');
+    assert(productCache.get(barcode).imageUrl === '', 'fill must not write productCache.imageUrl');
+  }
+
+  // Already-populated imageUrl → no productImages read, URL unchanged.
+  {
+    productCache.clear();
+    productImages.clear();
+    collectionGets.length = 0;
+    const barcode = '3017620422003';
+    const existing = 'https://images.example/already.jpg';
+    seedFood(barcode, existing);
+    productImages.set(barcode, {
+      data: imageData,
+      bytes: 12,
+      mediaType: 'image/jpeg',
+      suppressed: false,
+    });
+    await withServer(async (port) => {
+      const res = await request(port, '/scan/' + barcode);
+      assert(res.status === 200, 'populated imageUrl scan → 200, got ' + res.status);
+      assert(res.json && res.json.imageUrl === existing,
+        'existing imageUrl must be returned unchanged: ' + JSON.stringify(res.json && res.json.imageUrl));
+    });
+    assert(imageGets().length === 0,
+      'populated imageUrl must not read productImages, got ' + JSON.stringify(imageGets()));
+  }
+
+  // Not servable (suppressed, empty, missing) and empty PUBLIC_BASE_URL stay empty.
+  {
+    const barcode = '00560511';
+    const cases = [
+      { name: 'suppressed', image: { data: imageData, bytes: 12, suppressed: true } },
+      { name: 'zero bytes', image: { data: imageData, bytes: 0, suppressed: false } },
+      { name: 'empty data', image: { data: '', bytes: 12, suppressed: false } },
+      { name: 'missing doc', image: null },
+    ];
+    for (const c of cases) {
+      productCache.clear();
+      productImages.clear();
+      collectionGets.length = 0;
+      process.env.PUBLIC_BASE_URL = 'https://api.example.com';
+      seedFood(barcode, '');
+      if (c.image) productImages.set(barcode, c.image);
+      await withServer(async (port) => {
+        const res = await request(port, '/scan/' + barcode);
+        assert(res.status === 200, c.name + ' → 200, got ' + res.status);
+        assert(res.json && res.json.imageUrl === '',
+          c.name + ' must leave imageUrl empty, got ' + JSON.stringify(res.json && res.json.imageUrl));
+      });
+      assert(imageGets().length >= 1, c.name + ' with empty imageUrl must still read productImages');
+    }
+
+    productCache.clear();
+    productImages.clear();
+    collectionGets.length = 0;
+    delete process.env.PUBLIC_BASE_URL;
+    seedFood(barcode, '');
+    productImages.set(barcode, {
+      data: imageData,
+      bytes: 12,
+      mediaType: 'image/jpeg',
+      suppressed: false,
+    });
+    await withServer(async (port) => {
+      const res = await request(port, '/scan/' + barcode);
+      assert(res.status === 200, 'unset base → 200');
+      assert(res.json && res.json.imageUrl === '',
+        'unset PUBLIC_BASE_URL must leave imageUrl empty, got ' + JSON.stringify(res.json && res.json.imageUrl));
+    });
+    assert(productCache.get(barcode).imageUrl === '', 'unset base must not persist a URL');
+  }
+
+  console.log('scan contributed image url ok');
+})().catch((err) => {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"scan contributed image url assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
+def test_vision_json_parse_log():
+    """Parse failure logs distinguishing metadata and still returns 502."""
+    script = r"""
+const http = require('http');
+const path = require('path');
+const Module = require('module');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const mockFirestore = {
+  collection() {
+    return {
+      doc() {
+        return {
+          async get() { return { exists: false, data: () => undefined }; },
+          async set() {},
+          async update() {},
+          async delete() {},
+        };
+      },
+      async add() { return { id: 'x' }; },
+    };
+  },
+};
+mockFirestore.FieldValue = { serverTimestamp: () => 'SERVER_TS', increment: (n) => n };
+
+const mockAdmin = {
+  initializeApp() {},
+  credential: { cert() { return {}; } },
+  auth() {
+    return {
+      async verifyIdToken(token) {
+        if (!token || token === 'bad') throw new Error('invalid token');
+        return { uid: 'uid-vision-log' };
+      },
+    };
+  },
+  firestore() { return mockFirestore; },
+};
+mockAdmin.firestore.FieldValue = mockFirestore.FieldValue;
+
+const origRequire = Module.prototype.require;
+Module.prototype.require = function (id) {
+  if (id === 'firebase-admin') return mockAdmin;
+  return origRequire.apply(this, arguments);
+};
+
+process.env.FIREBASE_SERVICE_ACCOUNT = JSON.stringify({
+  project_id: 'demo',
+  client_email: 'demo@demo.iam.gserviceaccount.com',
+  private_key: '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg==\n-----END PRIVATE KEY-----\n',
+});
+process.env.ANTHROPIC_API_KEY = 'test-key';
+
+const IMAGE_TOKEN = 'NOTANIMAGEBASE64TOKEN';
+const markerStart = 'PREFIXMARKER not json\nsecond line ';
+const markerEnd = 'ENDMARKER_SHOULD_NOT_LOG';
+const rawText = markerStart + 'Z'.repeat(300) + markerEnd;
+let mode = 'parse-fail';
+
+global.fetch = async function mockFetch() {
+  if (mode === 'http-error') {
+    return {
+      ok: false,
+      status: 500,
+      async json() { return { error: { message: 'overloaded' } }; },
+    };
+  }
+  return {
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        stop_reason: 'max_tokens',
+        content: [
+          { type: 'text', text: rawText },
+          { type: 'text', text: 'second block must not be logged in full' },
+        ],
+        usage: { output_tokens: 1500 },
+      };
+    },
+  };
+};
+
+const appPath = path.join(process.cwd(), 'index.js');
+delete require.cache[appPath];
+const app = require(appPath);
+
+function request(body) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      const payload = JSON.stringify(body);
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/scan/photo',
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer good-token',
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          },
+        },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            server.close();
+            const text = Buffer.concat(chunks).toString('utf8');
+            let json = null;
+            try { json = text ? JSON.parse(text) : null; } catch (_) { json = text; }
+            resolve({ status: res.statusCode, json });
+          });
+        }
+      );
+      req.on('error', (err) => { server.close(); reject(err); });
+      req.write(payload);
+      req.end();
+    });
+  });
+}
+
+(async () => {
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => { logs.push(args.join(' ')); };
+
+  mode = 'parse-fail';
+  const failed = await request({
+    imageBase64: IMAGE_TOKEN,
+    mediaType: 'image/jpeg',
+    barcode: '0050428087152',
+  });
+  assert(failed.status === 502, 'parse failure → 502, got ' + failed.status);
+  assert(failed.json && failed.json.error === 'Could not parse vision model JSON',
+    'error message unchanged: ' + JSON.stringify(failed.json));
+  assert(Object.keys(failed.json).length === 1, 'body must be only the error');
+
+  const parseLogs = logs.filter(l => l.includes('[VISION JSON PARSE]'));
+  assert(parseLogs.length === 1, 'exactly one parse log, got ' + parseLogs.length + ' ' + JSON.stringify(logs));
+  const line = parseLogs[0];
+  assert(line.includes('stop_reason=max_tokens'), line);
+  assert(line.includes('content.length=2'), line);
+  assert(line.includes('content0.type=text'), line);
+  assert(line.includes('output_tokens=1500'), line);
+  assert(line.includes('max_tokens=1500'), line);
+  assert(line.includes('text.length=' + rawText.length), line);
+  assert(line.includes('PREFIXMARKER'), 'prefix must keep the start of the text');
+  assert(line.includes('second line'), 'line break must be normalised into the prefix');
+  assert(!line.includes('\n'), 'parse log must be a single line');
+  assert(!line.includes(markerEnd), 'prefix must be capped before the tail marker');
+  assert(!line.includes(IMAGE_TOKEN), 'must not log image/base64 bytes');
+  assert(!line.includes('second block must not be logged in full'), 'must not log later content blocks');
+  const prefixMatch = line.match(/prefix=(\".*\")$/);
+  assert(prefixMatch, 'prefix must be a JSON string at end of log: ' + line);
+  const prefix = JSON.parse(prefixMatch[1]);
+  assert(prefix.length <= 160, 'prefix longer than 160: ' + prefix.length);
+  assert(!prefix.includes('\n'), 'prefix line breaks must be normalised');
+
+  logs.length = 0;
+  mode = 'http-error';
+  const httpErr = await request({
+    imageBase64: IMAGE_TOKEN,
+    mediaType: 'image/jpeg',
+  });
+  assert(httpErr.status === 502, 'upstream vision error → 502, got ' + httpErr.status);
+  assert(httpErr.json && httpErr.json.error === 'overloaded',
+    'non-parse failure must keep the provider message: ' + JSON.stringify(httpErr.json));
+  assert(!logs.some(l => l.includes('[VISION JSON PARSE]')),
+    'non-parse failure must not log vision parse metadata: ' + JSON.stringify(logs));
+  assert(!logs.some(l => l.includes(IMAGE_TOKEN)), 'http-error logs must not include image bytes');
+
+  console.log = originalLog;
+  console.log('vision json parse log ok');
+})().catch((err) => {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"vision json parse log assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -6819,6 +7289,8 @@ def main() -> int:
         test_search_food_us_filter,
         test_usda_food_lookup,
         test_nutrition_subscore_validation,
+        test_scan_contributed_image_url,
+        test_vision_json_parse_log,
     ]
     failed = 0
     for test in tests:
