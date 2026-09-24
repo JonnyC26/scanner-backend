@@ -3019,7 +3019,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + SCAN_LOGIC_VERSION);
 assert(src.includes('explanationForUnscoredFood(cached)'),
   'generateExplanationFromCached must use explanationForUnscoredFood');
 assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'),
@@ -3067,6 +3067,7 @@ const path = require('path');
 const __cosmeticDir = process.cwd();
 function recordRawObservation() {}
 async function getCategoryAlternatives() { return []; }
+const pendingAlternativesByResponse = new WeakMap();
 async function generateFoodExplanation() {
   throw new Error('Haiku must not be called');
 }
@@ -3102,7 +3103,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '23', 'exported SCAN_LOGIC_VERSION must be 23');
+assert(g.SCAN_LOGIC_VERSION === '24', 'exported SCAN_LOGIC_VERSION must be 24');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3159,7 +3160,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '23', 'normal food stamps logic version 23');
+  assert(result.scanLogicVersion === '24', 'normal food stamps logic version 24');
   assert(result.calories100g === '80 Cal', 'yogurt calories100g, got ' + result.calories100g);
   assert(result.fiber100g === '0g', 'yogurt fiber 0 preserved, got ' + result.fiber100g);
   assert(result.saturatedFat100g === 'N/A', 'missing sat fat stays N/A, not derived, got ' + result.saturatedFat100g);
@@ -3266,7 +3267,7 @@ assert(g.nutritionReasonFromCachedBreakdown({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '23', 'Dawn stamps logic version 23');
+  assert(result.scanLogicVersion === '24', 'Dawn stamps logic version 24');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3338,7 +3339,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + logicMatch[1]);
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -3512,7 +3513,7 @@ function dietProduct(ingredientsText, extra) {
     traces_tags: [],
   };
   const warning = g.detectDietWarnings(product, 'vegan');
-  assert(warning === 'Not vegan: carmine',
+  assert(warning === 'Not Vegan: Carmine',
     'vegan + e120 in ingredients[] must warn, got: ' + JSON.stringify(warning));
 }
 
@@ -3588,22 +3589,22 @@ for (const text of noVeganPlant) {
 }
 
 const yesVeganAnimal = [
-  ['milk', 'Not vegan: milk'],
-  ["cow's milk", 'Not vegan: milk'],
-  ["cow’s milk", 'Not vegan: milk'],
-  ['whole milk', 'Not vegan: milk'],
-  ['buttermilk', 'Not vegan: buttermilk'],
-  ['butter', 'Not vegan: butter'],
-  ['dairy butter', 'Not vegan: dairy'],
-  ['cream', 'Not vegan: cream'],
-  ['egg', 'Not vegan: egg'],
-  ['eggs', 'Not vegan: eggs'],
-  ['honey', 'Not vegan: honey'],
-  ['whey protein', 'Not vegan: whey'],
-  ['casein', 'Not vegan: casein'],
-  ['Water, milk, sugar', 'Not vegan: milk'],
-  ['MILK', 'Not vegan: milk'],
-  ['butter - unsalted', 'Not vegan: butter'],
+  ['milk', 'Not Vegan: Milk'],
+  ["cow's milk", 'Not Vegan: Milk'],
+  ["cow’s milk", 'Not Vegan: Milk'],
+  ['whole milk', 'Not Vegan: Milk'],
+  ['buttermilk', 'Not Vegan: Buttermilk'],
+  ['butter', 'Not Vegan: Butter'],
+  ['dairy butter', 'Not Vegan: Dairy'],
+  ['cream', 'Not Vegan: Cream'],
+  ['egg', 'Not Vegan: Egg'],
+  ['eggs', 'Not Vegan: Eggs'],
+  ['honey', 'Not Vegan: Honey'],
+  ['whey protein', 'Not Vegan: Whey'],
+  ['casein', 'Not Vegan: Casein'],
+  ['Water, milk, sugar', 'Not Vegan: Milk'],
+  ['MILK', 'Not Vegan: Milk'],
+  ['butter - unsalted', 'Not Vegan: Butter'],
 ];
 for (const [text, expected] of yesVeganAnimal) {
   const w = g.detectDietWarnings(dietProduct(text), 'vegan');
@@ -3614,7 +3615,7 @@ for (const [text, expected] of yesVeganAnimal) {
 // Eggplant vs egg
 {
   const eggW = g.detectDietWarnings(dietProduct('egg'), 'vegan');
-  assert(eggW === 'Not vegan: egg', 'bare egg must warn, got: ' + eggW);
+  assert(eggW === 'Not Vegan: Egg', 'bare egg must warn, got: ' + eggW);
   const plantW = g.detectDietWarnings(dietProduct('eggplant'), 'vegan');
   assert(!plantW, 'eggplant must not egg-warn, got: ' + JSON.stringify(plantW));
 }
@@ -3624,7 +3625,7 @@ for (const [text, expected] of yesVeganAnimal) {
   assert(!g.detectDietWarnings(dietProduct('almond-milk; water'), 'vegan'), 'almond-milk');
   assert(!g.detectDietWarnings(dietProduct('(coconut milk)'), 'vegan'), 'paren coconut milk');
   const cow = g.detectDietWarnings(dietProduct("cow's-milk"), 'vegan');
-  assert(cow === 'Not vegan: milk', "cow's-milk must warn, got: " + cow);
+  assert(cow === 'Not Vegan: Milk', "cow's-milk must warn, got: " + cow);
 }
 
 // Qualifier must not cross ingredient separators; plurals ok inside a phrase
@@ -3637,10 +3638,10 @@ for (const [text, expected] of yesVeganAnimal) {
   ];
   for (const text of sepWarn) {
     const w = g.detectDietWarnings(dietProduct(text), 'vegan');
-    assert(w === 'Not vegan: milk', 'separator must not suppress dairy for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(w));
+    assert(w === 'Not Vegan: Milk', 'separator must not suppress dairy for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(w));
     const lf = g.detectDietWarnings(dietProduct(text), 'lactose-free');
     // First and last also required for lactose-free; check all sep cases for lactose too.
-    assert(lf === 'Not lactose-free: milk', 'separator lactose warn for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(lf));
+    assert(lf === 'Not Lactose-Free: Milk', 'separator lactose warn for ' + JSON.stringify(text) + ', got: ' + JSON.stringify(lf));
   }
   assert(!g.detectDietWarnings(dietProduct('Water, Oat Milk, Salt'), 'vegan'), 'Water, Oat Milk, Salt vegan');
   assert(!g.detectDietWarnings(dietProduct('Almonds Milk'), 'vegan'), 'Almonds Milk vegan');
@@ -3658,42 +3659,42 @@ for (const [text, expected] of yesVeganAnimal) {
   assert(!g.detectDietWarnings(dietProduct('gluten-free oats'), 'gluten-free'),
     'gluten-free oats must not gluten-warn');
   const mixed = g.detectDietWarnings(dietProduct('dairy free chocolate, milk'), 'vegan');
-  assert(mixed === 'Not vegan: milk',
+  assert(mixed === 'Not Vegan: Milk',
     'dairy free chocolate, milk must still warn on real milk, got: ' + JSON.stringify(mixed));
 }
 
 // Seafood terms restored; -free still suppresses
 {
   const shellHitV = g.detectDietWarnings(dietProduct('shellfish extract'), 'vegan');
-  assert(shellHitV === 'Not vegan: shellfish', 'shellfish extract must vegan-warn, got: ' + shellHitV);
+  assert(shellHitV === 'Not Vegan: Shellfish', 'shellfish extract must vegan-warn, got: ' + shellHitV);
   const shellHitVg = g.detectDietWarnings(dietProduct('shellfish extract'), 'vegetarian');
-  assert(shellHitVg === 'Not vegetarian: shellfish', 'shellfish extract must vegetarian-warn, got: ' + shellHitVg);
+  assert(shellHitVg === 'Not Vegetarian: Shellfish', 'shellfish extract must vegetarian-warn, got: ' + shellHitVg);
   assert(!g.detectDietWarnings(dietProduct('shellfish-free seasoning blend'), 'vegan'),
     'shellfish-free must not vegan-warn');
   assert(!g.detectDietWarnings(dietProduct('shellfish-free seasoning blend'), 'vegetarian'),
     'shellfish-free must not vegetarian-warn');
   const crab = g.detectDietWarnings(dietProduct('crab meat'), 'vegan');
-  assert(crab === 'Not vegan: crab', 'crab must vegan-warn, got: ' + crab);
+  assert(crab === 'Not Vegan: Crab', 'crab must vegan-warn, got: ' + crab);
 }
 
 // Vegetarian meatTerms — word-boundary (not substring)
 {
   const fish = g.detectDietWarnings(dietProduct('tuna, salt'), 'vegetarian');
-  assert(fish === 'Not vegetarian: tuna', 'tuna must vegetarian-warn, got: ' + fish);
+  assert(fish === 'Not Vegetarian: Tuna', 'tuna must vegetarian-warn, got: ' + fish);
   const gel = g.detectDietWarnings(dietProduct('gelatin'), 'vegetarian');
-  assert(gel === 'Not vegetarian: gelatin', 'gelatin must vegetarian-warn, got: ' + gel);
+  assert(gel === 'Not Vegetarian: Gelatin', 'gelatin must vegetarian-warn, got: ' + gel);
   const chicken = g.detectDietWarnings(dietProduct('chicken broth'), 'vegetarian');
-  assert(chicken === 'Not vegetarian: chicken', 'chicken must warn, got: ' + chicken);
+  assert(chicken === 'Not Vegetarian: Chicken', 'chicken must warn, got: ' + chicken);
 }
 
 // Gluten joined compounds vs maltodextrin
 {
   const ww = g.detectDietWarnings(dietProduct('wholewheat flour'), 'gluten-free');
-  assert(ww === 'May not be gluten-free: wheat', 'wholewheat must gluten-warn, got: ' + ww);
+  assert(ww === 'May Not Be Gluten-Free: Wheat', 'wholewheat must gluten-warn, got: ' + ww);
   assert(!g.detectDietWarnings(dietProduct('maltodextrin'), 'gluten-free'),
     'maltodextrin must not gluten-warn');
   const malt = g.detectDietWarnings(dietProduct('malt extract'), 'gluten-free');
-  assert(malt === 'May not be gluten-free: malt', 'malt extract must gluten-warn, got: ' + malt);
+  assert(malt === 'May Not Be Gluten-Free: Malt', 'malt extract must gluten-warn, got: ' + malt);
 }
 
 // Lactose-free shares plant-qualified dairy rule
@@ -3701,9 +3702,9 @@ for (const [text, expected] of yesVeganAnimal) {
   assert(!g.detectDietWarnings(dietProduct('oat milk'), 'lactose-free'), 'oat milk lactose');
   assert(!g.detectDietWarnings(dietProduct('cocoa butter'), 'lactose-free'), 'cocoa butter lactose');
   const milk = g.detectDietWarnings(dietProduct('whole milk'), 'lactose-free');
-  assert(milk === 'Not lactose-free: milk', 'whole milk lactose warn, got: ' + milk);
+  assert(milk === 'Not Lactose-Free: Milk', 'whole milk lactose warn, got: ' + milk);
   const bm = g.detectDietWarnings(dietProduct('buttermilk'), 'lactose-free');
-  assert(bm === 'Not lactose-free: buttermilk', 'buttermilk lactose warn, got: ' + bm);
+  assert(bm === 'Not Lactose-Free: Buttermilk', 'buttermilk lactose warn, got: ' + bm);
 }
 
 // Allergen tags still exact-match (OFF tags are discrete)
@@ -3711,44 +3712,44 @@ for (const [text, expected] of yesVeganAnimal) {
   const w = g.detectDietWarnings(dietProduct('oat drink', {
     allergens_tags: ['en:milk'],
   }), 'vegan');
-  assert(w === 'Not vegan: milk', 'allergen tag milk must still warn, got: ' + w);
+  assert(w === 'Not Vegan: Milk', 'allergen tag milk must still warn, got: ' + w);
 }
 
 // Exact shortened copy for every detectDietWarnings trigger row
 {
   assert(g.detectDietWarnings(dietProduct('', { labels_tags: ['en:non-vegan'] }), 'vegan')
-    === 'Not vegan', 'labelled non-vegan');
+    === 'Not Vegan', 'labelled non-vegan');
   assert(g.detectDietWarnings(dietProduct('milk'), 'vegan')
-    === 'Not vegan: milk', 'vegan term match');
+    === 'Not Vegan: Milk', 'vegan term match');
   assert(g.detectDietWarnings(dietProduct('Water, colour', {
     ingredients: [{ id: 'en:e120', text: 'Carmine' }],
-  }), 'vegan') === 'Not vegan: carmine', 'vegan animal additive');
+  }), 'vegan') === 'Not Vegan: Carmine', 'vegan animal additive');
 
   assert(g.detectDietWarnings(dietProduct('', { labels_tags: ['en:non-vegetarian'] }), 'vegetarian')
-    === 'Not vegetarian', 'labelled non-vegetarian');
+    === 'Not Vegetarian', 'labelled non-vegetarian');
   assert(g.detectDietWarnings(dietProduct('gelatin'), 'vegetarian')
-    === 'Not vegetarian: gelatin', 'vegetarian term match');
+    === 'Not Vegetarian: Gelatin', 'vegetarian term match');
   assert(g.detectDietWarnings(dietProduct('Water, colour', {
     ingredients: [{ id: 'en:e901', text: 'Beeswax' }],
-  }), 'vegetarian') === 'Not vegetarian: beeswax', 'vegetarian animal additive');
+  }), 'vegetarian') === 'Not Vegetarian: Beeswax', 'vegetarian animal additive');
 
   assert(g.detectDietWarnings(dietProduct('tofu'), 'soy-free')
-    === 'Contains soy', 'soy-free');
+    === 'Contains Soy', 'soy-free');
   assert(g.detectDietWarnings(dietProduct('palm oil'), 'palm-oil-free')
-    === 'Contains palm oil', 'palm-oil-free');
+    === 'Contains Palm Oil', 'palm-oil-free');
   assert(g.detectDietWarnings(dietProduct('sodium sulfite'), 'sulfite-free')
-    === 'Contains sulfites', 'sulfite-free');
+    === 'Contains Sulfites', 'sulfite-free');
   assert(g.detectDietWarnings(dietProduct('whole milk'), 'lactose-free')
-    === 'Not lactose-free: milk', 'lactose-free');
+    === 'Not Lactose-Free: Milk', 'lactose-free');
   assert(g.detectDietWarnings(dietProduct('bacon'), 'pork-free')
-    === 'Not pork-free: bacon', 'pork-free');
+    === 'Not Pork-Free: Bacon', 'pork-free');
   assert(g.detectDietWarnings(dietProduct('wheat flour'), 'gluten-free')
-    === 'May not be gluten-free: wheat', 'gluten-free');
+    === 'May Not Be Gluten-Free: Wheat', 'gluten-free');
 }
 
 {
   const joined = g.detectDietWarnings(dietProduct('milk, wheat, soy'), 'vegan,gluten-free,soy-free');
-  assert(joined === 'Not vegan: milk • May not be gluten-free: wheat • Contains soy',
+  assert(joined === 'Not Vegan: Milk • May Not Be Gluten-Free: Wheat • Contains Soy',
     'multiple warnings must join with bullet, got: ' + JSON.stringify(joined));
 }
 
@@ -4046,7 +4047,7 @@ assert(isCacheFresh({
   scanLogicVersion: '0',
 }, now) === false, 'mismatched scanLogicVersion must be stale');
 
-assert(g.SCAN_LOGIC_VERSION === '23', 'SCAN_LOGIC_VERSION must be 23 after calories Cal suffix');
+assert(g.SCAN_LOGIC_VERSION === '24', 'SCAN_LOGIC_VERSION must be 24 after calories Cal suffix');
 assert(isCacheFresh({
   productType: 'food',
   cachedAt: now - 1000,
@@ -4114,7 +4115,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + SCAN_LOGIC_VERSION);
 
 assert(src.includes('computeNutritionSubscore'), 'must compute a USDA nutrition subscore');
 assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'), 'must log unavailable nutrition subscore');
@@ -4168,6 +4169,7 @@ const path = require('path');
 const __cosmeticDir = process.cwd();
 function recordRawObservation() {}
 async function getCategoryAlternatives() { return []; }
+const pendingAlternativesByResponse = new WeakMap();
 const capturedPrompts = [];
 async function requestFoodExplanation(prompt) {
   capturedPrompts.push(prompt);
@@ -4399,9 +4401,9 @@ function loggedNutritionUnavailable(barcode) {
 
 // 6. /search path uses the same helper → same tiers and servingKnown
 {
-  assert(src.includes('resolveFoodServingNutrition(p.nutriments, p.serving_quantity)'),
+  assert(src.includes('resolveFoodServingNutrition(p.nutriments, p.serving_quantity'),
     'search path must call resolveFoodServingNutrition');
-  assert(src.includes('resolveFoodServingNutrition(product.nutriments, product.serving_quantity)'),
+  assert(src.includes('resolveFoodServingNutrition(product.nutriments, product.serving_quantity'),
     'scan path must call resolveFoodServingNutrition');
   const scanN = g.resolveFoodServingNutrition({
     proteins_100g: 10, sugars_100g: 25, sodium_100g: 0.7,
@@ -5386,7 +5388,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + logicMatch[1]);
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
 
 // --- Source: /scan/photo resolves type before scoring ---
 const photoStart = src.indexOf("app.post('/scan/photo'");
@@ -5455,6 +5457,7 @@ const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
 const SCAN_LOGIC_VERSION = '18';
+function applyNutrientPlausibilityBounds(nutriments) { return nutriments; }
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 ${src.slice(helperStart, helperEnd)}
@@ -5729,7 +5732,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + logicMatch[1]);
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
 
 const catchStart = src.indexOf('const fallback = staleCacheFallbackPayload(staleCached);');
 const catchEnd = src.indexOf('if (responseData.noIngredientData)');
@@ -5775,6 +5778,7 @@ const path = require('path');
 const __cosmeticDir = process.cwd();
 function recordRawObservation() {}
 async function getCategoryAlternatives() { return []; }
+const pendingAlternativesByResponse = new WeakMap();
 async function generateFoodExplanation() { return ${JSON.stringify(REGENERATED)}; }
 function foodExplanationScoringContext() { return {}; }
 const additiveMap = {};
@@ -5846,7 +5850,7 @@ function isCacheFresh(cached, nowMs) {
       fiber_100g: 2.1,
     },
   }, { skipExplanation: false });
-  assert(regenerated.scanLogicVersion === '23', 'rescan stamps v23');
+  assert(regenerated.scanLogicVersion === '24', 'rescan stamps v24');
   assert(regenerated.explanation === REGENERATED,
     'successful rescan after bump must serve the regenerated explanation');
   assert(!/we've packed/i.test(regenerated.explanation),
@@ -5991,8 +5995,18 @@ function isCacheFresh(cached, nowMs) {
     scanLogicVersion: '23',
     cachedAt: now - 1000,
   };
-  assert(isCacheFresh(v23fresh, now) === true, 'fresh v23 record is a cache hit');
-  assert(isCacheFresh(v22fresh, now) === false, 'fresh v22 record is stale after the v23 bump');
+  const v24fresh = {
+    productType: 'food',
+    productName: 'Cadbury Dairy Milk',
+    score: 35,
+    sugar: '25.2g',
+    explanation: REGENERATED,
+    scanLogicVersion: g.SCAN_LOGIC_VERSION,
+    cachedAt: now - 1000,
+  };
+  assert(isCacheFresh(v24fresh, now) === true, 'fresh v24 record is a cache hit');
+  assert(isCacheFresh(v23fresh, now) === false, 'fresh v23 record is stale after the v24 bump');
+  assert(isCacheFresh(v22fresh, now) === false, 'fresh v22 record is stale after the v24 bump');
   assert(isCacheFresh(v21fresh, now) === false, 'fresh v21 record is stale after the v23 bump');
   assert(isCacheFresh(v20fresh, now) === false, 'fresh v20 record is stale after the v23 bump');
   assert(isCacheFresh(v19fresh, now) === false, 'fresh v19 record is stale after the v23 bump');
@@ -6001,9 +6015,12 @@ function isCacheFresh(cached, nowMs) {
   assert(isCacheFresh(v16fresh, now) === false, 'fresh v16 record is stale after the v23 bump');
   assert(isCacheFresh(v15fresh, now) === false, 'fresh v15 record is stale after the v23 bump');
   assert(isCacheFresh(v14fresh, now) === false, 'fresh v14 record is stale after the v23 bump');
+  const v24Fb = g.staleCacheFallbackPayload({ ...v24fresh, cachedAt: 1 });
+  assert(v24Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
+  assert(v24Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
   const v23Fb = g.staleCacheFallbackPayload({ ...v23fresh, cachedAt: 1 });
-  assert(v23Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
-  assert(v23Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
+  assert(v23Fb.explanationPending === true || !v23Fb.explanation,
+    'version-mismatched stale fallback must not serve a v23 explanation');
 
   console.log('scan logic v11 stale explanation ok');
 })().catch((err) => {
@@ -6041,7 +6058,7 @@ function assert(cond, msg) {
 const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + logicMatch[1]);
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
 
 const explainStart = src.indexOf("app.get('/explain/:barcode'");
 const explainEnd = src.indexOf("app.get('/search'");
@@ -6203,7 +6220,7 @@ const v10Doc = {
 
     productCache.set('7622210100586', {
       ...v10Doc,
-      scanLogicVersion: '23',
+      scanLogicVersion: logicMatch[1],
       explanation: REGENERATED,
     });
     anthropicCalls = 0;
@@ -6245,7 +6262,7 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
 }
 
-assert(/const SCAN_LOGIC_VERSION = '23'/.test(src), 'SCAN_LOGIC_VERSION must be 23 so cached v22 scans rebuild calories display');
+assert(/const SCAN_LOGIC_VERSION = '24'/.test(src), 'SCAN_LOGIC_VERSION must be 24 so cached v23 scans rebuild under plausibility bounds');
 assert(src.includes('max_tokens: 220'), 'food max_tokens must allow 3 sentences to finish');
 assert(src.includes('function trimFoodExplanation'), 'food path must trim to complete sentences');
 
@@ -6964,7 +6981,7 @@ function seedFood(barcode, imageUrl) {
     score: 70,
     scoreLabel: 'Good',
     cachedAt: Date.now(),
-    scanLogicVersion: '23',
+    scanLogicVersion: '24',
     source: 'usda',
   });
 }
@@ -7288,6 +7305,585 @@ function request(body) {
     print(proc.stdout.strip())
 
 
+def test_alternatives_off_critical_path():
+    """getCategoryAlternatives must not be awaited on the /scan response path."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const foodStart = src.indexOf('async function scanAndCacheFood');
+const foodEnd = src.indexOf('async function routeResolvedScan');
+assert(foodStart >= 0 && foodEnd > foodStart, 'locate scanAndCacheFood');
+const foodBody = src.slice(foodStart, foodEnd);
+assert(!foodBody.includes('await getCategoryAlternatives'),
+  'scanAndCacheFood must not await getCategoryAlternatives');
+assert(foodBody.includes('const alternatives = []'),
+  'miss path must return empty alternatives');
+assert(foodBody.includes('pendingAlternativesByResponse.set'),
+  'must stash pending alternatives on the response object');
+
+const scanStart = src.indexOf("app.get('/scan/:barcode'");
+const scanEnd = src.indexOf("const PHOTO_LABEL_PROMPT");
+assert(scanStart >= 0 && scanEnd > scanStart, 'locate /scan handler');
+const scanBody = src.slice(scanStart, scanEnd);
+const jsonAt = scanBody.indexOf('res.json(');
+const schedAt = scanBody.indexOf('scheduleCategoryAlternativesFill');
+assert(jsonAt >= 0, '/scan must res.json');
+assert(schedAt > jsonAt, 'alternatives fill must be scheduled after res.json');
+assert(!/await\s+scheduleCategoryAlternativesFill/.test(scanBody),
+  'must not await scheduleCategoryAlternativesFill');
+assert(!/await\s+fillCategoryAlternativesInBackground/.test(scanBody),
+  'must not await fillCategoryAlternativesInBackground');
+assert(!/await\s+takePendingAlternatives/.test(scanBody),
+  'takePendingAlternatives is sync');
+
+const fillStart = src.indexOf('async function fillCategoryAlternativesInBackground');
+const fillEnd = src.indexOf('// Token-aware diet term matching');
+assert(fillStart >= 0 && fillEnd > fillStart, 'locate fillCategoryAlternativesInBackground');
+const fillBody = src.slice(fillStart, fillEnd);
+assert(fillBody.includes('if (!doc.exists)'), 'must not recreate a deleted cache doc');
+assert(fillBody.includes('scanLogicVersion !== scanLogicVersion') ||
+  fillBody.includes('cached.scanLogicVersion !== scanLogicVersion'),
+  'must require matching scanLogicVersion');
+assert(fillBody.includes("docRef.set({ alternatives: JSON.stringify(alternatives) }, { merge: true })"),
+  'must update only the alternatives field with merge');
+assert(fillBody.includes('[ALTERNATIVES TIMEOUT]') || fillBody.includes('TIMEOUT'),
+  'must log alternatives timeouts');
+
+assert(src.includes('AbortSignal.timeout(ALT_LOOKUP_TIMEOUT_MS)'),
+  'alternatives OFF search must have a finite timeout');
+assert(src.includes('const ALT_LOOKUP_TIMEOUT_MS = 3000'),
+  'alternatives timeout must be finite and explicit');
+
+console.log('alternatives off critical path ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"alternatives off-critical-path assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
+def test_diet_warning_snapshot_equivalence():
+    """Raw OFF fixture and stored-and-reloaded snapshot yield identical warnings."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const mapStart = src.indexOf('const additiveMap =');
+const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
+if (mapStart < 0 || extractEnd < 0) throw new Error('could not locate additive helpers');
+
+const dietStart = src.indexOf('// Token-aware diet term matching');
+const dietEnd = src.indexOf('// Core scan logic, extracted so both the /scan route');
+if (dietStart < 0 || dietEnd < 0) throw new Error('could not locate detectDietWarnings helpers');
+
+const block = `
+${src.slice(mapStart, extractEnd)}
+${src.slice(dietStart, dietEnd)}
+module.exports = {
+  extractAdditiveCodes,
+  snapshotDietWarningFields,
+  DIET_WARNING_FIELD_KEYS,
+  detectDietWarnings,
+};
+`;
+fs.writeFileSync('/tmp/diet_warning_snapshot_helpers.js', block);
+delete require.cache['/tmp/diet_warning_snapshot_helpers.js'];
+const g = require('/tmp/diet_warning_snapshot_helpers.js');
+
+const DETECTOR_KEYS = [
+  'labels_tags',
+  'ingredients_text',
+  'additives_tags',
+  'ingredients',
+  'allergens_tags',
+  'traces_tags',
+];
+assert(Array.isArray(g.DIET_WARNING_FIELD_KEYS), 'DIET_WARNING_FIELD_KEYS must be exported');
+assert(g.DIET_WARNING_FIELD_KEYS.join(',') === DETECTOR_KEYS.join(','),
+  'snapshot keys must be exactly the detector fields, got ' + g.DIET_WARNING_FIELD_KEYS);
+
+// Raw OFF-shaped fixture: every detector field plus extras the detector ignores.
+const rawOff = {
+  code: '0123456789012',
+  product_name: 'Fixture Yogurt',
+  brands: 'Test Brand',
+  source: 'off',
+  nutritionSource: 'off',
+  nutriments: { sodium_100g: 0.1, sugars_100g: 8 },
+  serving_quantity: 150,
+  labels_tags: ['en:organic'],
+  ingredients_text: 'Whole milk, sugar, wheat flour, soy lecithin, palm oil, sodium sulfite, bacon',
+  additives_tags: ['en:e322'],
+  ingredients: [
+    { id: 'en:whole-milk', text: 'Whole milk' },
+    { id: 'en:sugar', text: 'sugar' },
+    {
+      id: 'en:flavouring',
+      text: 'flavouring',
+      ingredients: [{ id: 'en:e120', text: 'Carmine' }],
+    },
+  ],
+  allergens_tags: ['en:milk', 'en:soybeans'],
+  traces_tags: ['en:gluten'],
+  categories_tags: ['en:yogurts'],
+  image_url: 'https://example.test/front.jpg',
+};
+
+const snapshot = g.snapshotDietWarningFields(rawOff);
+assert(snapshot && typeof snapshot === 'object', 'snapshot must be an object');
+const snapKeys = Object.keys(snapshot).sort();
+assert(snapKeys.join(',') === DETECTOR_KEYS.slice().sort().join(','),
+  'snapshot must contain only detector keys, got ' + snapKeys.join(','));
+assert(!('source' in snapshot) && !('nutriments' in snapshot) && !('product_name' in snapshot),
+  'snapshot must not store non-detector fields');
+
+// Stored-and-reloaded: JSON round-trip matches Firestore's JSON-compatible types.
+const reloaded = JSON.parse(JSON.stringify(snapshot));
+assert(JSON.stringify(reloaded) === JSON.stringify(snapshot),
+  'JSON-reloaded snapshot must match the stored snapshot');
+
+const profiles = [
+  'vegan',
+  'vegetarian',
+  'gluten-free',
+  'lactose-free',
+  'soy-free',
+  'pork-free',
+  'palm-oil-free',
+  'sulfite-free',
+  'vegan,gluten-free,soy-free',
+];
+for (const profile of profiles) {
+  const fromRaw = g.detectDietWarnings(rawOff, profile);
+  const fromSnap = g.detectDietWarnings(reloaded, profile);
+  assert(fromRaw === fromSnap,
+    'warnings must match for ' + profile + ' raw=' + JSON.stringify(fromRaw) +
+    ' snap=' + JSON.stringify(fromSnap));
+}
+
+// USDA-merged object can replace ingredients_text — detector must not use it.
+const mergedLike = Object.assign({}, rawOff, {
+  ingredients_text: 'Water, organic cane sugar',
+  allergens_tags: [],
+  source: 'usda',
+});
+const lfRaw = g.detectDietWarnings(rawOff, 'lactose-free');
+const lfMerged = g.detectDietWarnings(mergedLike, 'lactose-free');
+assert(lfRaw !== lfMerged,
+  'fixture must demonstrate merged ingredients_text is not detector-equivalent');
+assert(g.detectDietWarnings(reloaded, 'lactose-free') === lfRaw,
+  'snapshot must follow the raw OFF ingredients_text, not a USDA merge');
+
+// Null / missing OFF product → no snapshot (miss path behaves as empty refetch).
+assert(g.snapshotDietWarningFields(null) === null, 'null OFF → no snapshot');
+assert(g.snapshotDietWarningFields(undefined) === null, 'undefined OFF → no snapshot');
+
+// Wiring: miss uses live raw OFF; hit uses snapshot; refetch only when neither.
+const scanStart = src.indexOf("app.get('/scan/:barcode'");
+const scanEnd = src.indexOf("const PHOTO_LABEL_PROMPT");
+assert(scanStart >= 0 && scanEnd > scanStart, 'locate /scan handler');
+const scanBody = src.slice(scanStart, scanEnd);
+assert(scanBody.includes('takeDietOffProduct'), '/scan must prefer live main-lookup OFF');
+assert(scanBody.includes('takeDietSnapshot'), '/scan must prefer cache snapshot on hit');
+assert(scanBody.includes('liveOff.present'), 'completed lookup with no OFF must not refetch');
+assert(scanBody.includes('detectDietWarnings(liveOff.product'),
+  'miss path must pass the raw OFF product, not the USDA-merged scan product');
+assert(scanBody.includes('detectDietWarnings(snapshot'),
+  'hit path must build detector input from the snapshot');
+const fallbackAt = scanBody.indexOf('world.openfoodfacts.org/api/v2/product/');
+const liveAt = scanBody.indexOf('takeDietOffProduct');
+const snapAt = scanBody.indexOf('takeDietSnapshot');
+assert(fallbackAt > snapAt && snapAt > liveAt,
+  'legacy diet refetch must be the last fallback after live OFF and snapshot');
+
+const scanFnStart = src.indexOf('async function scanAndCache(barcode');
+const scanFnEnd = src.indexOf("app.get('/health'");
+const scanFn = src.slice(scanFnStart, scanFnEnd);
+assert(scanFn.includes('missOffProduct'), 'scanAndCache must keep the main-lookup raw OFF product');
+assert(scanFn.includes('attachDietOffProduct'), 'miss path must stash live OFF on the response');
+assert(scanFn.includes('attachDietWarningFields'), 'cache writes must store the detector snapshot');
+assert(scanFn.includes('resolved.offProduct'), 'must use resolveProductType offProduct, not the merged product');
+
+assert(src.includes('function fetchProductFromFacts'), 'main lookup uses fetchProductFromFacts');
+assert(/return data\.product;/.test(src.slice(
+  src.indexOf('async function fetchProductFromFacts'),
+  src.indexOf('async function fetchProductFromFacts') + 800
+)), 'fetchProductFromFacts must return data.product with no field projection');
+
+const coerceStart = src.indexOf('function cachePayloadWithoutFoodCoercion');
+const coerceBody = src.slice(coerceStart, coerceStart + 700);
+assert(coerceBody.includes('dietWarningFields'),
+  'cachePayloadWithoutFoodCoercion must strip dietWarningFields from HTTP');
+assert(coerceBody.includes('dietSnapshotByResponse.set'),
+  'stripped snapshot must be stashed for the hit-path detector');
+
+console.log('diet warning snapshot equivalence ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"diet warning snapshot assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
+def test_scan_external_timeouts():
+    """Every HTTP call reachable from /scan must have a finite timeout."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+assert(src.includes('const USDA_LOOKUP_TIMEOUT_MS = 4000'), 'USDA timeout');
+assert(src.includes('const OFF_LOOKUP_TIMEOUT_MS = 3000'), 'OFF timeout');
+assert(src.includes('const ALT_LOOKUP_TIMEOUT_MS = 3000'), 'alternatives timeout');
+assert(src.includes('const OBF_LOOKUP_TIMEOUT_MS = 3000'), 'OBF timeout');
+assert(src.includes('const DIET_FALLBACK_TIMEOUT_MS = 3000'), 'diet fallback timeout');
+assert(src.includes('const ANTHROPIC_TIMEOUT_MS = 8000'), 'Anthropic timeout');
+
+const factsStart = src.indexOf('async function fetchProductFromFacts');
+const factsBody = src.slice(factsStart, src.indexOf('// USDA FoodData Central'));
+assert(factsBody.includes('requires a finite timeoutMs'),
+  'fetchProductFromFacts must refuse unbounded calls');
+assert(factsBody.includes('AbortSignal.timeout(timeoutMs)'),
+  'OFF/OBF barcode fetches must abort');
+
+assert(src.includes('AbortSignal.timeout(USDA_LOOKUP_TIMEOUT_MS)'), 'USDA fetch abort');
+assert(src.includes('AbortSignal.timeout(ALT_LOOKUP_TIMEOUT_MS)'), 'alternatives fetch abort');
+assert(src.includes('AbortSignal.timeout(DIET_FALLBACK_TIMEOUT_MS)'), 'diet fallback abort');
+assert(src.includes('AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS)'), 'Haiku abort');
+assert(src.includes('OBF_LOOKUP_TIMEOUT_MS)'), 'OBF callers must pass the timeout');
+
+const scanStart = src.indexOf("app.get('/scan/:barcode'");
+const scanEnd = src.indexOf("const PHOTO_LABEL_PROMPT");
+const scanBody = src.slice(scanStart, scanEnd);
+assert(scanBody.includes('operation=diet_fallback_fetch'),
+  'diet fallback must log barcode and operation');
+assert(scanBody.includes('[DIET TIMEOUT]') || scanBody.includes('TIMEOUT'),
+  'diet fallback must log timeouts');
+assert(!/db\.collection\([^)]+\)[\s\S]{0,80}dietWarnings/.test(scanBody),
+  'diet fallback must not persist dietWarnings');
+assert(!scanBody.includes('dietWarnings:') || !/set\([^\)]*dietWarnings/.test(scanBody),
+  'must not write an empty diet warning as cached evidence');
+
+// Firestore / Auth Admin SDK cannot take AbortSignal; do not wrap in Promise.race.
+const scanFnStart = src.indexOf('async function scanAndCache(barcode');
+const scanFn = src.slice(scanFnStart, src.indexOf("app.get('/health'"));
+assert(!/Promise\.race\(\s*\[/.test(scanFn),
+  'must not Promise.race Firestore cache reads/writes');
+assert(!/Promise\.race\(\s*\[/.test(scanBody),
+  'must not Promise.race Auth / Firestore on /scan');
+
+console.log('scan external timeouts ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"scan external timeout assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
+def test_nutrient_plausibility_and_logic_v24():
+    """Impossible nutrients are missing; SCAN_LOGIC_VERSION 24 is lazy invalidation only."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
+
+const calcStart = src.indexOf('function calculateScore');
+const calcBody = src.slice(calcStart, src.indexOf('function getScoreBreakdown'));
+assert(calcBody.includes('nutrition.points + additivePts + organicPts'),
+  'scoring combination unchanged');
+assert(calcBody.includes('additivePts = 30') || calcBody.includes('let additivePts = 30'),
+  'additive max 30 unchanged');
+assert(calcBody.includes('const organicPts = isOrganic ? 10 : 0'),
+  'organic 10-point weight unchanged');
+assert(src.includes('energy: [335, 670, 1005, 1340, 1675, 2010, 2345, 2680, 3015, 3350]'),
+  'NS2023 energy thresholds unchanged');
+assert(src.includes('sugars: [3.4, 6.8, 10, 14, 17, 20, 24, 27, 31, 34, 37, 41, 44, 48, 51]'),
+  'NS2023 sugar thresholds unchanged');
+assert(src.includes('saturated_fat: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'),
+  'NS2023 sat-fat thresholds unchanged');
+assert(src.includes('sugarVal >= 22.5 ? \'high\' : sugarVal >= 5 ? \'medium\' : \'low\''),
+  'sugar tier thresholds unchanged');
+assert(src.includes('sodiumVal >= 0.6 ? \'high\' : sodiumVal >= 0.12 ? \'medium\' : \'low\''),
+  'sodium tier thresholds unchanged');
+
+const cacheCheck = src.slice(src.indexOf('async function scanAndCache(barcode'), src.indexOf('async function scanAndCache(barcode') + 2500);
+assert(cacheCheck.includes('logicStale'), 'v24 bump uses existing stale-version path');
+assert(!src.includes('bulk') || !/forEach\([\s\S]{0,80}rescan/.test(src),
+  'no bulk rescan');
+
+const keysStart = src.indexOf('const NS2023_THRESHOLDS');
+const fmtEnd = src.indexOf('const additiveMap =');
+const promptStart = src.indexOf('function isKnownNutrientForPrompt');
+const promptEnd = src.indexOf('async function requestFoodExplanation');
+if (keysStart < 0 || fmtEnd < 0 || promptStart < 0 || promptEnd < 0) {
+  throw new Error('could not locate nutrition/prompt helpers');
+}
+
+const block = `
+${src.slice(keysStart, fmtEnd)}
+${src.slice(promptStart, promptEnd)}
+module.exports = {
+  applyNutrientPlausibilityBounds,
+  resolveFoodServingNutrition,
+  computeNutritionSubscore,
+  formatSodiumMg,
+  formatGrams,
+  formatCalories,
+  buildFoodExplanationPrompt,
+  isKnownNutrientForPrompt,
+  nutrientPlausibilityLimit,
+};
+`;
+fs.writeFileSync('/tmp/nutrient_plausibility_helpers.js', block);
+delete require.cache['/tmp/nutrient_plausibility_helpers.js'];
+const g = require('/tmp/nutrient_plausibility_helpers.js');
+
+assert(g.nutrientPlausibilityLimit('sodium') === 39, 'sodium bound');
+assert(g.nutrientPlausibilityLimit('energy') === 900, 'energy bound');
+assert(g.nutrientPlausibilityLimit('sugars') === 100, 'sugars bound');
+
+function inspect(nutriments, servingQuantity, barcode) {
+  const copy = JSON.parse(JSON.stringify(nutriments));
+  const serving = g.resolveFoodServingNutrition(copy, servingQuantity, barcode);
+  const sodium = g.formatSodiumMg(serving.sodiumDisplay);
+  const sodium100g = g.formatSodiumMg(serving.sodiumRaw);
+  const prompt = g.buildFoodExplanationPrompt({
+    sugar: g.formatGrams(serving.sugarDisplay),
+    sodium,
+    protein: g.formatGrams(serving.proteinDisplay),
+    sugarTier: serving.sugarTier,
+    sodiumTier: serving.sodiumTier,
+    proteinTier: serving.proteinTier,
+    additivesPhrase: '0 additives',
+    isOrganic: 'unknown',
+    novaGroup: 4,
+    ingredients: 'oil, buttermilk, salt',
+    nutriPts: 10,
+    nutriMax: 60,
+    basisLabel: serving.servingKnown ? 'per serving' : 'per 100g',
+  });
+  const nutrition = g.computeNutritionSubscore(copy, '', barcode);
+  const blob = [sodium, sodium100g, prompt, serving.sodiumTier, JSON.stringify(serving), JSON.stringify(nutrition)].join('\n');
+  return { serving, sodium, sodium100g, prompt, nutrition, blob };
+}
+
+// Real OFF 7160372281000 (Ranch Dressing): 875 g/100g, 105 g/serving, 12g serving.
+{
+  const ranch = inspect({
+    sodium_100g: 875,
+    sodium_serving: 105,
+    sugars_100g: 8,
+    proteins_100g: 1,
+    'energy-kcal_100g': 400,
+    'saturated-fat_100g': 2,
+    fat_100g: 40,
+    carbohydrates_100g: 8,
+    fiber_100g: 0,
+  }, 12, '7160372281000');
+  assert(ranch.serving.sodiumRaw == null, 'ranch 100g sodium must be missing');
+  assert(ranch.serving.sodiumDisplay == null, 'ranch serving sodium must be missing');
+  assert(ranch.serving.sodiumTier === 'unknown', 'ranch sodium tier unknown');
+  assert(ranch.sodium === 'N/A', 'ranch display sodium is N/A, got ' + ranch.sodium);
+  assert(ranch.sodium100g === 'N/A', 'ranch 100g display is N/A');
+  assert(!ranch.blob.includes('105000'), '105000mg must not appear in display/tiers/prompt, blob=' + ranch.blob);
+  assert(!ranch.prompt.includes('105000'), 'prompt must not contain 105000mg');
+  assert(!ranch.prompt.toLowerCase().includes('sodium') || ranch.serving.sodiumTier === 'unknown',
+    'prompt must not treat implausible sodium as known');
+  assert(ranch.nutrition.available === false, 'missing sodium makes subscore unavailable');
+  assert(ranch.nutrition.reason === 'missing_sodium', 'reason must be missing_sodium, got ' + ranch.nutrition.reason);
+}
+
+// At-bound values remain valid.
+{
+  const at = inspect({
+    sodium_100g: 39,
+    sugars_100g: 100,
+    proteins_100g: 100,
+    'energy-kcal_100g': 900,
+    'saturated-fat_100g': 100,
+    fat_100g: 100,
+    carbohydrates_100g: 100,
+    fiber_100g: 100,
+  }, 100, 'at-bound');
+  assert(at.serving.sodiumRaw === 39, '39g sodium is valid');
+  assert(at.serving.sugarRaw === 100, '100g sugars is valid');
+  assert(at.serving.caloriesRaw === 900, '900 kcal is valid');
+  assert(at.serving.saturatedFatRaw === 100, '100g sat fat is valid');
+  assert(at.serving.fiberRaw === 100, '100g fibre is valid');
+  assert(at.nutrition.available === true, 'at-bound product remains scorable');
+}
+
+// Just above bound is rejected.
+{
+  const above = inspect({
+    sodium_100g: 39.0001,
+    sugars_100g: 100.0001,
+    proteins_100g: 100.0001,
+    'energy-kcal_100g': 900.0001,
+    'saturated-fat_100g': 100.0001,
+    fat_100g: 100.0001,
+    carbohydrates_100g: 100.0001,
+    fiber_100g: 100.0001,
+  }, 100, 'above-bound');
+  assert(above.serving.sodiumRaw == null, 'sodium above 39 rejected');
+  assert(above.serving.sugarRaw == null, 'sugars above 100 rejected');
+  assert(above.serving.caloriesRaw == null, 'energy above 900 rejected');
+  assert(above.serving.saturatedFatRaw == null, 'sat fat above 100 rejected');
+  assert(above.serving.fiberRaw == null, 'fibre above 100 rejected');
+}
+
+// Serving-only reject must not clobber a valid 100g value, and must not re-enter.
+{
+  const mixed = {
+    sodium_100g: 0.4,
+    sodium_serving: 105,
+    sugars_100g: 5,
+    proteins_100g: 2,
+    'energy-kcal_100g': 200,
+    'saturated-fat_100g': 1,
+  };
+  const out = inspect(mixed, 12, 'serving-only');
+  assert(out.serving.sodiumRaw === 0.4, 'valid 100g sodium kept');
+  assert(Math.abs(out.serving.sodiumDisplay - (0.4 * 12 / 100)) < 1e-9,
+    'display must derive from 100g, not the rejected serving');
+  assert(!out.blob.includes('105000'), 'rejected serving must not format as 105000mg');
+}
+
+// 100g reject clears serving so it cannot re-enter.
+{
+  const nutriments = { sodium_100g: 875, sodium_serving: 105 };
+  g.applyNutrientPlausibilityBounds(nutriments, 12, '7160372281000');
+  assert(!Object.prototype.hasOwnProperty.call(nutriments, 'sodium_100g'), '100g key removed');
+  assert(!Object.prototype.hasOwnProperty.call(nutriments, 'sodium_serving'), 'serving key removed');
+}
+
+console.log('nutrient plausibility and logic v24 ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"nutrient plausibility assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
+def test_scan_timing_log():
+    """One [SCAN TIMING] line per /scan; no added awaits or reordering."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const scanStart = src.indexOf("app.get('/scan/:barcode'");
+const scanEnd = src.indexOf("const PHOTO_LABEL_PROMPT");
+assert(scanStart >= 0 && scanEnd > scanStart, 'locate /scan handler');
+const scanBody = src.slice(scanStart, scanEnd);
+
+assert((scanBody.match(/logScanTiming\(/g) || []).length >= 1, 'must log SCAN TIMING');
+assert(scanBody.includes('logScanTiming(barcode, timing, Date.now() - scanStarted)'),
+  'totalMs is handler start to log, excluding work after res.json');
+
+const logAt = scanBody.indexOf('logScanTiming(barcode, timing, Date.now() - scanStarted)');
+const jsonAt = scanBody.indexOf('res.json(');
+assert(logAt >= 0 && jsonAt > logAt, 'timing log must be before res.json so background work is excluded');
+assert(scanBody.indexOf('scheduleCategoryAlternativesFill') > jsonAt,
+  'alternatives stay after res.json');
+assert(scanBody.indexOf('ensureExplanation(barcode, responseData).catch') > jsonAt,
+  'deferred explanation stays after res.json');
+
+assert(!/await\s+logScanTiming/.test(scanBody), 'logScanTiming must not be awaited');
+assert(!/await\s+noteScanTiming/.test(src), 'noteScanTiming is sync');
+assert(!/await\s+recordLookupTiming/.test(src), 'recordLookupTiming is sync');
+
+const logFn = src.slice(src.indexOf('function logScanTiming'), src.indexOf('async function scanAndCache(barcode'));
+assert(logFn.includes('[SCAN TIMING]'), 'log prefix');
+assert(logFn.includes('outcome='), 'hit/miss/stale');
+assert(logFn.includes('totalMs='), 'total ms');
+assert(logFn.includes('usdaMs='), 'parallel USDA');
+assert(logFn.includes('offMs='), 'parallel OFF');
+assert(logFn.includes('lookupParallel=1'), 'must not imply USDA+OFF add');
+
+assert(src.includes("setScanTimingOutcome(timing, 'hit')"), 'hit outcome');
+assert(src.includes("setScanTimingOutcome(timing, 'stale')"), 'stale outcome');
+assert(src.includes("setScanTimingOutcome(timing, 'miss')"), 'miss outcome');
+assert(src.includes('timing = null'), 'other scanAndCache callers stay uninstrumented');
+
+console.log('scan timing log ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(f"scan timing assertions failed (exit {proc.returncode})")
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -7328,6 +7924,11 @@ def main() -> int:
         test_nutrition_subscore_validation,
         test_scan_contributed_image_url,
         test_vision_json_parse_log,
+        test_alternatives_off_critical_path,
+        test_diet_warning_snapshot_equivalence,
+        test_scan_external_timeouts,
+        test_nutrient_plausibility_and_logic_v24,
+        test_scan_timing_log,
     ]
     failed = 0
     for test in tests:

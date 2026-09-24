@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '23';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '24';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -1067,9 +1067,14 @@ function unsupportedScanFromRecord(record, extras = {}) {
 }
 
 // Cache/stale payloads that are not explicit food must never be served as food.
+// dietWarningFields is a cache-only snapshot for detectDietWarnings — strip it
+// from the HTTP payload and stash it so /scan hits can rebuild detector input.
 function cachePayloadWithoutFoodCoercion(cached) {
   if (!cached) return null;
-  const { cachedAt, ...responseData } = cached;
+  const { cachedAt, dietWarningFields, ...responseData } = cached;
+  if (dietWarningFields) {
+    dietSnapshotByResponse.set(responseData, dietWarningFields);
+  }
   if (isExplicitFoodProductType(responseData.productType)) return responseData;
   if (responseData.productType === 'unsupported') return responseData;
   return unsupportedScanFromRecord(responseData, {
@@ -1601,16 +1606,20 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
 }
 
 const USDA_LOOKUP_TIMEOUT_MS = 4000; // abort USDA search; must not wait on OFF
-const OFF_LOOKUP_TIMEOUT_MS = 3000;  // abort the parallel food OFF barcode fetch only
+const OFF_LOOKUP_TIMEOUT_MS = 3000;  // abort the parallel food OFF barcode fetch
+const ALT_LOOKUP_TIMEOUT_MS = 3000;  // background category-alternatives search
+const OBF_LOOKUP_TIMEOUT_MS = 3000;  // OBF barcode fetch during /scan classification
+const DIET_FALLBACK_TIMEOUT_MS = 3000; // legacy diet-warning OFF refetch
+const ANTHROPIC_TIMEOUT_MS = 8000;   // food/cosmetic Haiku explanation
 
 async function fetchProductFromFacts(baseUrl, barcode, timeoutMs) {
+  if (timeoutMs == null || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('fetchProductFromFacts requires a finite timeoutMs');
+  }
   const opts = {
     headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
+    signal: AbortSignal.timeout(timeoutMs),
   };
-  // Timeout only when the caller asks (parallel food OFF). OBF stays unbounded.
-  if (timeoutMs != null) {
-    opts.signal = AbortSignal.timeout(timeoutMs);
-  }
   const res = await fetch(`${baseUrl}/api/v2/product/${barcode}.json`, opts);
   if (!res.ok) return null;
   const data = await res.json();
@@ -2235,6 +2244,17 @@ async function resolveProductType(barcode) {
   const offOut = lookupOutcome(offSettled, Date.now() - offStarted);
   const usdaProduct = usdaOut.product;
   const offFetched = offOut.product;
+  let obfMs = null;
+  function typed(result) {
+    result.offProduct = offFetched || null;
+    result.lookupTiming = {
+      wallMs: totalMs,
+      usdaMs: usdaOut.ms,
+      offMs: offOut.ms,
+    };
+    if (obfMs != null) result.lookupTiming.obfMs = obfMs;
+    return result;
+  }
 
   if (usdaOut.error) {
     console.log(`[USDA LOOKUP] barcode=${barcode} ${usdaOut.error.message}`);
@@ -2256,33 +2276,35 @@ async function resolveProductType(barcode) {
         `[LOOKUP FIELDS] barcode=${barcode} name=usda brand=usda ingredients=usda nutrition=usda additives=none allergens=none nutriscore=none nova=none image=none`
       );
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda`);
-      return { productType: 'food', product: usdaProduct, reason: 'usda' };
+      return typed({ productType: 'food', product: usdaProduct, reason: 'usda' });
     }
     const merged = mergeUsdaAndOffProducts(barcode, usdaProduct, foodProduct);
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda_off_merge`);
-    return { productType: 'food', product: merged, reason: 'usda_off_merge' };
+    return typed({ productType: 'food', product: merged, reason: 'usda_off_merge' });
   }
 
   if (!foodProduct) {
+    const obfStarted = Date.now();
     try {
       cosmeticProduct = attachProductSource(
-        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
+        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode, OBF_LOOKUP_TIMEOUT_MS),
         'obf'
       );
     } catch (err) {
       console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
     }
+    obfMs = Date.now() - obfStarted;
     if (cosmeticProduct) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=obf_only`);
-      return { productType: 'cosmetic', product: cosmeticProduct, reason: 'obf_only' };
+      return typed({ productType: 'cosmetic', product: cosmeticProduct, reason: 'obf_only' });
     }
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=null reason=not_found`);
-    return { productType: null, product: null, reason: 'not_found' };
+    return typed({ productType: null, product: null, reason: 'not_found' });
   }
 
   if (hasHouseholdCategory(foodProduct)) {
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=household reason=category_off`);
-    return { productType: 'household', product: foodProduct, reason: 'category_off' };
+    return typed({ productType: 'household', product: foodProduct, reason: 'category_off' });
   }
 
   const offCosmeticCategory = hasCosmeticCategory(foodProduct);
@@ -2291,32 +2313,34 @@ async function resolveProductType(barcode) {
   // Category says beauty/hygiene. OBF may enrich a cosmetic already classified
   // by category; ingredient completeness must not override type.
   if (offCosmeticCategory) {
+    const obfStarted = Date.now();
     try {
       cosmeticProduct = attachProductSource(
-        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
+        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode, OBF_LOOKUP_TIMEOUT_MS),
         'obf'
       );
     } catch (err) {
       console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
     }
+    obfMs = Date.now() - obfStarted;
     if (cosmeticProduct && productHasIngredients(cosmeticProduct)) {
       const reason = !offHasNutriments
         ? 'category_no_nutriments_obf_ingredients'
         : 'category_obf_ingredients';
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=${reason}`);
-      return { productType: 'cosmetic', product: cosmeticProduct, reason };
+      return typed({ productType: 'cosmetic', product: cosmeticProduct, reason });
     }
     if (cosmeticProduct) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=category_obf_record`);
-      return { productType: 'cosmetic', product: cosmeticProduct, reason: 'category_obf_record' };
+      return typed({ productType: 'cosmetic', product: cosmeticProduct, reason: 'category_obf_record' });
     }
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=category_off_as_cosmetic`);
-    return { productType: 'cosmetic', product: foodProduct, reason: 'category_off_as_cosmetic' };
+    return typed({ productType: 'cosmetic', product: foodProduct, reason: 'category_off_as_cosmetic' });
   }
 
   if (hasOffNonFoodProductTypeCategory(foodProduct)) {
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=unsupported reason=off_non_food_category`);
-    return { productType: 'unsupported', product: foodProduct, reason: 'off_non_food_category' };
+    return typed({ productType: 'unsupported', product: foodProduct, reason: 'off_non_food_category' });
   }
 
   if (hasExplicitOffFoodCategory(foodProduct)) {
@@ -2324,7 +2348,7 @@ async function resolveProductType(barcode) {
       `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
     );
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=off_food_category`);
-    return { productType: 'food', product: foodProduct, reason: 'off_food_category' };
+    return typed({ productType: 'food', product: foodProduct, reason: 'off_food_category' });
   }
 
   if (hasScorableFoodNutriments(foodProduct.nutriments)) {
@@ -2332,16 +2356,16 @@ async function resolveProductType(barcode) {
       `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
     );
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=off_nutrition_facts`);
-    return { productType: 'food', product: foodProduct, reason: 'off_nutrition_facts' };
+    return typed({ productType: 'food', product: foodProduct, reason: 'off_nutrition_facts' });
   }
 
   console.log(`[PRODUCT TYPE] barcode=${barcode} type=unsupported reason=no_affirmative_food`);
-  return { productType: 'unsupported', product: foodProduct, reason: 'no_affirmative_food' };
+  return typed({ productType: 'unsupported', product: foodProduct, reason: 'no_affirmative_food' });
 }
 
 function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, barcode, nutriments, foodCategory) {
   // 60% Purla nutrition subscore from per-100g nutrients (not OFF Nutri-Score).
-  const nutrition = computeNutritionSubscore(nutriments, foodCategory);
+  const nutrition = computeNutritionSubscore(nutriments, foodCategory, barcode);
   if (!nutrition.available && barcode != null) {
     const reason = nutrition.reason || 'missing_unfavourable';
     const missing = ({
@@ -2508,9 +2532,11 @@ function applyDerivedNutrientZeros(nutriments) {
   return out;
 }
 
-function computeNutritionSubscore(nutriments, foodCategory) {
+function computeNutritionSubscore(nutriments, foodCategory, barcode) {
   const path = classifyPurlaFoodPath(foodCategory);
-  const derived = applyDerivedNutrientZeros(nutriments);
+  const working = Object.assign({}, nutriments && typeof nutriments === 'object' ? nutriments : {});
+  applyNutrientPlausibilityBounds(working, null, barcode);
+  const derived = applyDerivedNutrientZeros(working);
 
   const energyKcal = getNumericNutrimentValue(derived, ['energy-kcal_100g', 'energy-kcal']);
   const sugars = getNumericNutrimentValue(derived, FOOD_SUGAR_NUTRIMENT_KEYS);
@@ -2704,8 +2730,74 @@ function computeNutrientTiers(sugarVal, sodiumVal, proteinVal) {
   return { sugarTier, sodiumTier, proteinTier };
 }
 
+// Impossible nutrient amounts are treated as missing — never rescaled,
+// clamped, or unit-guessed. Bounds are per 100g: sodium ≤ 39g; sugars /
+// saturated fat / fat / carbohydrates / protein / fibre ≤ 100g; energy ≤
+// 900 kcal. Per-serving values are normalised to per-100g via the serving
+// quantity before the same bounds apply. A rejected 100g value also drops
+// the serving key so it cannot re-enter.
+function nutrientPlausibilityLimit(nutrient) {
+  if (nutrient === 'sodium') return 39;
+  if (nutrient === 'energy') return 900;
+  return 100;
+}
+
+const NUTRIENT_PLAUSIBILITY_GROUPS = [
+  { nutrient: 'sodium', per100g: ['sodium_100g', 'sodium'], serving: ['sodium_serving'] },
+  { nutrient: 'sugars', per100g: ['sugars_100g', 'sugars'], serving: ['sugars_serving'] },
+  { nutrient: 'saturated-fat', per100g: ['saturated-fat_100g', 'saturated-fat'], serving: ['saturated-fat_serving'] },
+  { nutrient: 'fat', per100g: ['fat_100g', 'fat'], serving: ['fat_serving'] },
+  { nutrient: 'carbohydrates', per100g: ['carbohydrates_100g', 'carbohydrates'], serving: ['carbohydrates_serving'] },
+  { nutrient: 'proteins', per100g: ['proteins_100g', 'proteins'], serving: ['proteins_serving'] },
+  { nutrient: 'fiber', per100g: ['fiber_100g', 'fiber'], serving: ['fiber_serving'] },
+  { nutrient: 'energy', per100g: ['energy-kcal_100g', 'energy-kcal'], serving: ['energy-kcal_serving'] },
+];
+
+function applyNutrientPlausibilityBounds(nutriments, servingQuantityRaw, barcode) {
+  if (!nutriments || typeof nutriments !== 'object') return nutriments;
+  const servingQuantity = parseServingQuantity(servingQuantityRaw);
+  for (const group of NUTRIENT_PLAUSIBILITY_GROUPS) {
+    const bound = nutrientPlausibilityLimit(group.nutrient);
+    let rejected100g = false;
+    for (const key of group.per100g) {
+      if (!Object.prototype.hasOwnProperty.call(nutriments, key)) continue;
+      const rawValue = nutriments[key];
+      if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) continue;
+      if (rawValue > bound) {
+        console.log(
+          `[NUTRIENT PLAUSIBILITY] barcode=${barcode || 'unknown'} nutrient=${group.nutrient} rawValue=${rawValue} basis=100g` +
+          (servingQuantity != null ? ` servingQuantity=${servingQuantity}` : '')
+        );
+        delete nutriments[key];
+        rejected100g = true;
+      }
+    }
+    if (rejected100g) {
+      for (const key of group.serving) {
+        delete nutriments[key];
+      }
+      continue;
+    }
+    if (servingQuantity == null) continue;
+    for (const key of group.serving) {
+      if (!Object.prototype.hasOwnProperty.call(nutriments, key)) continue;
+      const rawValue = nutriments[key];
+      if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) continue;
+      const per100 = (rawValue / servingQuantity) * 100;
+      if (per100 > bound) {
+        console.log(
+          `[NUTRIENT PLAUSIBILITY] barcode=${barcode || 'unknown'} nutrient=${group.nutrient} rawValue=${rawValue} basis=serving servingQuantity=${servingQuantity}`
+        );
+        delete nutriments[key];
+      }
+    }
+  }
+  return nutriments;
+}
+
 // Shared by /scan and /search so tiers and servingKnown stay aligned.
-function resolveFoodServingNutrition(nutriments, servingQuantityRaw) {
+function resolveFoodServingNutrition(nutriments, servingQuantityRaw, barcode) {
+  applyNutrientPlausibilityBounds(nutriments, servingQuantityRaw, barcode);
   const servingQuantity = parseServingQuantity(servingQuantityRaw);
   // Trusted quantity only. Explicit *_serving without a trusted quantity
   // is not enough — same fallback as a missing serving size.
@@ -3047,7 +3139,10 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
 
   const searchRes = await fetch(
     `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&countries_tags_en=United States&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,ingredients,labels_tags,nutriments,image_front_url,image_url,categories_tags`,
-    { headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' } }
+    {
+      headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
+      signal: AbortSignal.timeout(ALT_LOOKUP_TIMEOUT_MS),
+    }
   );
   if (!searchRes.ok) {
     console.log(`[ALT DEBUG] barcode=${currentBarcode} search request failed, status=${searchRes.status}`);
@@ -3117,6 +3212,58 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   console.log(`[ALT DEBUG] qualified=${scored.length} top5raw=${JSON.stringify(candidates.slice(0,5).map(p => p.product_name))}`);
 
   return scored.slice(0, 2);
+}
+
+// WeakMap so pending alternatives work never serialises into the HTTP body
+// or a productCache write (object spread / JSON.stringify skip symbols/weak keys).
+const pendingAlternativesByResponse = new WeakMap();
+
+function takePendingAlternatives(responseData) {
+  if (!responseData || typeof responseData !== 'object') return null;
+  const pending = pendingAlternativesByResponse.get(responseData) || null;
+  pendingAlternativesByResponse.delete(responseData);
+  return pending;
+}
+
+function scheduleCategoryAlternativesFill(pending) {
+  if (!pending || !pending.barcode) return;
+  fillCategoryAlternativesInBackground(pending).catch((err) => {
+    console.log(`[ALTERNATIVES BACKGROUND ERROR] barcode=${pending.barcode} ${err.message}`);
+  });
+}
+
+// Background only — never awaited on the /scan response path. Updates the
+// existing cache doc's alternatives field; never creates a missing doc.
+async function fillCategoryAlternativesInBackground({ barcode, categoriesTags, score, scanLogicVersion }) {
+  let alternatives;
+  try {
+    alternatives = await getCategoryAlternatives(barcode, categoriesTags, score);
+  } catch (err) {
+    const timedOut = !!(err && (err.name === 'TimeoutError' || err.name === 'AbortError'));
+    console.log(
+      `[ALTERNATIVES ${timedOut ? 'TIMEOUT' : 'ERROR'}] barcode=${barcode} ${err && err.message ? err.message : err}`
+    );
+    return;
+  }
+
+  try {
+    const docRef = db.collection(CACHE_COLLECTION).doc(String(barcode));
+    const doc = await docRef.get();
+    if (!doc.exists) {
+      console.log(`[ALTERNATIVES SKIP] barcode=${barcode} reason=missing_doc`);
+      return;
+    }
+    const cached = doc.data() || {};
+    if (cached.scanLogicVersion !== scanLogicVersion) {
+      console.log(
+        `[ALTERNATIVES SKIP] barcode=${barcode} reason=version_mismatch cached=${cached.scanLogicVersion} computed=${scanLogicVersion}`
+      );
+      return;
+    }
+    await docRef.set({ alternatives: JSON.stringify(alternatives) }, { merge: true });
+  } catch (err) {
+    console.log(`[ALTERNATIVES CACHE ERROR] barcode=${barcode} ${err.message}`);
+  }
 }
 
 // Token-aware diet term matching — avoids substring false positives such as
@@ -3232,6 +3379,78 @@ function findDietTermMatch(ingredientsText, terms, tagList, {
   return null;
 }
 
+// Exact fields detectDietWarnings reads. Snapshot these at cache-write time so
+// hits can rebuild detector input without a second OFF fetch. Not a full
+// product clone — USDA-merged objects and display-only fields are excluded.
+const DIET_WARNING_FIELD_KEYS = [
+  'labels_tags',
+  'ingredients_text',
+  'additives_tags',
+  'ingredients',
+  'allergens_tags',
+  'traces_tags',
+];
+
+function snapshotDietWarningFields(offProduct) {
+  if (!offProduct || typeof offProduct !== 'object') return null;
+  const snapshot = {};
+  for (const key of DIET_WARNING_FIELD_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(offProduct, key)) {
+      snapshot[key] = offProduct[key];
+    }
+  }
+  try {
+    return JSON.parse(JSON.stringify(snapshot));
+  } catch (_) {
+    return null;
+  }
+}
+
+function attachDietWarningFields(cachePayload, offProduct) {
+  const snapshot = snapshotDietWarningFields(offProduct);
+  if (snapshot) cachePayload.dietWarningFields = snapshot;
+  return cachePayload;
+}
+
+// Live raw OFF product from this request's main barcode lookup (miss / refresh).
+// WeakMap so it never serialises into the HTTP body or a productCache write.
+const dietOffProductByResponse = new WeakMap();
+// Snapshot stripped from a cache hit by cachePayloadWithoutFoodCoercion.
+const dietSnapshotByResponse = new WeakMap();
+
+function attachDietOffProduct(responseData, offProduct) {
+  if (!responseData || typeof responseData !== 'object') return;
+  // Always set, including null: a completed lookup with no OFF product must
+  // not fall through to the legacy refetch (same as today's empty refetch).
+  dietOffProductByResponse.set(responseData, offProduct || null);
+}
+
+function takeDietOffProduct(responseData) {
+  if (!responseData || typeof responseData !== 'object') {
+    return { present: false, product: null };
+  }
+  if (!dietOffProductByResponse.has(responseData)) {
+    return { present: false, product: null };
+  }
+  const product = dietOffProductByResponse.get(responseData) || null;
+  dietOffProductByResponse.delete(responseData);
+  return { present: true, product };
+}
+
+function takeDietSnapshot(responseData) {
+  if (!responseData || typeof responseData !== 'object') return null;
+  const snapshot = dietSnapshotByResponse.get(responseData) || null;
+  dietSnapshotByResponse.delete(responseData);
+  return snapshot;
+}
+
+// Title Case the detected diet term only: milk → Milk. Detection unchanged.
+function titleCaseDietValue(value) {
+  const s = String(value == null ? '' : value);
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 // Diet warning detection — checks a product against the user's dietary
 // preferences and returns a human-readable warning string, or empty string
 // if no conflicts. Uses OFF's labels_tags, ingredients_text, and additive codes
@@ -3254,7 +3473,7 @@ function detectDietWarnings(product, healthProfile) {
     const isVegan = labels.includes('en:vegan');
     const isNotVegan = labels.includes('en:non-vegan');
     if (isNotVegan) {
-      warnings.push('Not vegan');
+      warnings.push('Not Vegan');
     } else if (!isVegan) {
       // buttermilk is animal-derived and must remain a whole-token hit even
       // though boundary matching no longer treats it as "butter"/"milk".
@@ -3267,14 +3486,14 @@ function detectDietWarnings(product, healthProfile) {
         'octopus', 'krill', 'cod', 'sardine', 'mackerel', 'herring', 'crustacean',
         'mollusc', 'mollusk'];
       const found = findDietTermMatch(ingredientsText, animalTerms, allergens, { applyPlantQualifier: true });
-      if (found) warnings.push(`Not vegan: ${found}`);
+      if (found) warnings.push(`Not Vegan: ${titleCaseDietValue(found)}`);
       // Animal-derived additives (e.g. E120 carmine) often appear only in
       // ingredients[] taxonomy IDs, not additives_tags — check both via helper.
       else {
         const animalAdd = findAnimalDerivedAdditive(additives);
         if (animalAdd) {
           const name = additiveDisplayName(animalAdd).toLowerCase();
-          warnings.push(`Not vegan: ${name}`);
+          warnings.push(`Not Vegan: ${titleCaseDietValue(name)}`);
         }
       }
     }
@@ -3284,7 +3503,7 @@ function detectDietWarnings(product, healthProfile) {
     const isVeg = labels.includes('en:vegetarian') || labels.includes('en:vegan');
     const isNotVeg = labels.includes('en:non-vegetarian');
     if (isNotVeg) {
-      warnings.push('Not vegetarian');
+      warnings.push('Not Vegetarian');
     } else if (!isVeg) {
       const meatTerms = ['meat', 'beef', 'pork', 'chicken', 'turkey', 'lamb', 'veal',
         'fish', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn', 'gelatin', 'gelatine', 'lard',
@@ -3292,12 +3511,12 @@ function detectDietWarnings(product, healthProfile) {
         'octopus', 'krill', 'cod', 'sardine', 'mackerel', 'herring', 'crustacean',
         'mollusc', 'mollusk'];
       const found = findDietTermMatch(ingredientsText, meatTerms, allergens, { applyPlantQualifier: true });
-      if (found) warnings.push(`Not vegetarian: ${found}`);
+      if (found) warnings.push(`Not Vegetarian: ${titleCaseDietValue(found)}`);
       else {
         const animalAdd = findAnimalDerivedAdditive(additives);
         if (animalAdd) {
           const name = additiveDisplayName(animalAdd).toLowerCase();
-          warnings.push(`Not vegetarian: ${name}`);
+          warnings.push(`Not Vegetarian: ${titleCaseDietValue(name)}`);
         }
       }
     }
@@ -3316,7 +3535,7 @@ function detectDietWarnings(product, healthProfile) {
         [...allergens, ...traces],
         { substringTerms: glutenSubstringTerms }
       );
-      if (found) warnings.push(`May not be gluten-free: ${found}`);
+      if (found) warnings.push(`May Not Be Gluten-Free: ${titleCaseDietValue(found)}`);
     }
   }
 
@@ -3326,7 +3545,7 @@ function detectDietWarnings(product, healthProfile) {
       // Same plant-qualified dairy compounds as vegan (oat milk, cocoa butter…).
       const lactoseTerms = ['buttermilk', 'milk', 'dairy', 'lactose', 'whey', 'casein', 'cheese', 'butter', 'cream', 'yogurt'];
       const found = findDietTermMatch(ingredientsText, lactoseTerms, allergens, { applyPlantQualifier: true });
-      if (found) warnings.push(`Not lactose-free: ${found}`);
+      if (found) warnings.push(`Not Lactose-Free: ${titleCaseDietValue(found)}`);
     }
   }
 
@@ -3347,26 +3566,26 @@ function detectDietWarnings(product, healthProfile) {
         break;
       }
     }
-    if (hasSoyTag || hasSoyToken) warnings.push('Contains soy');
+    if (hasSoyTag || hasSoyToken) warnings.push('Contains Soy');
   }
 
   if (prefs.has('pork-free')) {
     const porkTerms = ['pork', 'lard', 'bacon', 'ham', 'gelatin', 'gelatine'];
     const found = findDietTermMatch(ingredientsText, porkTerms, allergens);
-    if (found) warnings.push(`Not pork-free: ${found}`);
+    if (found) warnings.push(`Not Pork-Free: ${titleCaseDietValue(found)}`);
   }
 
   if (prefs.has('palm-oil-free')) {
     const hasPalm = ingredientsLower.includes('palm oil') || ingredientsLower.includes('palm kernel') ||
       labels.includes('en:palm-oil-free') === false && ingredientsLower.includes('palm');
-    if (hasPalm) warnings.push('Contains palm oil');
+    if (hasPalm) warnings.push('Contains Palm Oil');
   }
 
   if (prefs.has('sulfite-free')) {
     const sulfiteAdditives = ['e220', 'e221', 'e222', 'e223', 'e224', 'e225', 'e226', 'e227', 'e228'];
     const hasSulfite = additives.some(a => sulfiteAdditives.includes(a)) ||
       ingredientsLower.includes('sulfite') || ingredientsLower.includes('sulphite') || ingredientsLower.includes('sulfit');
-    if (hasSulfite) warnings.push('Contains sulfites');
+    if (hasSulfite) warnings.push('Contains Sulfites');
   }
 
   return warnings.join(' • ');
@@ -3443,6 +3662,7 @@ Avoid jargon like "Annex II" — say "prohibited in the EU" if relevant.`;
         'x-api-key': ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       },
+      signal: AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS),
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 120,
@@ -3556,6 +3776,7 @@ async function requestFoodExplanation(prompt) {
       'x-api-key': ANTHROPIC_API_KEY,
       'anthropic-version': '2023-06-01'
     },
+    signal: AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS),
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 220,
@@ -4078,7 +4299,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
 
   const organicStatus = resolveOrganicStatus(product.labels_tags);
   const isOrganicForScore = organicStatus === 'yes';
-  const servingNutrition = resolveFoodServingNutrition(product.nutriments, product.serving_quantity);
+  const servingNutrition = resolveFoodServingNutrition(product.nutriments, product.serving_quantity, barcode);
   const {
     servingQuantity,
     servingKnown,
@@ -4105,14 +4326,9 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList, barcode, product.nutriments, product.foodCategory);
   const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList, product.nutriments, product.foodCategory);
 
-  let alternatives = [];
-  if (score != null && score < 50) {
-    try {
-      alternatives = await getCategoryAlternatives(barcode, product.categories_tags, score);
-    } catch (altErr) {
-      console.log(`[ALTERNATIVES ERROR] barcode=${barcode} ${altErr.message}`);
-    }
-  }
+  // Alternatives are computed after the /scan response. Misses always return
+  // today's empty array so getCategoryAlternatives is never awaited here.
+  const alternatives = [];
 
   console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} nutritionPath=${scoreBreakdown.nutritionPath} nutritionAvailable=${scoreBreakdown.nutritionAvailable} nutriPts=${scoreBreakdown.nutriPts} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${organicStatus} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
 
@@ -4208,6 +4424,14 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   };
   if (skipExplanation && !noIngredientData && score != null) {
     responseData.explanationPending = true;
+  }
+  if (score != null && score < 50) {
+    pendingAlternativesByResponse.set(responseData, {
+      barcode,
+      categoriesTags: product.categories_tags,
+      score,
+      scanLogicVersion: SCAN_LOGIC_VERSION,
+    });
   }
   return responseData;
 }
@@ -4368,12 +4592,51 @@ function staleCacheFallbackPayload(staleCached) {
   return responseData;
 }
 
-async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation = false } = {}) {
+function noteScanTiming(timing, key, startedAt) {
+  if (!timing || startedAt == null) return;
+  if (!timing.stages) timing.stages = {};
+  timing.stages[key] = Date.now() - startedAt;
+}
+
+function setScanTimingOutcome(timing, outcome) {
+  if (timing) timing.outcome = outcome;
+}
+
+function recordLookupTiming(timing, lookupTiming) {
+  if (!timing || !lookupTiming) return;
+  timing.usdaMs = lookupTiming.usdaMs;
+  timing.offMs = lookupTiming.offMs;
+  if (lookupTiming.obfMs != null) timing.obfMs = lookupTiming.obfMs;
+  if (lookupTiming.wallMs != null) {
+    if (!timing.stages) timing.stages = {};
+    timing.stages.lookup = lookupTiming.wallMs;
+  }
+}
+
+function logScanTiming(barcode, timing, totalMs) {
+  const s = (timing && timing.stages) || {};
+  const outcome = (timing && timing.outcome) || 'unknown';
+  const parts = [`[SCAN TIMING] barcode=${barcode}`, `outcome=${outcome}`, `totalMs=${totalMs}`];
+  for (const key of ['auth', 'cacheRead', 'lookup', 'score', 'explain', 'cacheWrite', 'image', 'diet']) {
+    if (s[key] != null) parts.push(`${key}Ms=${s[key]}`);
+  }
+  if (timing && timing.usdaMs != null && timing.offMs != null) {
+    parts.push(`usdaMs=${timing.usdaMs}`);
+    parts.push(`offMs=${timing.offMs}`);
+    parts.push('lookupParallel=1');
+  }
+  if (timing && timing.obfMs != null) parts.push(`obfMs=${timing.obfMs}`);
+  console.log(parts.join(' '));
+}
+
+async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation = false, timing = null } = {}) {
   let staleCached = null;
 
   if (!skipCacheCheck) {
     try {
+      const cacheReadStarted = Date.now();
       const cacheDoc = await getDocWithBarcodeMigration(CACHE_COLLECTION, barcode);
+      noteScanTiming(timing, 'cacheRead', cacheReadStarted);
       if (cacheDoc.exists) {
         const cached = cacheDoc.data();
         const age = Date.now() - (cached.cachedAt || 0);
@@ -4386,6 +4649,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
           cached.tableVersion !== COSMETIC_TABLE_VERSION;
         if (age < CACHE_TTL_MS && !tableStale && !logicStale) {
           console.log(`[CACHE HIT] barcode=${barcode} type=${cachedType} age=${Math.round(age / 3600000)}h`);
+          setScanTimingOutcome(timing, 'hit');
           const responseData = cachePayloadWithoutFoodCoercion(cached);
 
           // Old TestFlight clients always need an explanation. If a deferred
@@ -4398,7 +4662,9 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
             !hasUsableExplanation(responseData)
           ) {
             try {
+              const explainStarted = Date.now();
               const explanation = await ensureExplanation(barcode, responseData);
+              noteScanTiming(timing, 'explain', explainStarted);
               responseData.explanation = explanation;
               responseData.explanationPending = false;
             } catch (fillErr) {
@@ -4410,6 +4676,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
 
         // Keep the stale doc for photo local re-score and stale-beats-nothing.
         staleCached = cached;
+        setScanTimingOutcome(timing, 'stale');
         if (logicStale) {
           console.log(`[CACHE STALE LOGIC] barcode=${barcode} cached=${cached.scanLogicVersion} current=${SCAN_LOGIC_VERSION} — re-scanning`);
         } else if (tableStale) {
@@ -4427,6 +4694,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
             attemptedUpstreamRecheck = true;
             try {
               const resolved = await resolveProductType(barcode);
+              recordLookupTiming(timing, resolved.lookupTiming);
               if (shouldReplacePhotoWithUpstream(resolved.product)) {
                 const upstreamData = await routeResolvedScan(
                   barcode,
@@ -4434,6 +4702,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
                   resolved.product,
                   { skipExplanation, reason: resolved.reason }
                 );
+                attachDietOffProduct(upstreamData, resolved.offProduct || null);
 
                 // Same unscoreable rule as [PHOTO CACHE REPLACED UNSCOREABLE],
                 // opposite direction: do not discard photo data for a worse
@@ -4451,6 +4720,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
                         ...upstreamData,
                         cachedAt: Date.now(),
                       };
+                      attachDietWarningFields(cachePayload, resolved.offProduct || null);
                       if (upstreamData.productType === 'cosmetic' && upstreamData.ingredientList) {
                         cachePayload.ingredientList = stringifyIngredientListForCache(
                           (() => { try { return JSON.parse(upstreamData.ingredientList); } catch (_) { return []; } })(),
@@ -4542,19 +4812,28 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
     }
   }
 
+  if (timing && !timing.outcome) setScanTimingOutcome(timing, 'miss');
+
   let responseData;
+  let missOffProduct = null;
   try {
-    const { productType, product, reason: classificationReason } = await resolveProductType(barcode);
+    const resolved = await resolveProductType(barcode);
+    recordLookupTiming(timing, resolved.lookupTiming);
+    const { productType, product, reason: classificationReason } = resolved;
+    missOffProduct = resolved.offProduct || null;
     if (!product) {
       const notFoundErr = new Error('Product not found');
       notFoundErr.statusCode = 404;
       throw notFoundErr;
     }
 
+    const scoreStarted = Date.now();
     responseData = await routeResolvedScan(barcode, productType, product, {
       skipExplanation,
       reason: classificationReason,
     });
+    noteScanTiming(timing, 'score', scoreStarted);
+    attachDietOffProduct(responseData, missOffProduct);
   } catch (refreshErr) {
     // Stale beats nothing: a slightly old answer is better than a false 404
     // (photo-rescued products, OFF/OBF outages, network errors).
@@ -4591,6 +4870,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
       ...responseData,
       cachedAt: Date.now(),
     };
+    attachDietWarningFields(cachePayload, missOffProduct);
     // Keep the full ingredientList in the HTTP response; shrink only the cache write.
     if (responseData.productType === 'cosmetic' && responseData.ingredientList) {
       cachePayload.ingredientList = stringifyIngredientListForCache(
@@ -4598,7 +4878,9 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
         barcode
       );
     }
+    const cacheWriteStarted = Date.now();
     await db.collection(CACHE_COLLECTION).doc(barcode).set(cachePayload);
+    noteScanTiming(timing, 'cacheWrite', cacheWriteStarted);
   } catch (cacheWriteErr) {
     console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
   }
@@ -4632,10 +4914,13 @@ app.get('/health', async (req, res) => {
 });
 
 app.get('/scan/:barcode', async (req, res) => {
+  const scanStarted = Date.now();
+  const timing = { stages: {} };
+  let barcode = null;
   try {
     if (!enforceIpRateLimit(req, res, '/scan', RATE_LIMIT_SCAN_SEARCH_PER_IP)) return;
 
-    const barcode = normalizeBarcode(req.params.barcode);
+    barcode = normalizeBarcode(req.params.barcode);
     if (!barcode) {
       return res.status(400).json({ error: 'Invalid barcode' });
     }
@@ -4644,6 +4929,7 @@ app.get('/scan/:barcode', async (req, res) => {
     // Try to get the user's health profile from their Firestore document.
     // Best-effort — a missing/invalid token just means no diet warnings, never a blocked scan.
     let healthProfile = '';
+    const authStarted = Date.now();
     try {
       const authHeader = req.headers['authorization'] || '';
       const token = authHeader.replace('Bearer ', '').trim();
@@ -4661,8 +4947,9 @@ app.get('/scan/:barcode', async (req, res) => {
     } catch (authErr) {
       console.log(`[DIET] auth/profile lookup failed: ${authErr.message}`);
     }
+    noteScanTiming(timing, 'auth', authStarted);
 
-    const responseData = await scanAndCache(barcode, { skipExplanation: deferExplanation });
+    const responseData = await scanAndCache(barcode, { skipExplanation: deferExplanation, timing });
 
     // Contributed fronts are stored in productImages and served at GET /image.
     // Cache hits return imageUrl from write time, which is '' for USDA-only
@@ -4670,6 +4957,7 @@ app.get('/scan/:barcode', async (req, res) => {
     // already present. If PUBLIC_BASE_URL is unset, leave imageUrl empty —
     // never build a host from request headers.
     if (responseData && !responseData.imageUrl) {
+      const imageStarted = Date.now();
       try {
         const imageDoc = await getDocWithBarcodeMigration(PRODUCT_IMAGES_COLLECTION, barcode);
         const imageBase = resolvePublicBaseUrl();
@@ -4686,27 +4974,56 @@ app.get('/scan/:barcode', async (req, res) => {
       } catch (imageLookupErr) {
         console.log(`[SCAN IMAGE URL] barcode=${barcode} ${imageLookupErr.message}`);
       }
+      noteScanTiming(timing, 'image', imageStarted);
     }
 
-    // Diet warning detection — food only. Needs raw OFF product data (labels,
-    // allergens etc.) which isn't stored in the cache. Cosmetics skip this.
+    // Diet warning detection — food only. Prefer the main lookup's raw OFF
+    // product (miss) or the cache snapshot (hit). Legacy refetch is only for
+    // older cache entries that have no snapshot. Cosmetics skip this.
     let dietWarnings = '';
     const responseType = responseData.productType;
     if (healthProfile && isExplicitFoodProductType(responseType)) {
-      try {
-        const offRes = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`, {
-          headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
-        });
-        const offData = await offRes.json();
-        if (offData.product) {
-          dietWarnings = detectDietWarnings(offData.product, healthProfile);
+      const dietStarted = Date.now();
+      const liveOff = takeDietOffProduct(responseData);
+      const snapshot = takeDietSnapshot(responseData);
+      if (liveOff.present) {
+        if (liveOff.product) {
+          dietWarnings = detectDietWarnings(liveOff.product, healthProfile);
         }
-      } catch (dietErr) {
-        console.log(`[DIET] product fetch failed: ${dietErr.message}`);
+      } else if (snapshot) {
+        dietWarnings = detectDietWarnings(snapshot, healthProfile);
+      } else {
+        try {
+          const offRes = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`, {
+            headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
+            signal: AbortSignal.timeout(DIET_FALLBACK_TIMEOUT_MS),
+          });
+          const offData = await offRes.json();
+          if (offData.product) {
+            dietWarnings = detectDietWarnings(offData.product, healthProfile);
+          }
+        } catch (dietErr) {
+          const timedOut = !!(dietErr && (dietErr.name === 'TimeoutError' || dietErr.name === 'AbortError'));
+          console.log(
+            `[DIET ${timedOut ? 'TIMEOUT' : 'ERROR'}] barcode=${barcode} operation=diet_fallback_fetch ${dietErr && dietErr.message ? dietErr.message : dietErr}`
+          );
+          // Empty string for this request only — do not persist as "no warning".
+        }
       }
+      noteScanTiming(timing, 'diet', dietStarted);
     }
 
-    res.json({ ...responseData, dietWarnings });
+    logScanTiming(barcode, timing, Date.now() - scanStarted);
+
+    const { dietWarningFields: _omitDietFields, ...scanBody } = responseData || {};
+    res.json({ ...scanBody, dietWarnings });
+
+    // After the score is already on the wire, fill alternatives in the
+    // background. Never await this promise on the response path.
+    const pendingAlternatives = takePendingAlternatives(responseData);
+    if (pendingAlternatives) {
+      scheduleCategoryAlternativesFill(pendingAlternatives);
+    }
 
     // After the score is already on the wire, fill the Haiku explanation in
     // the background and merge it into the cache. Failures must not matter.
@@ -4716,6 +5033,7 @@ app.get('/scan/:barcode', async (req, res) => {
       });
     }
   } catch (err) {
+    if (barcode) logScanTiming(barcode, timing, Date.now() - scanStarted);
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
@@ -5713,7 +6031,7 @@ app.get('/search', async (req, res) => {
         const additivesCount = searchAdditiveCodes.length;
         const organicStatus = resolveOrganicStatus(p.labels_tags);
         const isOrganicForScore = organicStatus === 'yes';
-        const servingNutrition = resolveFoodServingNutrition(p.nutriments, p.serving_quantity);
+        const servingNutrition = resolveFoodServingNutrition(p.nutriments, p.serving_quantity, p.code);
         const {
           servingQuantity,
           servingKnown,
