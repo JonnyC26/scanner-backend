@@ -3254,7 +3254,7 @@ function detectDietWarnings(product, healthProfile) {
     const isVegan = labels.includes('en:vegan');
     const isNotVegan = labels.includes('en:non-vegan');
     if (isNotVegan) {
-      warnings.push('Not compatible with vegan diet');
+      warnings.push('Not vegan');
     } else if (!isVegan) {
       // buttermilk is animal-derived and must remain a whole-token hit even
       // though boundary matching no longer treats it as "butter"/"milk".
@@ -3267,14 +3267,14 @@ function detectDietWarnings(product, healthProfile) {
         'octopus', 'krill', 'cod', 'sardine', 'mackerel', 'herring', 'crustacean',
         'mollusc', 'mollusk'];
       const found = findDietTermMatch(ingredientsText, animalTerms, allergens, { applyPlantQualifier: true });
-      if (found) warnings.push(`Contains ${found} — not compatible with vegan diet`);
+      if (found) warnings.push(`Not vegan: ${found}`);
       // Animal-derived additives (e.g. E120 carmine) often appear only in
       // ingredients[] taxonomy IDs, not additives_tags — check both via helper.
       else {
         const animalAdd = findAnimalDerivedAdditive(additives);
         if (animalAdd) {
           const name = additiveDisplayName(animalAdd).toLowerCase();
-          warnings.push(`Contains ${name} — not compatible with vegan diet`);
+          warnings.push(`Not vegan: ${name}`);
         }
       }
     }
@@ -3284,7 +3284,7 @@ function detectDietWarnings(product, healthProfile) {
     const isVeg = labels.includes('en:vegetarian') || labels.includes('en:vegan');
     const isNotVeg = labels.includes('en:non-vegetarian');
     if (isNotVeg) {
-      warnings.push('Not compatible with vegetarian diet');
+      warnings.push('Not vegetarian');
     } else if (!isVeg) {
       const meatTerms = ['meat', 'beef', 'pork', 'chicken', 'turkey', 'lamb', 'veal',
         'fish', 'anchovy', 'anchovies', 'tuna', 'salmon', 'shrimp', 'prawn', 'gelatin', 'gelatine', 'lard',
@@ -3292,12 +3292,12 @@ function detectDietWarnings(product, healthProfile) {
         'octopus', 'krill', 'cod', 'sardine', 'mackerel', 'herring', 'crustacean',
         'mollusc', 'mollusk'];
       const found = findDietTermMatch(ingredientsText, meatTerms, allergens, { applyPlantQualifier: true });
-      if (found) warnings.push(`Contains ${found} — not compatible with vegetarian diet`);
+      if (found) warnings.push(`Not vegetarian: ${found}`);
       else {
         const animalAdd = findAnimalDerivedAdditive(additives);
         if (animalAdd) {
           const name = additiveDisplayName(animalAdd).toLowerCase();
-          warnings.push(`Contains ${name} — not compatible with vegetarian diet`);
+          warnings.push(`Not vegetarian: ${name}`);
         }
       }
     }
@@ -3316,7 +3316,7 @@ function detectDietWarnings(product, healthProfile) {
         [...allergens, ...traces],
         { substringTerms: glutenSubstringTerms }
       );
-      if (found) warnings.push(`Contains ${found} — may not be suitable for gluten-free diet`);
+      if (found) warnings.push(`May not be gluten-free: ${found}`);
     }
   }
 
@@ -3326,7 +3326,7 @@ function detectDietWarnings(product, healthProfile) {
       // Same plant-qualified dairy compounds as vegan (oat milk, cocoa butter…).
       const lactoseTerms = ['buttermilk', 'milk', 'dairy', 'lactose', 'whey', 'casein', 'cheese', 'butter', 'cream', 'yogurt'];
       const found = findDietTermMatch(ingredientsText, lactoseTerms, allergens, { applyPlantQualifier: true });
-      if (found) warnings.push(`Contains ${found} — not compatible with lactose-free diet`);
+      if (found) warnings.push(`Not lactose-free: ${found}`);
     }
   }
 
@@ -3347,13 +3347,13 @@ function detectDietWarnings(product, healthProfile) {
         break;
       }
     }
-    if (hasSoyTag || hasSoyToken) warnings.push('Contains soy — not compatible with soy-free diet');
+    if (hasSoyTag || hasSoyToken) warnings.push('Contains soy');
   }
 
   if (prefs.has('pork-free')) {
     const porkTerms = ['pork', 'lard', 'bacon', 'ham', 'gelatin', 'gelatine'];
     const found = findDietTermMatch(ingredientsText, porkTerms, allergens);
-    if (found) warnings.push(`Contains ${found} — not compatible with pork-free diet`);
+    if (found) warnings.push(`Not pork-free: ${found}`);
   }
 
   if (prefs.has('palm-oil-free')) {
@@ -3366,7 +3366,7 @@ function detectDietWarnings(product, healthProfile) {
     const sulfiteAdditives = ['e220', 'e221', 'e222', 'e223', 'e224', 'e225', 'e226', 'e227', 'e228'];
     const hasSulfite = additives.some(a => sulfiteAdditives.includes(a)) ||
       ingredientsLower.includes('sulfite') || ingredientsLower.includes('sulphite') || ingredientsLower.includes('sulfit');
-    if (hasSulfite) warnings.push('Contains sulfites — not compatible with sulfite-free diet');
+    if (hasSulfite) warnings.push('Contains sulfites');
   }
 
   return warnings.join(' • ');
