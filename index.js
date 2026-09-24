@@ -1067,9 +1067,14 @@ function unsupportedScanFromRecord(record, extras = {}) {
 }
 
 // Cache/stale payloads that are not explicit food must never be served as food.
+// dietWarningFields is a cache-only snapshot for detectDietWarnings — strip it
+// from the HTTP payload and stash it so /scan hits can rebuild detector input.
 function cachePayloadWithoutFoodCoercion(cached) {
   if (!cached) return null;
-  const { cachedAt, ...responseData } = cached;
+  const { cachedAt, dietWarningFields, ...responseData } = cached;
+  if (dietWarningFields) {
+    dietSnapshotByResponse.set(responseData, dietWarningFields);
+  }
   if (isExplicitFoodProductType(responseData.productType)) return responseData;
   if (responseData.productType === 'unsupported') return responseData;
   return unsupportedScanFromRecord(responseData, {
@@ -2236,6 +2241,10 @@ async function resolveProductType(barcode) {
   const offOut = lookupOutcome(offSettled, Date.now() - offStarted);
   const usdaProduct = usdaOut.product;
   const offFetched = offOut.product;
+  function typed(result) {
+    result.offProduct = offFetched || null;
+    return result;
+  }
 
   if (usdaOut.error) {
     console.log(`[USDA LOOKUP] barcode=${barcode} ${usdaOut.error.message}`);
@@ -2257,11 +2266,11 @@ async function resolveProductType(barcode) {
         `[LOOKUP FIELDS] barcode=${barcode} name=usda brand=usda ingredients=usda nutrition=usda additives=none allergens=none nutriscore=none nova=none image=none`
       );
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda`);
-      return { productType: 'food', product: usdaProduct, reason: 'usda' };
+      return typed({ productType: 'food', product: usdaProduct, reason: 'usda' });
     }
     const merged = mergeUsdaAndOffProducts(barcode, usdaProduct, foodProduct);
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=usda_off_merge`);
-    return { productType: 'food', product: merged, reason: 'usda_off_merge' };
+    return typed({ productType: 'food', product: merged, reason: 'usda_off_merge' });
   }
 
   if (!foodProduct) {
@@ -2275,15 +2284,15 @@ async function resolveProductType(barcode) {
     }
     if (cosmeticProduct) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=obf_only`);
-      return { productType: 'cosmetic', product: cosmeticProduct, reason: 'obf_only' };
+      return typed({ productType: 'cosmetic', product: cosmeticProduct, reason: 'obf_only' });
     }
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=null reason=not_found`);
-    return { productType: null, product: null, reason: 'not_found' };
+    return typed({ productType: null, product: null, reason: 'not_found' });
   }
 
   if (hasHouseholdCategory(foodProduct)) {
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=household reason=category_off`);
-    return { productType: 'household', product: foodProduct, reason: 'category_off' };
+    return typed({ productType: 'household', product: foodProduct, reason: 'category_off' });
   }
 
   const offCosmeticCategory = hasCosmeticCategory(foodProduct);
@@ -2305,19 +2314,19 @@ async function resolveProductType(barcode) {
         ? 'category_no_nutriments_obf_ingredients'
         : 'category_obf_ingredients';
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=${reason}`);
-      return { productType: 'cosmetic', product: cosmeticProduct, reason };
+      return typed({ productType: 'cosmetic', product: cosmeticProduct, reason });
     }
     if (cosmeticProduct) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=category_obf_record`);
-      return { productType: 'cosmetic', product: cosmeticProduct, reason: 'category_obf_record' };
+      return typed({ productType: 'cosmetic', product: cosmeticProduct, reason: 'category_obf_record' });
     }
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=category_off_as_cosmetic`);
-    return { productType: 'cosmetic', product: foodProduct, reason: 'category_off_as_cosmetic' };
+    return typed({ productType: 'cosmetic', product: foodProduct, reason: 'category_off_as_cosmetic' });
   }
 
   if (hasOffNonFoodProductTypeCategory(foodProduct)) {
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=unsupported reason=off_non_food_category`);
-    return { productType: 'unsupported', product: foodProduct, reason: 'off_non_food_category' };
+    return typed({ productType: 'unsupported', product: foodProduct, reason: 'off_non_food_category' });
   }
 
   if (hasExplicitOffFoodCategory(foodProduct)) {
@@ -2325,7 +2334,7 @@ async function resolveProductType(barcode) {
       `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
     );
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=off_food_category`);
-    return { productType: 'food', product: foodProduct, reason: 'off_food_category' };
+    return typed({ productType: 'food', product: foodProduct, reason: 'off_food_category' });
   }
 
   if (hasScorableFoodNutriments(foodProduct.nutriments)) {
@@ -2333,11 +2342,11 @@ async function resolveProductType(barcode) {
       `[LOOKUP FIELDS] barcode=${barcode} name=off brand=off ingredients=off nutrition=off additives=off allergens=off nutriscore=off nova=off image=off`
     );
     console.log(`[PRODUCT TYPE] barcode=${barcode} type=food reason=off_nutrition_facts`);
-    return { productType: 'food', product: foodProduct, reason: 'off_nutrition_facts' };
+    return typed({ productType: 'food', product: foodProduct, reason: 'off_nutrition_facts' });
   }
 
   console.log(`[PRODUCT TYPE] barcode=${barcode} type=unsupported reason=no_affirmative_food`);
-  return { productType: 'unsupported', product: foodProduct, reason: 'no_affirmative_food' };
+  return typed({ productType: 'unsupported', product: foodProduct, reason: 'no_affirmative_food' });
 }
 
 function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, barcode, nutriments, foodCategory) {
@@ -3286,6 +3295,71 @@ function findDietTermMatch(ingredientsText, terms, tagList, {
     }
   }
   return null;
+}
+
+// Exact fields detectDietWarnings reads. Snapshot these at cache-write time so
+// hits can rebuild detector input without a second OFF fetch. Not a full
+// product clone — USDA-merged objects and display-only fields are excluded.
+const DIET_WARNING_FIELD_KEYS = [
+  'labels_tags',
+  'ingredients_text',
+  'additives_tags',
+  'ingredients',
+  'allergens_tags',
+  'traces_tags',
+];
+
+function snapshotDietWarningFields(offProduct) {
+  if (!offProduct || typeof offProduct !== 'object') return null;
+  const snapshot = {};
+  for (const key of DIET_WARNING_FIELD_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(offProduct, key)) {
+      snapshot[key] = offProduct[key];
+    }
+  }
+  try {
+    return JSON.parse(JSON.stringify(snapshot));
+  } catch (_) {
+    return null;
+  }
+}
+
+function attachDietWarningFields(cachePayload, offProduct) {
+  const snapshot = snapshotDietWarningFields(offProduct);
+  if (snapshot) cachePayload.dietWarningFields = snapshot;
+  return cachePayload;
+}
+
+// Live raw OFF product from this request's main barcode lookup (miss / refresh).
+// WeakMap so it never serialises into the HTTP body or a productCache write.
+const dietOffProductByResponse = new WeakMap();
+// Snapshot stripped from a cache hit by cachePayloadWithoutFoodCoercion.
+const dietSnapshotByResponse = new WeakMap();
+
+function attachDietOffProduct(responseData, offProduct) {
+  if (!responseData || typeof responseData !== 'object') return;
+  // Always set, including null: a completed lookup with no OFF product must
+  // not fall through to the legacy refetch (same as today's empty refetch).
+  dietOffProductByResponse.set(responseData, offProduct || null);
+}
+
+function takeDietOffProduct(responseData) {
+  if (!responseData || typeof responseData !== 'object') {
+    return { present: false, product: null };
+  }
+  if (!dietOffProductByResponse.has(responseData)) {
+    return { present: false, product: null };
+  }
+  const product = dietOffProductByResponse.get(responseData) || null;
+  dietOffProductByResponse.delete(responseData);
+  return { present: true, product };
+}
+
+function takeDietSnapshot(responseData) {
+  if (!responseData || typeof responseData !== 'object') return null;
+  const snapshot = dietSnapshotByResponse.get(responseData) || null;
+  dietSnapshotByResponse.delete(responseData);
+  return snapshot;
 }
 
 // Diet warning detection — checks a product against the user's dietary
@@ -4493,6 +4567,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
                   resolved.product,
                   { skipExplanation, reason: resolved.reason }
                 );
+                attachDietOffProduct(upstreamData, resolved.offProduct || null);
 
                 // Same unscoreable rule as [PHOTO CACHE REPLACED UNSCOREABLE],
                 // opposite direction: do not discard photo data for a worse
@@ -4510,6 +4585,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
                         ...upstreamData,
                         cachedAt: Date.now(),
                       };
+                      attachDietWarningFields(cachePayload, resolved.offProduct || null);
                       if (upstreamData.productType === 'cosmetic' && upstreamData.ingredientList) {
                         cachePayload.ingredientList = stringifyIngredientListForCache(
                           (() => { try { return JSON.parse(upstreamData.ingredientList); } catch (_) { return []; } })(),
@@ -4602,8 +4678,11 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
   }
 
   let responseData;
+  let missOffProduct = null;
   try {
-    const { productType, product, reason: classificationReason } = await resolveProductType(barcode);
+    const resolved = await resolveProductType(barcode);
+    const { productType, product, reason: classificationReason } = resolved;
+    missOffProduct = resolved.offProduct || null;
     if (!product) {
       const notFoundErr = new Error('Product not found');
       notFoundErr.statusCode = 404;
@@ -4614,6 +4693,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
       skipExplanation,
       reason: classificationReason,
     });
+    attachDietOffProduct(responseData, missOffProduct);
   } catch (refreshErr) {
     // Stale beats nothing: a slightly old answer is better than a false 404
     // (photo-rescued products, OFF/OBF outages, network errors).
@@ -4650,6 +4730,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
       ...responseData,
       cachedAt: Date.now(),
     };
+    attachDietWarningFields(cachePayload, missOffProduct);
     // Keep the full ingredientList in the HTTP response; shrink only the cache write.
     if (responseData.productType === 'cosmetic' && responseData.ingredientList) {
       cachePayload.ingredientList = stringifyIngredientListForCache(
@@ -4747,25 +4828,37 @@ app.get('/scan/:barcode', async (req, res) => {
       }
     }
 
-    // Diet warning detection — food only. Needs raw OFF product data (labels,
-    // allergens etc.) which isn't stored in the cache. Cosmetics skip this.
+    // Diet warning detection — food only. Prefer the main lookup's raw OFF
+    // product (miss) or the cache snapshot (hit). Legacy refetch is only for
+    // older cache entries that have no snapshot. Cosmetics skip this.
     let dietWarnings = '';
     const responseType = responseData.productType;
     if (healthProfile && isExplicitFoodProductType(responseType)) {
-      try {
-        const offRes = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`, {
-          headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
-        });
-        const offData = await offRes.json();
-        if (offData.product) {
-          dietWarnings = detectDietWarnings(offData.product, healthProfile);
+      const liveOff = takeDietOffProduct(responseData);
+      const snapshot = takeDietSnapshot(responseData);
+      if (liveOff.present) {
+        if (liveOff.product) {
+          dietWarnings = detectDietWarnings(liveOff.product, healthProfile);
         }
-      } catch (dietErr) {
-        console.log(`[DIET] product fetch failed: ${dietErr.message}`);
+      } else if (snapshot) {
+        dietWarnings = detectDietWarnings(snapshot, healthProfile);
+      } else {
+        try {
+          const offRes = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`, {
+            headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
+          });
+          const offData = await offRes.json();
+          if (offData.product) {
+            dietWarnings = detectDietWarnings(offData.product, healthProfile);
+          }
+        } catch (dietErr) {
+          console.log(`[DIET] product fetch failed: ${dietErr.message}`);
+        }
       }
     }
 
-    res.json({ ...responseData, dietWarnings });
+    const { dietWarningFields: _omitDietFields, ...scanBody } = responseData || {};
+    res.json({ ...scanBody, dietWarnings });
 
     // After the score is already on the wire, fill alternatives in the
     // background. Never await this promise on the response path.

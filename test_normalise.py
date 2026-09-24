@@ -7360,6 +7360,183 @@ console.log('alternatives off critical path ok');
     print(proc.stdout.strip())
 
 
+def test_diet_warning_snapshot_equivalence():
+    """Raw OFF fixture and stored-and-reloaded snapshot yield identical warnings."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const mapStart = src.indexOf('const additiveMap =');
+const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
+if (mapStart < 0 || extractEnd < 0) throw new Error('could not locate additive helpers');
+
+const dietStart = src.indexOf('// Token-aware diet term matching');
+const dietEnd = src.indexOf('// Core scan logic, extracted so both the /scan route');
+if (dietStart < 0 || dietEnd < 0) throw new Error('could not locate detectDietWarnings helpers');
+
+const block = `
+${src.slice(mapStart, extractEnd)}
+${src.slice(dietStart, dietEnd)}
+module.exports = {
+  extractAdditiveCodes,
+  snapshotDietWarningFields,
+  DIET_WARNING_FIELD_KEYS,
+  detectDietWarnings,
+};
+`;
+fs.writeFileSync('/tmp/diet_warning_snapshot_helpers.js', block);
+delete require.cache['/tmp/diet_warning_snapshot_helpers.js'];
+const g = require('/tmp/diet_warning_snapshot_helpers.js');
+
+const DETECTOR_KEYS = [
+  'labels_tags',
+  'ingredients_text',
+  'additives_tags',
+  'ingredients',
+  'allergens_tags',
+  'traces_tags',
+];
+assert(Array.isArray(g.DIET_WARNING_FIELD_KEYS), 'DIET_WARNING_FIELD_KEYS must be exported');
+assert(g.DIET_WARNING_FIELD_KEYS.join(',') === DETECTOR_KEYS.join(','),
+  'snapshot keys must be exactly the detector fields, got ' + g.DIET_WARNING_FIELD_KEYS);
+
+// Raw OFF-shaped fixture: every detector field plus extras the detector ignores.
+const rawOff = {
+  code: '0123456789012',
+  product_name: 'Fixture Yogurt',
+  brands: 'Test Brand',
+  source: 'off',
+  nutritionSource: 'off',
+  nutriments: { sodium_100g: 0.1, sugars_100g: 8 },
+  serving_quantity: 150,
+  labels_tags: ['en:organic'],
+  ingredients_text: 'Whole milk, sugar, wheat flour, soy lecithin, palm oil, sodium sulfite, bacon',
+  additives_tags: ['en:e322'],
+  ingredients: [
+    { id: 'en:whole-milk', text: 'Whole milk' },
+    { id: 'en:sugar', text: 'sugar' },
+    {
+      id: 'en:flavouring',
+      text: 'flavouring',
+      ingredients: [{ id: 'en:e120', text: 'Carmine' }],
+    },
+  ],
+  allergens_tags: ['en:milk', 'en:soybeans'],
+  traces_tags: ['en:gluten'],
+  categories_tags: ['en:yogurts'],
+  image_url: 'https://example.test/front.jpg',
+};
+
+const snapshot = g.snapshotDietWarningFields(rawOff);
+assert(snapshot && typeof snapshot === 'object', 'snapshot must be an object');
+const snapKeys = Object.keys(snapshot).sort();
+assert(snapKeys.join(',') === DETECTOR_KEYS.slice().sort().join(','),
+  'snapshot must contain only detector keys, got ' + snapKeys.join(','));
+assert(!('source' in snapshot) && !('nutriments' in snapshot) && !('product_name' in snapshot),
+  'snapshot must not store non-detector fields');
+
+// Stored-and-reloaded: JSON round-trip matches Firestore's JSON-compatible types.
+const reloaded = JSON.parse(JSON.stringify(snapshot));
+assert(JSON.stringify(reloaded) === JSON.stringify(snapshot),
+  'JSON-reloaded snapshot must match the stored snapshot');
+
+const profiles = [
+  'vegan',
+  'vegetarian',
+  'gluten-free',
+  'lactose-free',
+  'soy-free',
+  'pork-free',
+  'palm-oil-free',
+  'sulfite-free',
+  'vegan,gluten-free,soy-free',
+];
+for (const profile of profiles) {
+  const fromRaw = g.detectDietWarnings(rawOff, profile);
+  const fromSnap = g.detectDietWarnings(reloaded, profile);
+  assert(fromRaw === fromSnap,
+    'warnings must match for ' + profile + ' raw=' + JSON.stringify(fromRaw) +
+    ' snap=' + JSON.stringify(fromSnap));
+}
+
+// USDA-merged object can replace ingredients_text — detector must not use it.
+const mergedLike = Object.assign({}, rawOff, {
+  ingredients_text: 'Water, organic cane sugar',
+  allergens_tags: [],
+  source: 'usda',
+});
+const lfRaw = g.detectDietWarnings(rawOff, 'lactose-free');
+const lfMerged = g.detectDietWarnings(mergedLike, 'lactose-free');
+assert(lfRaw !== lfMerged,
+  'fixture must demonstrate merged ingredients_text is not detector-equivalent');
+assert(g.detectDietWarnings(reloaded, 'lactose-free') === lfRaw,
+  'snapshot must follow the raw OFF ingredients_text, not a USDA merge');
+
+// Null / missing OFF product → no snapshot (miss path behaves as empty refetch).
+assert(g.snapshotDietWarningFields(null) === null, 'null OFF → no snapshot');
+assert(g.snapshotDietWarningFields(undefined) === null, 'undefined OFF → no snapshot');
+
+// Wiring: miss uses live raw OFF; hit uses snapshot; refetch only when neither.
+const scanStart = src.indexOf("app.get('/scan/:barcode'");
+const scanEnd = src.indexOf("const PHOTO_LABEL_PROMPT");
+assert(scanStart >= 0 && scanEnd > scanStart, 'locate /scan handler');
+const scanBody = src.slice(scanStart, scanEnd);
+assert(scanBody.includes('takeDietOffProduct'), '/scan must prefer live main-lookup OFF');
+assert(scanBody.includes('takeDietSnapshot'), '/scan must prefer cache snapshot on hit');
+assert(scanBody.includes('liveOff.present'), 'completed lookup with no OFF must not refetch');
+assert(scanBody.includes('detectDietWarnings(liveOff.product'),
+  'miss path must pass the raw OFF product, not the USDA-merged scan product');
+assert(scanBody.includes('detectDietWarnings(snapshot'),
+  'hit path must build detector input from the snapshot');
+const fallbackAt = scanBody.indexOf('world.openfoodfacts.org/api/v2/product/');
+const liveAt = scanBody.indexOf('takeDietOffProduct');
+const snapAt = scanBody.indexOf('takeDietSnapshot');
+assert(fallbackAt > snapAt && snapAt > liveAt,
+  'legacy diet refetch must be the last fallback after live OFF and snapshot');
+
+const scanFnStart = src.indexOf('async function scanAndCache(barcode');
+const scanFnEnd = src.indexOf("app.get('/health'");
+const scanFn = src.slice(scanFnStart, scanFnEnd);
+assert(scanFn.includes('missOffProduct'), 'scanAndCache must keep the main-lookup raw OFF product');
+assert(scanFn.includes('attachDietOffProduct'), 'miss path must stash live OFF on the response');
+assert(scanFn.includes('attachDietWarningFields'), 'cache writes must store the detector snapshot');
+assert(scanFn.includes('resolved.offProduct'), 'must use resolveProductType offProduct, not the merged product');
+
+assert(src.includes('function fetchProductFromFacts'), 'main lookup uses fetchProductFromFacts');
+assert(/return data\.product;/.test(src.slice(
+  src.indexOf('async function fetchProductFromFacts'),
+  src.indexOf('async function fetchProductFromFacts') + 800
+)), 'fetchProductFromFacts must return data.product with no field projection');
+
+const coerceStart = src.indexOf('function cachePayloadWithoutFoodCoercion');
+const coerceBody = src.slice(coerceStart, coerceStart + 700);
+assert(coerceBody.includes('dietWarningFields'),
+  'cachePayloadWithoutFoodCoercion must strip dietWarningFields from HTTP');
+assert(coerceBody.includes('dietSnapshotByResponse.set'),
+  'stripped snapshot must be stashed for the hit-path detector');
+
+console.log('diet warning snapshot equivalence ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"diet warning snapshot assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -7401,6 +7578,7 @@ def main() -> int:
         test_scan_contributed_image_url,
         test_vision_json_parse_log,
         test_alternatives_off_critical_path,
+        test_diet_warning_snapshot_equivalence,
     ]
     failed = 0
     for test in tests:
