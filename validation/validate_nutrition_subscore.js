@@ -11,6 +11,7 @@ if (scoreStart < 0 || scoreEnd < 0) throw new Error('could not locate nutrition 
 
 const block = `
 const FOOD_PROTEIN_NUTRIMENT_KEYS = ['proteins_100g', 'proteins'];
+function applyNutrientPlausibilityBounds(nutriments) { return nutriments; }
 ${src.slice(scoreStart, scoreEnd)}
 module.exports = { computeNutritionSubscore, classifyPurlaFoodPath };
 `;

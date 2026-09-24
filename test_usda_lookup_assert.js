@@ -121,6 +121,8 @@ const path = require('path');
 const __cosmeticDir = process.cwd();
 function recordRawObservation() {}
 async function getCategoryAlternatives() { return []; }
+const pendingAlternativesByResponse = new WeakMap();
+const dietSnapshotByResponse = new WeakMap();
 async function generateFoodExplanation() { return 'ok'; }
 function foodExplanationScoringContext() { return {}; }
 const additiveMap = {};

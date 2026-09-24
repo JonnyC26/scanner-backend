@@ -3067,6 +3067,7 @@ const path = require('path');
 const __cosmeticDir = process.cwd();
 function recordRawObservation() {}
 async function getCategoryAlternatives() { return []; }
+const pendingAlternativesByResponse = new WeakMap();
 async function generateFoodExplanation() {
   throw new Error('Haiku must not be called');
 }
@@ -4168,6 +4169,7 @@ const path = require('path');
 const __cosmeticDir = process.cwd();
 function recordRawObservation() {}
 async function getCategoryAlternatives() { return []; }
+const pendingAlternativesByResponse = new WeakMap();
 const capturedPrompts = [];
 async function requestFoodExplanation(prompt) {
   capturedPrompts.push(prompt);
@@ -4399,9 +4401,9 @@ function loggedNutritionUnavailable(barcode) {
 
 // 6. /search path uses the same helper → same tiers and servingKnown
 {
-  assert(src.includes('resolveFoodServingNutrition(p.nutriments, p.serving_quantity)'),
+  assert(src.includes('resolveFoodServingNutrition(p.nutriments, p.serving_quantity'),
     'search path must call resolveFoodServingNutrition');
-  assert(src.includes('resolveFoodServingNutrition(product.nutriments, product.serving_quantity)'),
+  assert(src.includes('resolveFoodServingNutrition(product.nutriments, product.serving_quantity'),
     'scan path must call resolveFoodServingNutrition');
   const scanN = g.resolveFoodServingNutrition({
     proteins_100g: 10, sugars_100g: 25, sodium_100g: 0.7,
@@ -5455,6 +5457,7 @@ const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
 const SCAN_LOGIC_VERSION = '18';
+function applyNutrientPlausibilityBounds(nutriments) { return nutriments; }
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
 ${src.slice(fragStart, fragEnd)}
 ${src.slice(helperStart, helperEnd)}
@@ -5775,6 +5778,7 @@ const path = require('path');
 const __cosmeticDir = process.cwd();
 function recordRawObservation() {}
 async function getCategoryAlternatives() { return []; }
+const pendingAlternativesByResponse = new WeakMap();
 async function generateFoodExplanation() { return ${JSON.stringify(REGENERATED)}; }
 function foodExplanationScoringContext() { return {}; }
 const additiveMap = {};
@@ -5991,8 +5995,18 @@ function isCacheFresh(cached, nowMs) {
     scanLogicVersion: '23',
     cachedAt: now - 1000,
   };
-  assert(isCacheFresh(v23fresh, now) === true, 'fresh v23 record is a cache hit');
-  assert(isCacheFresh(v22fresh, now) === false, 'fresh v22 record is stale after the v23 bump');
+  const v24fresh = {
+    productType: 'food',
+    productName: 'Cadbury Dairy Milk',
+    score: 35,
+    sugar: '25.2g',
+    explanation: REGENERATED,
+    scanLogicVersion: g.SCAN_LOGIC_VERSION,
+    cachedAt: now - 1000,
+  };
+  assert(isCacheFresh(v24fresh, now) === true, 'fresh v24 record is a cache hit');
+  assert(isCacheFresh(v23fresh, now) === false, 'fresh v23 record is stale after the v24 bump');
+  assert(isCacheFresh(v22fresh, now) === false, 'fresh v22 record is stale after the v24 bump');
   assert(isCacheFresh(v21fresh, now) === false, 'fresh v21 record is stale after the v23 bump');
   assert(isCacheFresh(v20fresh, now) === false, 'fresh v20 record is stale after the v23 bump');
   assert(isCacheFresh(v19fresh, now) === false, 'fresh v19 record is stale after the v23 bump');
@@ -6001,9 +6015,12 @@ function isCacheFresh(cached, nowMs) {
   assert(isCacheFresh(v16fresh, now) === false, 'fresh v16 record is stale after the v23 bump');
   assert(isCacheFresh(v15fresh, now) === false, 'fresh v15 record is stale after the v23 bump');
   assert(isCacheFresh(v14fresh, now) === false, 'fresh v14 record is stale after the v23 bump');
+  const v24Fb = g.staleCacheFallbackPayload({ ...v24fresh, cachedAt: 1 });
+  assert(v24Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
+  assert(v24Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
   const v23Fb = g.staleCacheFallbackPayload({ ...v23fresh, cachedAt: 1 });
-  assert(v23Fb.explanation === REGENERATED, 'same-version stale fallback serves its explanation');
-  assert(v23Fb.explanationPending !== true, 'same-version fallback must not mark explanation pending');
+  assert(v23Fb.explanationPending === true || !v23Fb.explanation,
+    'version-mismatched stale fallback must not serve a v23 explanation');
 
   console.log('scan logic v11 stale explanation ok');
 })().catch((err) => {
@@ -6203,7 +6220,7 @@ const v10Doc = {
 
     productCache.set('7622210100586', {
       ...v10Doc,
-      scanLogicVersion: '23',
+      scanLogicVersion: logicMatch[1],
       explanation: REGENERATED,
     });
     anthropicCalls = 0;
@@ -6964,7 +6981,7 @@ function seedFood(barcode, imageUrl) {
     score: 70,
     scoreLabel: 'Good',
     cachedAt: Date.now(),
-    scanLogicVersion: '23',
+    scanLogicVersion: '24',
     source: 'usda',
   });
 }
