@@ -7288,6 +7288,78 @@ function request(body) {
     print(proc.stdout.strip())
 
 
+def test_alternatives_off_critical_path():
+    """getCategoryAlternatives must not be awaited on the /scan response path."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const foodStart = src.indexOf('async function scanAndCacheFood');
+const foodEnd = src.indexOf('async function routeResolvedScan');
+assert(foodStart >= 0 && foodEnd > foodStart, 'locate scanAndCacheFood');
+const foodBody = src.slice(foodStart, foodEnd);
+assert(!foodBody.includes('await getCategoryAlternatives'),
+  'scanAndCacheFood must not await getCategoryAlternatives');
+assert(foodBody.includes('const alternatives = []'),
+  'miss path must return empty alternatives');
+assert(foodBody.includes('pendingAlternativesByResponse.set'),
+  'must stash pending alternatives on the response object');
+
+const scanStart = src.indexOf("app.get('/scan/:barcode'");
+const scanEnd = src.indexOf("const PHOTO_LABEL_PROMPT");
+assert(scanStart >= 0 && scanEnd > scanStart, 'locate /scan handler');
+const scanBody = src.slice(scanStart, scanEnd);
+const jsonAt = scanBody.indexOf('res.json(');
+const schedAt = scanBody.indexOf('scheduleCategoryAlternativesFill');
+assert(jsonAt >= 0, '/scan must res.json');
+assert(schedAt > jsonAt, 'alternatives fill must be scheduled after res.json');
+assert(!/await\s+scheduleCategoryAlternativesFill/.test(scanBody),
+  'must not await scheduleCategoryAlternativesFill');
+assert(!/await\s+fillCategoryAlternativesInBackground/.test(scanBody),
+  'must not await fillCategoryAlternativesInBackground');
+assert(!/await\s+takePendingAlternatives/.test(scanBody),
+  'takePendingAlternatives is sync');
+
+const fillStart = src.indexOf('async function fillCategoryAlternativesInBackground');
+const fillEnd = src.indexOf('// Token-aware diet term matching');
+assert(fillStart >= 0 && fillEnd > fillStart, 'locate fillCategoryAlternativesInBackground');
+const fillBody = src.slice(fillStart, fillEnd);
+assert(fillBody.includes('if (!doc.exists)'), 'must not recreate a deleted cache doc');
+assert(fillBody.includes('scanLogicVersion !== scanLogicVersion') ||
+  fillBody.includes('cached.scanLogicVersion !== scanLogicVersion'),
+  'must require matching scanLogicVersion');
+assert(fillBody.includes("docRef.set({ alternatives: JSON.stringify(alternatives) }, { merge: true })"),
+  'must update only the alternatives field with merge');
+assert(fillBody.includes('[ALTERNATIVES TIMEOUT]') || fillBody.includes('TIMEOUT'),
+  'must log alternatives timeouts');
+
+assert(src.includes('AbortSignal.timeout(ALT_LOOKUP_TIMEOUT_MS)'),
+  'alternatives OFF search must have a finite timeout');
+assert(src.includes('const ALT_LOOKUP_TIMEOUT_MS = 3000'),
+  'alternatives timeout must be finite and explicit');
+
+console.log('alternatives off critical path ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"alternatives off-critical-path assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -7328,6 +7400,7 @@ def main() -> int:
         test_nutrition_subscore_validation,
         test_scan_contributed_image_url,
         test_vision_json_parse_log,
+        test_alternatives_off_critical_path,
     ]
     failed = 0
     for test in tests:

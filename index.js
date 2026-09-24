@@ -1602,6 +1602,7 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
 
 const USDA_LOOKUP_TIMEOUT_MS = 4000; // abort USDA search; must not wait on OFF
 const OFF_LOOKUP_TIMEOUT_MS = 3000;  // abort the parallel food OFF barcode fetch only
+const ALT_LOOKUP_TIMEOUT_MS = 3000;  // background category-alternatives search
 
 async function fetchProductFromFacts(baseUrl, barcode, timeoutMs) {
   const opts = {
@@ -3047,7 +3048,10 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
 
   const searchRes = await fetch(
     `https://world.openfoodfacts.org/api/v2/search?categories_tags=${encodeURIComponent(specificTag)}&countries_tags_en=United States&page_size=40&fields=code,product_name,nutriscore_grade,nova_group,additives_tags,ingredients,labels_tags,nutriments,image_front_url,image_url,categories_tags`,
-    { headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' } }
+    {
+      headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
+      signal: AbortSignal.timeout(ALT_LOOKUP_TIMEOUT_MS),
+    }
   );
   if (!searchRes.ok) {
     console.log(`[ALT DEBUG] barcode=${currentBarcode} search request failed, status=${searchRes.status}`);
@@ -3117,6 +3121,58 @@ async function getCategoryAlternatives(currentBarcode, categoriesTags, currentSc
   console.log(`[ALT DEBUG] qualified=${scored.length} top5raw=${JSON.stringify(candidates.slice(0,5).map(p => p.product_name))}`);
 
   return scored.slice(0, 2);
+}
+
+// WeakMap so pending alternatives work never serialises into the HTTP body
+// or a productCache write (object spread / JSON.stringify skip symbols/weak keys).
+const pendingAlternativesByResponse = new WeakMap();
+
+function takePendingAlternatives(responseData) {
+  if (!responseData || typeof responseData !== 'object') return null;
+  const pending = pendingAlternativesByResponse.get(responseData) || null;
+  pendingAlternativesByResponse.delete(responseData);
+  return pending;
+}
+
+function scheduleCategoryAlternativesFill(pending) {
+  if (!pending || !pending.barcode) return;
+  fillCategoryAlternativesInBackground(pending).catch((err) => {
+    console.log(`[ALTERNATIVES BACKGROUND ERROR] barcode=${pending.barcode} ${err.message}`);
+  });
+}
+
+// Background only — never awaited on the /scan response path. Updates the
+// existing cache doc's alternatives field; never creates a missing doc.
+async function fillCategoryAlternativesInBackground({ barcode, categoriesTags, score, scanLogicVersion }) {
+  let alternatives;
+  try {
+    alternatives = await getCategoryAlternatives(barcode, categoriesTags, score);
+  } catch (err) {
+    const timedOut = !!(err && (err.name === 'TimeoutError' || err.name === 'AbortError'));
+    console.log(
+      `[ALTERNATIVES ${timedOut ? 'TIMEOUT' : 'ERROR'}] barcode=${barcode} ${err && err.message ? err.message : err}`
+    );
+    return;
+  }
+
+  try {
+    const docRef = db.collection(CACHE_COLLECTION).doc(String(barcode));
+    const doc = await docRef.get();
+    if (!doc.exists) {
+      console.log(`[ALTERNATIVES SKIP] barcode=${barcode} reason=missing_doc`);
+      return;
+    }
+    const cached = doc.data() || {};
+    if (cached.scanLogicVersion !== scanLogicVersion) {
+      console.log(
+        `[ALTERNATIVES SKIP] barcode=${barcode} reason=version_mismatch cached=${cached.scanLogicVersion} computed=${scanLogicVersion}`
+      );
+      return;
+    }
+    await docRef.set({ alternatives: JSON.stringify(alternatives) }, { merge: true });
+  } catch (err) {
+    console.log(`[ALTERNATIVES CACHE ERROR] barcode=${barcode} ${err.message}`);
+  }
 }
 
 // Token-aware diet term matching — avoids substring false positives such as
@@ -4105,14 +4161,9 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   const score = calculateScore(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList, barcode, product.nutriments, product.foodCategory);
   const scoreBreakdown = getScoreBreakdown(nutriScore, novaGroup, additivesCount, isOrganicForScore, protein, sugar, sodium, additiveList, product.nutriments, product.foodCategory);
 
-  let alternatives = [];
-  if (score != null && score < 50) {
-    try {
-      alternatives = await getCategoryAlternatives(barcode, product.categories_tags, score);
-    } catch (altErr) {
-      console.log(`[ALTERNATIVES ERROR] barcode=${barcode} ${altErr.message}`);
-    }
-  }
+  // Alternatives are computed after the /scan response. Misses always return
+  // today's empty array so getCategoryAlternatives is never awaited here.
+  const alternatives = [];
 
   console.log(`[SCORE DEBUG] barcode=${barcode} nutriScore=${nutriScore} nutritionPath=${scoreBreakdown.nutritionPath} nutritionAvailable=${scoreBreakdown.nutritionAvailable} nutriPts=${scoreBreakdown.nutriPts} novaGroup=${novaGroup} additivesCount=${additivesCount} isOrganic=${organicStatus} protein100g=${protein} sugar100g=${sugar} sodium100g=${sodium} => score=${score}`);
 
@@ -4208,6 +4259,14 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
   };
   if (skipExplanation && !noIngredientData && score != null) {
     responseData.explanationPending = true;
+  }
+  if (score != null && score < 50) {
+    pendingAlternativesByResponse.set(responseData, {
+      barcode,
+      categoriesTags: product.categories_tags,
+      score,
+      scanLogicVersion: SCAN_LOGIC_VERSION,
+    });
   }
   return responseData;
 }
@@ -4707,6 +4766,13 @@ app.get('/scan/:barcode', async (req, res) => {
     }
 
     res.json({ ...responseData, dietWarnings });
+
+    // After the score is already on the wire, fill alternatives in the
+    // background. Never await this promise on the response path.
+    const pendingAlternatives = takePendingAlternatives(responseData);
+    if (pendingAlternatives) {
+      scheduleCategoryAlternativesFill(pendingAlternatives);
+    }
 
     // After the score is already on the wire, fill the Haiku explanation in
     // the background and merge it into the cache. Failures must not matter.
