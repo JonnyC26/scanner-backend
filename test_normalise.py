@@ -7807,6 +7807,66 @@ console.log('nutrient plausibility and logic v24 ok');
     print(proc.stdout.strip())
 
 
+def test_scan_timing_log():
+    """One [SCAN TIMING] line per /scan; no added awaits or reordering."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const scanStart = src.indexOf("app.get('/scan/:barcode'");
+const scanEnd = src.indexOf("const PHOTO_LABEL_PROMPT");
+assert(scanStart >= 0 && scanEnd > scanStart, 'locate /scan handler');
+const scanBody = src.slice(scanStart, scanEnd);
+
+assert((scanBody.match(/logScanTiming\(/g) || []).length >= 1, 'must log SCAN TIMING');
+assert(scanBody.includes('logScanTiming(barcode, timing, Date.now() - scanStarted)'),
+  'totalMs is handler start to log, excluding work after res.json');
+
+const logAt = scanBody.indexOf('logScanTiming(barcode, timing, Date.now() - scanStarted)');
+const jsonAt = scanBody.indexOf('res.json(');
+assert(logAt >= 0 && jsonAt > logAt, 'timing log must be before res.json so background work is excluded');
+assert(scanBody.indexOf('scheduleCategoryAlternativesFill') > jsonAt,
+  'alternatives stay after res.json');
+assert(scanBody.indexOf('ensureExplanation(barcode, responseData).catch') > jsonAt,
+  'deferred explanation stays after res.json');
+
+assert(!/await\s+logScanTiming/.test(scanBody), 'logScanTiming must not be awaited');
+assert(!/await\s+noteScanTiming/.test(src), 'noteScanTiming is sync');
+assert(!/await\s+recordLookupTiming/.test(src), 'recordLookupTiming is sync');
+
+const logFn = src.slice(src.indexOf('function logScanTiming'), src.indexOf('async function scanAndCache(barcode'));
+assert(logFn.includes('[SCAN TIMING]'), 'log prefix');
+assert(logFn.includes('outcome='), 'hit/miss/stale');
+assert(logFn.includes('totalMs='), 'total ms');
+assert(logFn.includes('usdaMs='), 'parallel USDA');
+assert(logFn.includes('offMs='), 'parallel OFF');
+assert(logFn.includes('lookupParallel=1'), 'must not imply USDA+OFF add');
+
+assert(src.includes("setScanTimingOutcome(timing, 'hit')"), 'hit outcome');
+assert(src.includes("setScanTimingOutcome(timing, 'stale')"), 'stale outcome');
+assert(src.includes("setScanTimingOutcome(timing, 'miss')"), 'miss outcome');
+assert(src.includes('timing = null'), 'other scanAndCache callers stay uninstrumented');
+
+console.log('scan timing log ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(f"scan timing assertions failed (exit {proc.returncode})")
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -7851,6 +7911,7 @@ def main() -> int:
         test_diet_warning_snapshot_equivalence,
         test_scan_external_timeouts,
         test_nutrient_plausibility_and_logic_v24,
+        test_scan_timing_log,
     ]
     failed = 0
     for test in tests:

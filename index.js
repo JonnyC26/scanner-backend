@@ -2244,8 +2244,15 @@ async function resolveProductType(barcode) {
   const offOut = lookupOutcome(offSettled, Date.now() - offStarted);
   const usdaProduct = usdaOut.product;
   const offFetched = offOut.product;
+  let obfMs = null;
   function typed(result) {
     result.offProduct = offFetched || null;
+    result.lookupTiming = {
+      wallMs: totalMs,
+      usdaMs: usdaOut.ms,
+      offMs: offOut.ms,
+    };
+    if (obfMs != null) result.lookupTiming.obfMs = obfMs;
     return result;
   }
 
@@ -2277,6 +2284,7 @@ async function resolveProductType(barcode) {
   }
 
   if (!foodProduct) {
+    const obfStarted = Date.now();
     try {
       cosmeticProduct = attachProductSource(
         await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode, OBF_LOOKUP_TIMEOUT_MS),
@@ -2285,6 +2293,7 @@ async function resolveProductType(barcode) {
     } catch (err) {
       console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
     }
+    obfMs = Date.now() - obfStarted;
     if (cosmeticProduct) {
       console.log(`[PRODUCT TYPE] barcode=${barcode} type=cosmetic reason=obf_only`);
       return typed({ productType: 'cosmetic', product: cosmeticProduct, reason: 'obf_only' });
@@ -2304,6 +2313,7 @@ async function resolveProductType(barcode) {
   // Category says beauty/hygiene. OBF may enrich a cosmetic already classified
   // by category; ingredient completeness must not override type.
   if (offCosmeticCategory) {
+    const obfStarted = Date.now();
     try {
       cosmeticProduct = attachProductSource(
         await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode, OBF_LOOKUP_TIMEOUT_MS),
@@ -2312,6 +2322,7 @@ async function resolveProductType(barcode) {
     } catch (err) {
       console.log(`[OBF FETCH ERROR] barcode=${barcode} ${err.message}`);
     }
+    obfMs = Date.now() - obfStarted;
     if (cosmeticProduct && productHasIngredients(cosmeticProduct)) {
       const reason = !offHasNutriments
         ? 'category_no_nutriments_obf_ingredients'
@@ -4581,12 +4592,51 @@ function staleCacheFallbackPayload(staleCached) {
   return responseData;
 }
 
-async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation = false } = {}) {
+function noteScanTiming(timing, key, startedAt) {
+  if (!timing || startedAt == null) return;
+  if (!timing.stages) timing.stages = {};
+  timing.stages[key] = Date.now() - startedAt;
+}
+
+function setScanTimingOutcome(timing, outcome) {
+  if (timing) timing.outcome = outcome;
+}
+
+function recordLookupTiming(timing, lookupTiming) {
+  if (!timing || !lookupTiming) return;
+  timing.usdaMs = lookupTiming.usdaMs;
+  timing.offMs = lookupTiming.offMs;
+  if (lookupTiming.obfMs != null) timing.obfMs = lookupTiming.obfMs;
+  if (lookupTiming.wallMs != null) {
+    if (!timing.stages) timing.stages = {};
+    timing.stages.lookup = lookupTiming.wallMs;
+  }
+}
+
+function logScanTiming(barcode, timing, totalMs) {
+  const s = (timing && timing.stages) || {};
+  const outcome = (timing && timing.outcome) || 'unknown';
+  const parts = [`[SCAN TIMING] barcode=${barcode}`, `outcome=${outcome}`, `totalMs=${totalMs}`];
+  for (const key of ['auth', 'cacheRead', 'lookup', 'score', 'explain', 'cacheWrite', 'image', 'diet']) {
+    if (s[key] != null) parts.push(`${key}Ms=${s[key]}`);
+  }
+  if (timing && timing.usdaMs != null && timing.offMs != null) {
+    parts.push(`usdaMs=${timing.usdaMs}`);
+    parts.push(`offMs=${timing.offMs}`);
+    parts.push('lookupParallel=1');
+  }
+  if (timing && timing.obfMs != null) parts.push(`obfMs=${timing.obfMs}`);
+  console.log(parts.join(' '));
+}
+
+async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation = false, timing = null } = {}) {
   let staleCached = null;
 
   if (!skipCacheCheck) {
     try {
+      const cacheReadStarted = Date.now();
       const cacheDoc = await getDocWithBarcodeMigration(CACHE_COLLECTION, barcode);
+      noteScanTiming(timing, 'cacheRead', cacheReadStarted);
       if (cacheDoc.exists) {
         const cached = cacheDoc.data();
         const age = Date.now() - (cached.cachedAt || 0);
@@ -4599,6 +4649,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
           cached.tableVersion !== COSMETIC_TABLE_VERSION;
         if (age < CACHE_TTL_MS && !tableStale && !logicStale) {
           console.log(`[CACHE HIT] barcode=${barcode} type=${cachedType} age=${Math.round(age / 3600000)}h`);
+          setScanTimingOutcome(timing, 'hit');
           const responseData = cachePayloadWithoutFoodCoercion(cached);
 
           // Old TestFlight clients always need an explanation. If a deferred
@@ -4611,7 +4662,9 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
             !hasUsableExplanation(responseData)
           ) {
             try {
+              const explainStarted = Date.now();
               const explanation = await ensureExplanation(barcode, responseData);
+              noteScanTiming(timing, 'explain', explainStarted);
               responseData.explanation = explanation;
               responseData.explanationPending = false;
             } catch (fillErr) {
@@ -4623,6 +4676,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
 
         // Keep the stale doc for photo local re-score and stale-beats-nothing.
         staleCached = cached;
+        setScanTimingOutcome(timing, 'stale');
         if (logicStale) {
           console.log(`[CACHE STALE LOGIC] barcode=${barcode} cached=${cached.scanLogicVersion} current=${SCAN_LOGIC_VERSION} — re-scanning`);
         } else if (tableStale) {
@@ -4640,6 +4694,7 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
             attemptedUpstreamRecheck = true;
             try {
               const resolved = await resolveProductType(barcode);
+              recordLookupTiming(timing, resolved.lookupTiming);
               if (shouldReplacePhotoWithUpstream(resolved.product)) {
                 const upstreamData = await routeResolvedScan(
                   barcode,
@@ -4757,10 +4812,13 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
     }
   }
 
+  if (timing && !timing.outcome) setScanTimingOutcome(timing, 'miss');
+
   let responseData;
   let missOffProduct = null;
   try {
     const resolved = await resolveProductType(barcode);
+    recordLookupTiming(timing, resolved.lookupTiming);
     const { productType, product, reason: classificationReason } = resolved;
     missOffProduct = resolved.offProduct || null;
     if (!product) {
@@ -4769,10 +4827,12 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
       throw notFoundErr;
     }
 
+    const scoreStarted = Date.now();
     responseData = await routeResolvedScan(barcode, productType, product, {
       skipExplanation,
       reason: classificationReason,
     });
+    noteScanTiming(timing, 'score', scoreStarted);
     attachDietOffProduct(responseData, missOffProduct);
   } catch (refreshErr) {
     // Stale beats nothing: a slightly old answer is better than a false 404
@@ -4818,7 +4878,9 @@ async function scanAndCache(barcode, { skipCacheCheck = false, skipExplanation =
         barcode
       );
     }
+    const cacheWriteStarted = Date.now();
     await db.collection(CACHE_COLLECTION).doc(barcode).set(cachePayload);
+    noteScanTiming(timing, 'cacheWrite', cacheWriteStarted);
   } catch (cacheWriteErr) {
     console.log(`[CACHE WRITE ERROR] barcode=${barcode} ${cacheWriteErr.message}`);
   }
@@ -4852,10 +4914,13 @@ app.get('/health', async (req, res) => {
 });
 
 app.get('/scan/:barcode', async (req, res) => {
+  const scanStarted = Date.now();
+  const timing = { stages: {} };
+  let barcode = null;
   try {
     if (!enforceIpRateLimit(req, res, '/scan', RATE_LIMIT_SCAN_SEARCH_PER_IP)) return;
 
-    const barcode = normalizeBarcode(req.params.barcode);
+    barcode = normalizeBarcode(req.params.barcode);
     if (!barcode) {
       return res.status(400).json({ error: 'Invalid barcode' });
     }
@@ -4864,6 +4929,7 @@ app.get('/scan/:barcode', async (req, res) => {
     // Try to get the user's health profile from their Firestore document.
     // Best-effort — a missing/invalid token just means no diet warnings, never a blocked scan.
     let healthProfile = '';
+    const authStarted = Date.now();
     try {
       const authHeader = req.headers['authorization'] || '';
       const token = authHeader.replace('Bearer ', '').trim();
@@ -4881,8 +4947,9 @@ app.get('/scan/:barcode', async (req, res) => {
     } catch (authErr) {
       console.log(`[DIET] auth/profile lookup failed: ${authErr.message}`);
     }
+    noteScanTiming(timing, 'auth', authStarted);
 
-    const responseData = await scanAndCache(barcode, { skipExplanation: deferExplanation });
+    const responseData = await scanAndCache(barcode, { skipExplanation: deferExplanation, timing });
 
     // Contributed fronts are stored in productImages and served at GET /image.
     // Cache hits return imageUrl from write time, which is '' for USDA-only
@@ -4890,6 +4957,7 @@ app.get('/scan/:barcode', async (req, res) => {
     // already present. If PUBLIC_BASE_URL is unset, leave imageUrl empty —
     // never build a host from request headers.
     if (responseData && !responseData.imageUrl) {
+      const imageStarted = Date.now();
       try {
         const imageDoc = await getDocWithBarcodeMigration(PRODUCT_IMAGES_COLLECTION, barcode);
         const imageBase = resolvePublicBaseUrl();
@@ -4906,6 +4974,7 @@ app.get('/scan/:barcode', async (req, res) => {
       } catch (imageLookupErr) {
         console.log(`[SCAN IMAGE URL] barcode=${barcode} ${imageLookupErr.message}`);
       }
+      noteScanTiming(timing, 'image', imageStarted);
     }
 
     // Diet warning detection — food only. Prefer the main lookup's raw OFF
@@ -4914,6 +4983,7 @@ app.get('/scan/:barcode', async (req, res) => {
     let dietWarnings = '';
     const responseType = responseData.productType;
     if (healthProfile && isExplicitFoodProductType(responseType)) {
+      const dietStarted = Date.now();
       const liveOff = takeDietOffProduct(responseData);
       const snapshot = takeDietSnapshot(responseData);
       if (liveOff.present) {
@@ -4940,7 +5010,10 @@ app.get('/scan/:barcode', async (req, res) => {
           // Empty string for this request only — do not persist as "no warning".
         }
       }
+      noteScanTiming(timing, 'diet', dietStarted);
     }
+
+    logScanTiming(barcode, timing, Date.now() - scanStarted);
 
     const { dietWarningFields: _omitDietFields, ...scanBody } = responseData || {};
     res.json({ ...scanBody, dietWarnings });
@@ -4960,6 +5033,7 @@ app.get('/scan/:barcode', async (req, res) => {
       });
     }
   } catch (err) {
+    if (barcode) logScanTiming(barcode, timing, Date.now() - scanStarted);
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
