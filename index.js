@@ -53,7 +53,7 @@ const CACHE_WRITE_RETRY_DELAY_MS = 300;
 const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 // Any change to classification, food scoring, or explanation copy requires a
 // SCAN_LOGIC_VERSION bump, or it will not reach previously scanned products.
-const SCAN_LOGIC_VERSION = '23';   // bump whenever classification or food scoring changes
+const SCAN_LOGIC_VERSION = '24';   // bump whenever classification or food scoring changes
 
 // ── Request guards (rate limits + vision bill backstop) ─────────────────────
 // In-memory only — fine for a single Railway instance. No npm dependency.
@@ -2354,7 +2354,7 @@ async function resolveProductType(barcode) {
 
 function calculateScore(nutriScore, novaGroup, additivesCount, isOrganic, protein, sugar, sodium, additiveList, barcode, nutriments, foodCategory) {
   // 60% Purla nutrition subscore from per-100g nutrients (not OFF Nutri-Score).
-  const nutrition = computeNutritionSubscore(nutriments, foodCategory);
+  const nutrition = computeNutritionSubscore(nutriments, foodCategory, barcode);
   if (!nutrition.available && barcode != null) {
     const reason = nutrition.reason || 'missing_unfavourable';
     const missing = ({
@@ -2521,9 +2521,11 @@ function applyDerivedNutrientZeros(nutriments) {
   return out;
 }
 
-function computeNutritionSubscore(nutriments, foodCategory) {
+function computeNutritionSubscore(nutriments, foodCategory, barcode) {
   const path = classifyPurlaFoodPath(foodCategory);
-  const derived = applyDerivedNutrientZeros(nutriments);
+  const working = Object.assign({}, nutriments && typeof nutriments === 'object' ? nutriments : {});
+  applyNutrientPlausibilityBounds(working, null, barcode);
+  const derived = applyDerivedNutrientZeros(working);
 
   const energyKcal = getNumericNutrimentValue(derived, ['energy-kcal_100g', 'energy-kcal']);
   const sugars = getNumericNutrimentValue(derived, FOOD_SUGAR_NUTRIMENT_KEYS);
@@ -2717,8 +2719,74 @@ function computeNutrientTiers(sugarVal, sodiumVal, proteinVal) {
   return { sugarTier, sodiumTier, proteinTier };
 }
 
+// Impossible nutrient amounts are treated as missing — never rescaled,
+// clamped, or unit-guessed. Bounds are per 100g: sodium ≤ 39g; sugars /
+// saturated fat / fat / carbohydrates / protein / fibre ≤ 100g; energy ≤
+// 900 kcal. Per-serving values are normalised to per-100g via the serving
+// quantity before the same bounds apply. A rejected 100g value also drops
+// the serving key so it cannot re-enter.
+function nutrientPlausibilityLimit(nutrient) {
+  if (nutrient === 'sodium') return 39;
+  if (nutrient === 'energy') return 900;
+  return 100;
+}
+
+const NUTRIENT_PLAUSIBILITY_GROUPS = [
+  { nutrient: 'sodium', per100g: ['sodium_100g', 'sodium'], serving: ['sodium_serving'] },
+  { nutrient: 'sugars', per100g: ['sugars_100g', 'sugars'], serving: ['sugars_serving'] },
+  { nutrient: 'saturated-fat', per100g: ['saturated-fat_100g', 'saturated-fat'], serving: ['saturated-fat_serving'] },
+  { nutrient: 'fat', per100g: ['fat_100g', 'fat'], serving: ['fat_serving'] },
+  { nutrient: 'carbohydrates', per100g: ['carbohydrates_100g', 'carbohydrates'], serving: ['carbohydrates_serving'] },
+  { nutrient: 'proteins', per100g: ['proteins_100g', 'proteins'], serving: ['proteins_serving'] },
+  { nutrient: 'fiber', per100g: ['fiber_100g', 'fiber'], serving: ['fiber_serving'] },
+  { nutrient: 'energy', per100g: ['energy-kcal_100g', 'energy-kcal'], serving: ['energy-kcal_serving'] },
+];
+
+function applyNutrientPlausibilityBounds(nutriments, servingQuantityRaw, barcode) {
+  if (!nutriments || typeof nutriments !== 'object') return nutriments;
+  const servingQuantity = parseServingQuantity(servingQuantityRaw);
+  for (const group of NUTRIENT_PLAUSIBILITY_GROUPS) {
+    const bound = nutrientPlausibilityLimit(group.nutrient);
+    let rejected100g = false;
+    for (const key of group.per100g) {
+      if (!Object.prototype.hasOwnProperty.call(nutriments, key)) continue;
+      const rawValue = nutriments[key];
+      if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) continue;
+      if (rawValue > bound) {
+        console.log(
+          `[NUTRIENT PLAUSIBILITY] barcode=${barcode || 'unknown'} nutrient=${group.nutrient} rawValue=${rawValue} basis=100g` +
+          (servingQuantity != null ? ` servingQuantity=${servingQuantity}` : '')
+        );
+        delete nutriments[key];
+        rejected100g = true;
+      }
+    }
+    if (rejected100g) {
+      for (const key of group.serving) {
+        delete nutriments[key];
+      }
+      continue;
+    }
+    if (servingQuantity == null) continue;
+    for (const key of group.serving) {
+      if (!Object.prototype.hasOwnProperty.call(nutriments, key)) continue;
+      const rawValue = nutriments[key];
+      if (typeof rawValue !== 'number' || !Number.isFinite(rawValue)) continue;
+      const per100 = (rawValue / servingQuantity) * 100;
+      if (per100 > bound) {
+        console.log(
+          `[NUTRIENT PLAUSIBILITY] barcode=${barcode || 'unknown'} nutrient=${group.nutrient} rawValue=${rawValue} basis=serving servingQuantity=${servingQuantity}`
+        );
+        delete nutriments[key];
+      }
+    }
+  }
+  return nutriments;
+}
+
 // Shared by /scan and /search so tiers and servingKnown stay aligned.
-function resolveFoodServingNutrition(nutriments, servingQuantityRaw) {
+function resolveFoodServingNutrition(nutriments, servingQuantityRaw, barcode) {
+  applyNutrientPlausibilityBounds(nutriments, servingQuantityRaw, barcode);
   const servingQuantity = parseServingQuantity(servingQuantityRaw);
   // Trusted quantity only. Explicit *_serving without a trusted quantity
   // is not enough — same fallback as a missing serving size.
@@ -4213,7 +4281,7 @@ async function scanAndCacheFood(barcode, product, { skipExplanation = false } = 
 
   const organicStatus = resolveOrganicStatus(product.labels_tags);
   const isOrganicForScore = organicStatus === 'yes';
-  const servingNutrition = resolveFoodServingNutrition(product.nutriments, product.serving_quantity);
+  const servingNutrition = resolveFoodServingNutrition(product.nutriments, product.serving_quantity, barcode);
   const {
     servingQuantity,
     servingKnown,
@@ -5882,7 +5950,7 @@ app.get('/search', async (req, res) => {
         const additivesCount = searchAdditiveCodes.length;
         const organicStatus = resolveOrganicStatus(p.labels_tags);
         const isOrganicForScore = organicStatus === 'yes';
-        const servingNutrition = resolveFoodServingNutrition(p.nutriments, p.serving_quantity);
+        const servingNutrition = resolveFoodServingNutrition(p.nutriments, p.serving_quantity, p.code);
         const {
           servingQuantity,
           servingKnown,

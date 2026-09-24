@@ -3019,7 +3019,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + SCAN_LOGIC_VERSION);
 assert(src.includes('explanationForUnscoredFood(cached)'),
   'generateExplanationFromCached must use explanationForUnscoredFood');
 assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'),
@@ -3102,7 +3102,7 @@ delete require.cache['/tmp/no_nutrition_helpers.js'];
 const g = require('/tmp/no_nutrition_helpers.js');
 
 (async () => {
-assert(g.SCAN_LOGIC_VERSION === '23', 'exported SCAN_LOGIC_VERSION must be 23');
+assert(g.SCAN_LOGIC_VERSION === '24', 'exported SCAN_LOGIC_VERSION must be 24');
 assert(/couldn't tell what kind of product/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
   'fixed explanation must say we could not tell product kind');
 assert(/no nutrition information and no product category/i.test(g.FOOD_NO_NUTRITION_EXPLANATION),
@@ -3159,7 +3159,7 @@ assert(g.productHasNutriments({
   assert(result.productType === 'food', 'normal food type');
   assert(typeof result.score === 'number' && result.score >= 0, 'normal food must score, got ' + result.score);
   assert(result.scoreLabel !== 'Not enough data', 'normal food must not be Not enough data');
-  assert(result.scanLogicVersion === '23', 'normal food stamps logic version 23');
+  assert(result.scanLogicVersion === '24', 'normal food stamps logic version 24');
   assert(result.calories100g === '80 Cal', 'yogurt calories100g, got ' + result.calories100g);
   assert(result.fiber100g === '0g', 'yogurt fiber 0 preserved, got ' + result.fiber100g);
   assert(result.saturatedFat100g === 'N/A', 'missing sat fat stays N/A, not derived, got ' + result.saturatedFat100g);
@@ -3266,7 +3266,7 @@ assert(g.nutritionReasonFromCachedBreakdown({
   assert(result.explanation === g.FOOD_NO_NUTRITION_EXPLANATION, 'Dawn fixed explanation');
   assert(result.productType === 'food', 'Dawn stays on food path (no categories)');
   assert(result.explanationPending !== true, 'must not defer Haiku for Dawn');
-  assert(result.scanLogicVersion === '23', 'Dawn stamps logic version 23');
+  assert(result.scanLogicVersion === '24', 'Dawn stamps logic version 24');
   // Suppress nutrition card: null/absent, not "N/A" strings that still render rows.
   assert(result.protein === null, 'Dawn protein must be null to hide nutrition card');
   assert(result.sugar === null, 'Dawn sugar must be null');
@@ -3338,7 +3338,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + logicMatch[1]);
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
 
 const mapStart = src.indexOf('const additiveMap =');
 const extractEnd = src.indexOf("// OFF's top-level category tags are too broad");
@@ -4046,7 +4046,7 @@ assert(isCacheFresh({
   scanLogicVersion: '0',
 }, now) === false, 'mismatched scanLogicVersion must be stale');
 
-assert(g.SCAN_LOGIC_VERSION === '23', 'SCAN_LOGIC_VERSION must be 23 after calories Cal suffix');
+assert(g.SCAN_LOGIC_VERSION === '24', 'SCAN_LOGIC_VERSION must be 24 after calories Cal suffix');
 assert(isCacheFresh({
   productType: 'food',
   cachedAt: now - 1000,
@@ -4114,7 +4114,7 @@ function assert(cond, msg) {
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
 const SCAN_LOGIC_VERSION = logicMatch[1];
-assert(SCAN_LOGIC_VERSION === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + SCAN_LOGIC_VERSION);
+assert(SCAN_LOGIC_VERSION === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + SCAN_LOGIC_VERSION);
 
 assert(src.includes('computeNutritionSubscore'), 'must compute a USDA nutrition subscore');
 assert(src.includes('[NUTRITION SUBSCORE UNAVAILABLE]'), 'must log unavailable nutrition subscore');
@@ -5386,7 +5386,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + logicMatch[1]);
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
 
 // --- Source: /scan/photo resolves type before scoring ---
 const photoStart = src.indexOf("app.post('/scan/photo'");
@@ -5729,7 +5729,7 @@ function assert(cond, msg) {
 
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + logicMatch[1]);
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
 
 const catchStart = src.indexOf('const fallback = staleCacheFallbackPayload(staleCached);');
 const catchEnd = src.indexOf('if (responseData.noIngredientData)');
@@ -5846,7 +5846,7 @@ function isCacheFresh(cached, nowMs) {
       fiber_100g: 2.1,
     },
   }, { skipExplanation: false });
-  assert(regenerated.scanLogicVersion === '23', 'rescan stamps v23');
+  assert(regenerated.scanLogicVersion === '24', 'rescan stamps v24');
   assert(regenerated.explanation === REGENERATED,
     'successful rescan after bump must serve the regenerated explanation');
   assert(!/we've packed/i.test(regenerated.explanation),
@@ -6041,7 +6041,7 @@ function assert(cond, msg) {
 const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
 if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
-assert(logicMatch[1] === '23', 'SCAN_LOGIC_VERSION must be 23, got ' + logicMatch[1]);
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
 
 const explainStart = src.indexOf("app.get('/explain/:barcode'");
 const explainEnd = src.indexOf("app.get('/search'");
@@ -6245,7 +6245,7 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
 }
 
-assert(/const SCAN_LOGIC_VERSION = '23'/.test(src), 'SCAN_LOGIC_VERSION must be 23 so cached v22 scans rebuild calories display');
+assert(/const SCAN_LOGIC_VERSION = '24'/.test(src), 'SCAN_LOGIC_VERSION must be 24 so cached v23 scans rebuild under plausibility bounds');
 assert(src.includes('max_tokens: 220'), 'food max_tokens must allow 3 sentences to finish');
 assert(src.includes('function trimFoodExplanation'), 'food path must trim to complete sentences');
 
@@ -7605,6 +7605,208 @@ console.log('scan external timeouts ok');
     print(proc.stdout.strip())
 
 
+def test_nutrient_plausibility_and_logic_v24():
+    """Impossible nutrients are missing; SCAN_LOGIC_VERSION 24 is lazy invalidation only."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+const logicMatch = src.match(/const SCAN_LOGIC_VERSION = '([^']+)'/);
+if (!logicMatch) throw new Error('SCAN_LOGIC_VERSION missing');
+assert(logicMatch[1] === '24', 'SCAN_LOGIC_VERSION must be 24, got ' + logicMatch[1]);
+
+const calcStart = src.indexOf('function calculateScore');
+const calcBody = src.slice(calcStart, src.indexOf('function getScoreBreakdown'));
+assert(calcBody.includes('nutrition.points + additivePts + organicPts'),
+  'scoring combination unchanged');
+assert(calcBody.includes('additivePts = 30') || calcBody.includes('let additivePts = 30'),
+  'additive max 30 unchanged');
+assert(calcBody.includes('const organicPts = isOrganic ? 10 : 0'),
+  'organic 10-point weight unchanged');
+assert(src.includes('energy: [335, 670, 1005, 1340, 1675, 2010, 2345, 2680, 3015, 3350]'),
+  'NS2023 energy thresholds unchanged');
+assert(src.includes('sugars: [3.4, 6.8, 10, 14, 17, 20, 24, 27, 31, 34, 37, 41, 44, 48, 51]'),
+  'NS2023 sugar thresholds unchanged');
+assert(src.includes('saturated_fat: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]'),
+  'NS2023 sat-fat thresholds unchanged');
+assert(src.includes('sugarVal >= 22.5 ? \'high\' : sugarVal >= 5 ? \'medium\' : \'low\''),
+  'sugar tier thresholds unchanged');
+assert(src.includes('sodiumVal >= 0.6 ? \'high\' : sodiumVal >= 0.12 ? \'medium\' : \'low\''),
+  'sodium tier thresholds unchanged');
+
+const cacheCheck = src.slice(src.indexOf('async function scanAndCache(barcode'), src.indexOf('async function scanAndCache(barcode') + 2500);
+assert(cacheCheck.includes('logicStale'), 'v24 bump uses existing stale-version path');
+assert(!src.includes('bulk') || !/forEach\([\s\S]{0,80}rescan/.test(src),
+  'no bulk rescan');
+
+const keysStart = src.indexOf('const NS2023_THRESHOLDS');
+const fmtEnd = src.indexOf('const additiveMap =');
+const promptStart = src.indexOf('function isKnownNutrientForPrompt');
+const promptEnd = src.indexOf('async function requestFoodExplanation');
+if (keysStart < 0 || fmtEnd < 0 || promptStart < 0 || promptEnd < 0) {
+  throw new Error('could not locate nutrition/prompt helpers');
+}
+
+const block = `
+${src.slice(keysStart, fmtEnd)}
+${src.slice(promptStart, promptEnd)}
+module.exports = {
+  applyNutrientPlausibilityBounds,
+  resolveFoodServingNutrition,
+  computeNutritionSubscore,
+  formatSodiumMg,
+  formatGrams,
+  formatCalories,
+  buildFoodExplanationPrompt,
+  isKnownNutrientForPrompt,
+  nutrientPlausibilityLimit,
+};
+`;
+fs.writeFileSync('/tmp/nutrient_plausibility_helpers.js', block);
+delete require.cache['/tmp/nutrient_plausibility_helpers.js'];
+const g = require('/tmp/nutrient_plausibility_helpers.js');
+
+assert(g.nutrientPlausibilityLimit('sodium') === 39, 'sodium bound');
+assert(g.nutrientPlausibilityLimit('energy') === 900, 'energy bound');
+assert(g.nutrientPlausibilityLimit('sugars') === 100, 'sugars bound');
+
+function inspect(nutriments, servingQuantity, barcode) {
+  const copy = JSON.parse(JSON.stringify(nutriments));
+  const serving = g.resolveFoodServingNutrition(copy, servingQuantity, barcode);
+  const sodium = g.formatSodiumMg(serving.sodiumDisplay);
+  const sodium100g = g.formatSodiumMg(serving.sodiumRaw);
+  const prompt = g.buildFoodExplanationPrompt({
+    sugar: g.formatGrams(serving.sugarDisplay),
+    sodium,
+    protein: g.formatGrams(serving.proteinDisplay),
+    sugarTier: serving.sugarTier,
+    sodiumTier: serving.sodiumTier,
+    proteinTier: serving.proteinTier,
+    additivesPhrase: '0 additives',
+    isOrganic: 'unknown',
+    novaGroup: 4,
+    ingredients: 'oil, buttermilk, salt',
+    nutriPts: 10,
+    nutriMax: 60,
+    basisLabel: serving.servingKnown ? 'per serving' : 'per 100g',
+  });
+  const nutrition = g.computeNutritionSubscore(copy, '', barcode);
+  const blob = [sodium, sodium100g, prompt, serving.sodiumTier, JSON.stringify(serving), JSON.stringify(nutrition)].join('\n');
+  return { serving, sodium, sodium100g, prompt, nutrition, blob };
+}
+
+// Real OFF 7160372281000 (Ranch Dressing): 875 g/100g, 105 g/serving, 12g serving.
+{
+  const ranch = inspect({
+    sodium_100g: 875,
+    sodium_serving: 105,
+    sugars_100g: 8,
+    proteins_100g: 1,
+    'energy-kcal_100g': 400,
+    'saturated-fat_100g': 2,
+    fat_100g: 40,
+    carbohydrates_100g: 8,
+    fiber_100g: 0,
+  }, 12, '7160372281000');
+  assert(ranch.serving.sodiumRaw == null, 'ranch 100g sodium must be missing');
+  assert(ranch.serving.sodiumDisplay == null, 'ranch serving sodium must be missing');
+  assert(ranch.serving.sodiumTier === 'unknown', 'ranch sodium tier unknown');
+  assert(ranch.sodium === 'N/A', 'ranch display sodium is N/A, got ' + ranch.sodium);
+  assert(ranch.sodium100g === 'N/A', 'ranch 100g display is N/A');
+  assert(!ranch.blob.includes('105000'), '105000mg must not appear in display/tiers/prompt, blob=' + ranch.blob);
+  assert(!ranch.prompt.includes('105000'), 'prompt must not contain 105000mg');
+  assert(!ranch.prompt.toLowerCase().includes('sodium') || ranch.serving.sodiumTier === 'unknown',
+    'prompt must not treat implausible sodium as known');
+  assert(ranch.nutrition.available === false, 'missing sodium makes subscore unavailable');
+  assert(ranch.nutrition.reason === 'missing_sodium', 'reason must be missing_sodium, got ' + ranch.nutrition.reason);
+}
+
+// At-bound values remain valid.
+{
+  const at = inspect({
+    sodium_100g: 39,
+    sugars_100g: 100,
+    proteins_100g: 100,
+    'energy-kcal_100g': 900,
+    'saturated-fat_100g': 100,
+    fat_100g: 100,
+    carbohydrates_100g: 100,
+    fiber_100g: 100,
+  }, 100, 'at-bound');
+  assert(at.serving.sodiumRaw === 39, '39g sodium is valid');
+  assert(at.serving.sugarRaw === 100, '100g sugars is valid');
+  assert(at.serving.caloriesRaw === 900, '900 kcal is valid');
+  assert(at.serving.saturatedFatRaw === 100, '100g sat fat is valid');
+  assert(at.serving.fiberRaw === 100, '100g fibre is valid');
+  assert(at.nutrition.available === true, 'at-bound product remains scorable');
+}
+
+// Just above bound is rejected.
+{
+  const above = inspect({
+    sodium_100g: 39.0001,
+    sugars_100g: 100.0001,
+    proteins_100g: 100.0001,
+    'energy-kcal_100g': 900.0001,
+    'saturated-fat_100g': 100.0001,
+    fat_100g: 100.0001,
+    carbohydrates_100g: 100.0001,
+    fiber_100g: 100.0001,
+  }, 100, 'above-bound');
+  assert(above.serving.sodiumRaw == null, 'sodium above 39 rejected');
+  assert(above.serving.sugarRaw == null, 'sugars above 100 rejected');
+  assert(above.serving.caloriesRaw == null, 'energy above 900 rejected');
+  assert(above.serving.saturatedFatRaw == null, 'sat fat above 100 rejected');
+  assert(above.serving.fiberRaw == null, 'fibre above 100 rejected');
+}
+
+// Serving-only reject must not clobber a valid 100g value, and must not re-enter.
+{
+  const mixed = {
+    sodium_100g: 0.4,
+    sodium_serving: 105,
+    sugars_100g: 5,
+    proteins_100g: 2,
+    'energy-kcal_100g': 200,
+    'saturated-fat_100g': 1,
+  };
+  const out = inspect(mixed, 12, 'serving-only');
+  assert(out.serving.sodiumRaw === 0.4, 'valid 100g sodium kept');
+  assert(Math.abs(out.serving.sodiumDisplay - (0.4 * 12 / 100)) < 1e-9,
+    'display must derive from 100g, not the rejected serving');
+  assert(!out.blob.includes('105000'), 'rejected serving must not format as 105000mg');
+}
+
+// 100g reject clears serving so it cannot re-enter.
+{
+  const nutriments = { sodium_100g: 875, sodium_serving: 105 };
+  g.applyNutrientPlausibilityBounds(nutriments, 12, '7160372281000');
+  assert(!Object.prototype.hasOwnProperty.call(nutriments, 'sodium_100g'), '100g key removed');
+  assert(!Object.prototype.hasOwnProperty.call(nutriments, 'sodium_serving'), 'serving key removed');
+}
+
+console.log('nutrient plausibility and logic v24 ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"nutrient plausibility assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -7648,6 +7850,7 @@ def main() -> int:
         test_alternatives_off_critical_path,
         test_diet_warning_snapshot_equivalence,
         test_scan_external_timeouts,
+        test_nutrient_plausibility_and_logic_v24,
     ]
     failed = 0
     for test in tests:
