@@ -7537,6 +7537,74 @@ console.log('diet warning snapshot equivalence ok');
     print(proc.stdout.strip())
 
 
+def test_scan_external_timeouts():
+    """Every HTTP call reachable from /scan must have a finite timeout."""
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
+
+function assert(cond, msg) {
+  if (!cond) throw new Error(msg || 'assertion failed');
+}
+
+assert(src.includes('const USDA_LOOKUP_TIMEOUT_MS = 4000'), 'USDA timeout');
+assert(src.includes('const OFF_LOOKUP_TIMEOUT_MS = 3000'), 'OFF timeout');
+assert(src.includes('const ALT_LOOKUP_TIMEOUT_MS = 3000'), 'alternatives timeout');
+assert(src.includes('const OBF_LOOKUP_TIMEOUT_MS = 3000'), 'OBF timeout');
+assert(src.includes('const DIET_FALLBACK_TIMEOUT_MS = 3000'), 'diet fallback timeout');
+assert(src.includes('const ANTHROPIC_TIMEOUT_MS = 8000'), 'Anthropic timeout');
+
+const factsStart = src.indexOf('async function fetchProductFromFacts');
+const factsBody = src.slice(factsStart, src.indexOf('// USDA FoodData Central'));
+assert(factsBody.includes('requires a finite timeoutMs'),
+  'fetchProductFromFacts must refuse unbounded calls');
+assert(factsBody.includes('AbortSignal.timeout(timeoutMs)'),
+  'OFF/OBF barcode fetches must abort');
+
+assert(src.includes('AbortSignal.timeout(USDA_LOOKUP_TIMEOUT_MS)'), 'USDA fetch abort');
+assert(src.includes('AbortSignal.timeout(ALT_LOOKUP_TIMEOUT_MS)'), 'alternatives fetch abort');
+assert(src.includes('AbortSignal.timeout(DIET_FALLBACK_TIMEOUT_MS)'), 'diet fallback abort');
+assert(src.includes('AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS)'), 'Haiku abort');
+assert(src.includes('OBF_LOOKUP_TIMEOUT_MS)'), 'OBF callers must pass the timeout');
+
+const scanStart = src.indexOf("app.get('/scan/:barcode'");
+const scanEnd = src.indexOf("const PHOTO_LABEL_PROMPT");
+const scanBody = src.slice(scanStart, scanEnd);
+assert(scanBody.includes('operation=diet_fallback_fetch'),
+  'diet fallback must log barcode and operation');
+assert(scanBody.includes('[DIET TIMEOUT]') || scanBody.includes('TIMEOUT'),
+  'diet fallback must log timeouts');
+assert(!/db\.collection\([^)]+\)[\s\S]{0,80}dietWarnings/.test(scanBody),
+  'diet fallback must not persist dietWarnings');
+assert(!scanBody.includes('dietWarnings:') || !/set\([^\)]*dietWarnings/.test(scanBody),
+  'must not write an empty diet warning as cached evidence');
+
+// Firestore / Auth Admin SDK cannot take AbortSignal; do not wrap in Promise.race.
+const scanFnStart = src.indexOf('async function scanAndCache(barcode');
+const scanFn = src.slice(scanFnStart, src.indexOf("app.get('/health'"));
+assert(!/Promise\.race\(\s*\[/.test(scanFn),
+  'must not Promise.race Firestore cache reads/writes');
+assert(!/Promise\.race\(\s*\[/.test(scanBody),
+  'must not Promise.race Auth / Firestore on /scan');
+
+console.log('scan external timeouts ok');
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        raise AssertionError(
+            f"scan external timeout assertions failed (exit {proc.returncode})"
+        )
+    print(proc.stdout.strip())
+
+
 def main() -> int:
     tests = [
         test_synonym_targets_exist_in_hazard_table,
@@ -7579,6 +7647,7 @@ def main() -> int:
         test_vision_json_parse_log,
         test_alternatives_off_critical_path,
         test_diet_warning_snapshot_equivalence,
+        test_scan_external_timeouts,
     ]
     failed = 0
     for test in tests:

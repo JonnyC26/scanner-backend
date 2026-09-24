@@ -1606,17 +1606,20 @@ function recordRawObservation({ barcode, productType, source, payload, tableVers
 }
 
 const USDA_LOOKUP_TIMEOUT_MS = 4000; // abort USDA search; must not wait on OFF
-const OFF_LOOKUP_TIMEOUT_MS = 3000;  // abort the parallel food OFF barcode fetch only
+const OFF_LOOKUP_TIMEOUT_MS = 3000;  // abort the parallel food OFF barcode fetch
 const ALT_LOOKUP_TIMEOUT_MS = 3000;  // background category-alternatives search
+const OBF_LOOKUP_TIMEOUT_MS = 3000;  // OBF barcode fetch during /scan classification
+const DIET_FALLBACK_TIMEOUT_MS = 3000; // legacy diet-warning OFF refetch
+const ANTHROPIC_TIMEOUT_MS = 8000;   // food/cosmetic Haiku explanation
 
 async function fetchProductFromFacts(baseUrl, barcode, timeoutMs) {
+  if (timeoutMs == null || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('fetchProductFromFacts requires a finite timeoutMs');
+  }
   const opts = {
     headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
+    signal: AbortSignal.timeout(timeoutMs),
   };
-  // Timeout only when the caller asks (parallel food OFF). OBF stays unbounded.
-  if (timeoutMs != null) {
-    opts.signal = AbortSignal.timeout(timeoutMs);
-  }
   const res = await fetch(`${baseUrl}/api/v2/product/${barcode}.json`, opts);
   if (!res.ok) return null;
   const data = await res.json();
@@ -2276,7 +2279,7 @@ async function resolveProductType(barcode) {
   if (!foodProduct) {
     try {
       cosmeticProduct = attachProductSource(
-        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
+        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode, OBF_LOOKUP_TIMEOUT_MS),
         'obf'
       );
     } catch (err) {
@@ -2303,7 +2306,7 @@ async function resolveProductType(barcode) {
   if (offCosmeticCategory) {
     try {
       cosmeticProduct = attachProductSource(
-        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode),
+        await fetchProductFromFacts('https://world.openbeautyfacts.org', barcode, OBF_LOOKUP_TIMEOUT_MS),
         'obf'
       );
     } catch (err) {
@@ -3573,6 +3576,7 @@ Avoid jargon like "Annex II" — say "prohibited in the EU" if relevant.`;
         'x-api-key': ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       },
+      signal: AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS),
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 120,
@@ -3686,6 +3690,7 @@ async function requestFoodExplanation(prompt) {
       'x-api-key': ANTHROPIC_API_KEY,
       'anthropic-version': '2023-06-01'
     },
+    signal: AbortSignal.timeout(ANTHROPIC_TIMEOUT_MS),
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 220,
@@ -4845,14 +4850,19 @@ app.get('/scan/:barcode', async (req, res) => {
       } else {
         try {
           const offRes = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`, {
-            headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' }
+            headers: { 'User-Agent': 'DontWorryFoodScanner/1.0 (contact: app developer)' },
+            signal: AbortSignal.timeout(DIET_FALLBACK_TIMEOUT_MS),
           });
           const offData = await offRes.json();
           if (offData.product) {
             dietWarnings = detectDietWarnings(offData.product, healthProfile);
           }
         } catch (dietErr) {
-          console.log(`[DIET] product fetch failed: ${dietErr.message}`);
+          const timedOut = !!(dietErr && (dietErr.name === 'TimeoutError' || dietErr.name === 'AbortError'));
+          console.log(
+            `[DIET ${timedOut ? 'TIMEOUT' : 'ERROR'}] barcode=${barcode} operation=diet_fallback_fetch ${dietErr && dietErr.message ? dietErr.message : dietErr}`
+          );
+          // Empty string for this request only — do not persist as "no warning".
         }
       }
     }
