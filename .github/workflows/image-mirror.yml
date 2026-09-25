@@ -1,0 +1,83 @@
+name: Image mirror
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Reservoir sample size (0 = full remaining universe after offset)
+        required: false
+        default: '0'
+      sample_seed:
+        description: Deterministic seed for the reservoir sample
+        required: false
+        default: '20260924'
+      dry_run:
+        description: Select and process, write nothing to R2
+        required: false
+        default: 'false'
+        type: boolean
+      offset:
+        description: Skip this many selected items (sequential continuation only; do not run shards concurrently)
+        required: false
+        default: '0'
+      write_cap:
+        description: Hard cap on R2 writes (image + manifest PUTs) this run
+        required: false
+        default: '20000'
+
+# Exactly one writer. Never cancel an in-flight run; never overlap shards.
+concurrency:
+  group: image-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install image-mirror dependencies
+        working-directory: tools/image-mirror
+        run: npm install
+
+      - name: Run image-mirror unit tests
+        working-directory: tools/image-mirror
+        run: npm test
+
+      - name: Run image mirror
+        working-directory: tools/image-mirror
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            extra+=(--dry-run)
+          fi
+          node cli.js \
+            --limit "${{ inputs.limit }}" \
+            --sample_seed "${{ inputs.sample_seed }}" \
+            --offset "${{ inputs.offset }}" \
+            --write_cap "${{ inputs.write_cap }}" \
+            --artifact_dir artifact \
+            "${extra[@]}"
+
+      - name: Upload contact sheet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-mirror-contact-sheet
+          path: tools/image-mirror/artifact
+          if-no-files-found: warn
+          retention-days: 30

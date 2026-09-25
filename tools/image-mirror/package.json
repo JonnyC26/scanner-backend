@@ -1,0 +1,15 @@
+{
+  "name": "purla-image-mirror",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Offline job that mirrors US OFF front images into R2. Not loaded by the API server.",
+  "main": "cli.js",
+  "scripts": {
+    "start": "node cli.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.654.0",
+    "sharp": "^0.33.5"
+  }
+}

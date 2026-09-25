@@ -21,9 +21,12 @@ assert(src.includes('buildUnsupportedScanResponse'), 'unsupported builder must e
 assert(src.includes('off_nutrition_facts'), 'OFF empty-tag nutrition fallback must exist');
 assert(src.includes('off_non_food_category'), 'explicit non-food type tags must veto');
 {
-  const searchFn = src.slice(
-    src.indexOf('function classifySearchProductType'),
-    src.indexOf('function attachProductSource')
+  assert(src.includes("require('./lib/search_product_type')"),
+    '/search classifier must come from lib/search_product_type');
+  const shared = fs.readFileSync(path.join(process.cwd(), 'lib/search_product_type.js'), 'utf8');
+  const searchFn = shared.slice(
+    shared.indexOf('function classifySearchProductType'),
+    shared.indexOf('module.exports')
   );
   assert(searchFn.includes("return 'food'"), 'search food classification must remain');
   assert(searchFn.includes('tagIndicatesOffNonFoodProductType'),
@@ -168,7 +171,10 @@ module.exports = {
   formatOrganicDisplay,
   appFacingUnsupportedReason,
 };
-`;
+`.replace(
+  /require\('\.\/lib\/search_product_type'\)/g,
+  "require(path.join(process.cwd(), 'lib/search_product_type'))"
+);
 fs.writeFileSync('/tmp/usda_lookup_helpers.js', block);
 delete require.cache['/tmp/usda_lookup_helpers.js'];
 const g = require('/tmp/usda_lookup_helpers.js');
