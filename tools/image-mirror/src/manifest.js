@@ -54,14 +54,23 @@ async function loadManifest(store) {
 }
 
 async function saveManifest(store, manifest) {
+  const serializeStarted = Date.now();
   const body = encodeManifest(manifest);
+  const serializeMs = Date.now() - serializeStarted;
+  const putStarted = Date.now();
   await store.putObject({
     key: MANIFEST_KEY,
     body,
     contentType: 'application/gzip',
     cacheControl: 'no-store',
   });
-  return body.length;
+  const putMs = Date.now() - putStarted;
+  return {
+    bytes: body.length,
+    serializeMs,
+    putMs,
+    entryCount: Object.keys((manifest && manifest.entries) || {}).length,
+  };
 }
 
 module.exports = {

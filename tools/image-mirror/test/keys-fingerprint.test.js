@@ -19,7 +19,7 @@ const base = {
 };
 
 describe('object key format', () => {
-  it('is front/{barcode}/{lc}.{rev}.{shortFingerprint}.p1.jpg', () => {
+  it('is front/{barcode}/{lc}.{rev}.{shortFingerprint}.p2.jpg', () => {
     const fp = sourceFingerprint(base);
     const key = objectKey({
       barcode: '0012345678905',
@@ -29,8 +29,19 @@ describe('object key format', () => {
     });
     const short = shortFingerprint(fp);
     assert.equal(short.length, 10);
-    assert.equal(key, `front/0012345678905/en.12.${short}.p1.jpg`);
-    assert.match(key, /^front\/0012345678905\/en\.12\.[0-9a-f]{10}\.p1\.jpg$/);
+    assert.equal(key, `front/0012345678905/en.12.${short}.p2.jpg`);
+    assert.match(key, /^front\/0012345678905\/en\.12\.[0-9a-f]{10}\.p2\.jpg$/);
+  });
+  it('uses the same PIPELINE_VERSION constant as the fingerprint', () => {
+    const { PIPELINE_VERSION } = require('../src/constants');
+    assert.equal(PIPELINE_VERSION, 'p2');
+    const fp = sourceFingerprint(base);
+    assert.ok(objectKey({
+      barcode: '0012345678905',
+      lc: 'en',
+      rev: '12',
+      fingerprint: fp,
+    }).includes(`.${PIPELINE_VERSION}.jpg`));
   });
 });
 
@@ -61,5 +72,11 @@ describe('sourceFingerprint', () => {
     const a = sourceFingerprint(base);
     const b = sourceFingerprint({ ...base, productName: 'other', code: '999' });
     assert.equal(a, b);
+  });
+  it('changes when the pipeline version changes', () => {
+    assert.notEqual(
+      sourceFingerprint({ ...base, pipelineVersion: 'p1' }),
+      sourceFingerprint({ ...base, pipelineVersion: 'p2' }),
+    );
   });
 });

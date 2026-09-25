@@ -6,6 +6,8 @@ const {
   pickFront,
   extractFronts,
   isSearchUniverse,
+  selectCandidate,
+  normalizeScope,
   sourcePlan,
   hasUsableCrop,
   hasLegacyGeometryOnly,
@@ -79,6 +81,59 @@ describe('search universe filter', () => {
   });
   it('rejects cosmetics via classifySearchProductType', () => {
     assert.equal(isSearchUniverse({ ...food, categories_tags: ['en:toothpastes'] }), false);
+  });
+});
+
+describe('selection scope', () => {
+  const usFoodFront = {
+    code: '111',
+    product_name: 'Cereal',
+    lang: 'en',
+    countries_tags: ['en:united-states'],
+    categories_tags: ['en:breakfast-cereals', 'en:plant-based-foods'],
+    images: { selected: { front: { en: { imgid: '1', rev: '1', generation: {} } } } },
+  };
+  const usCosmeticFront = {
+    code: '222',
+    product_name: 'Toothpaste',
+    lang: 'en',
+    countries_tags: ['en:united-states'],
+    categories_tags: ['en:toothpastes'],
+    images: { selected: { front: { en: { imgid: '2', rev: '1', generation: {} } } } },
+  };
+  const usFoodNoFront = {
+    code: '333',
+    product_name: 'No photo',
+    lang: 'en',
+    countries_tags: ['en:united-states'],
+    categories_tags: ['en:yogurts'],
+    images: {},
+  };
+  const frFoodFront = {
+    code: '444',
+    product_name: 'Pain',
+    lang: 'fr',
+    countries_tags: ['en:france'],
+    categories_tags: ['en:breads'],
+    images: { selected: { front: { fr: { imgid: '1', rev: '1', generation: {} } } } },
+  };
+  const fixtures = [usFoodFront, usCosmeticFront, usFoodNoFront, frFoodFront];
+
+  function selectedCodes(scope) {
+    return fixtures.map((p) => selectCandidate(p, scope)).filter(Boolean).map((c) => c.code);
+  }
+
+  it('omitted scope is search and matches the pre-scope fixture population', () => {
+    assert.equal(normalizeScope(undefined), 'search');
+    assert.equal(normalizeScope(null), 'search');
+    assert.equal(normalizeScope(''), 'search');
+    assert.deepEqual(selectedCodes(undefined), ['111']);
+    assert.deepEqual(selectedCodes(), ['111']);
+    assert.deepEqual(selectedCodes('search'), selectedCodes(undefined));
+  });
+
+  it('all_us_front keeps every US product with a selected front', () => {
+    assert.deepEqual(selectedCodes('all_us_front').sort(), ['111', '222']);
   });
 });
 

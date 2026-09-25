@@ -110,13 +110,12 @@ function centerSquare(width, height) {
 async function processToSquare({ sourceBuffer, generation, uploadedSizes, sourceKind }) {
   const gen = generation || {};
   const angle = rotationAngle(gen);
-  // OFF: 90 = counter-clockwise. sharp.rotate is clockwise.
-  // Materialize rotation first so metadata/crop see the coordinate space
-  // the generation fields were defined in.
-  let working = sourceBuffer;
-  if (angle) {
-    working = await sharp(sourceBuffer, { failOn: 'none' }).rotate(-angle).toBuffer();
-  }
+  // Product Opener process_image_crop: $source->Rotate($angle) then Crop then Trim.
+  // ImageMagick Rotate is clockwise; sharp.rotate(degrees) is also clockwise.
+  // Always pass an explicit angle (including 0) so sharp does not apply EXIF
+  // Orientation. Stored {imgid}.jpg files were already AutoOrient()+Strip() on
+  // upload; the crop path never auto-orients again.
+  const working = await sharp(sourceBuffer, { failOn: 'none' }).rotate(angle).toBuffer();
 
   let pipeline = sharp(working, { failOn: 'none' });
   const meta = await pipeline.metadata();

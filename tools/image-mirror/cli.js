@@ -55,6 +55,7 @@ async function main() {
     ? path.resolve(args.artifact_dir)
     : path.join(process.cwd(), 'artifact');
 
+  const scope = args.scope;
   const store = dryRun ? null : createR2Store();
   await runMirror({
     dumpUrl,
@@ -66,6 +67,7 @@ async function main() {
     concurrency,
     store,
     artifactDir,
+    scope,
   });
 }
 

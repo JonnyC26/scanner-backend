@@ -7,8 +7,11 @@ const os = require('os');
 const path = require('path');
 const { parseManifest, addEntry, emptyManifest, shouldSkip } = require('../src/manifest');
 const { runMirror, reservoirSample, resolveSourceBuffer } = require('../src/run');
+const { sourceFingerprint } = require('../src/fingerprint');
+const { objectKey } = require('../src/keys');
+const { selectCandidate, sourcePlan } = require('../src/select');
 const { usFood, solidJpeg, memoryStore, dumpAndImages } = require('./helpers');
-const { MANIFEST_KEY } = require('../src/constants');
+const { MANIFEST_KEY, PIPELINE_VERSION } = require('../src/constants');
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'image-mirror-'));
@@ -299,5 +302,73 @@ describe('contact sheet', () => {
     assert.match(html, /0012345678905/);
     assert.match(html, /Sheet Cereal/);
     assert.ok(fs.existsSync(path.join(artifactDir, 'ours', '0012345678905.jpg')));
+    assert.match(html, /Extract the zip before opening this file/);
+    assert.ok(html.indexOf('Extract the zip') < html.indexOf('<h1>'));
+  });
+});
+
+describe('pipeline version p2 vs existing p1 manifest', () => {
+  it('treats a realistic p1 entry as stale, PUTs p2 first, then replaces the entry', async () => {
+    assert.equal(PIPELINE_VERSION, 'p2');
+    const product = usFood();
+    const jpeg = await solidJpeg(400, 400);
+    const candidate = selectCandidate(product);
+    const plan = sourcePlan(candidate.chosen);
+    const p1fp = sourceFingerprint({
+      imgid: '1',
+      generation: plan.generation,
+      sourceKind: 'uncropped',
+      pipelineVersion: 'p1',
+    });
+    const p1key = objectKey({
+      barcode: product.code,
+      lc: 'en',
+      rev: '12',
+      fingerprint: p1fp,
+      pipelineVersion: 'p1',
+    });
+    assert.match(p1key, /\.p1\.jpg$/);
+    const existing = emptyManifest();
+    addEntry(existing, product.code, {
+      lc: 'en',
+      rev: '12',
+      imgid: '1',
+      sourceFingerprint: p1fp,
+      key: p1key,
+    });
+    const store = memoryStore(existing);
+    store.objects.set(p1key, Buffer.from('old-p1-bytes'));
+    const { summary, mirrored } = await runMirror({
+      dumpUrl: 'https://dump.test/products.jsonl.gz',
+      limit: 0,
+      sampleSeed: '1',
+      dryRun: false,
+      writeCap: 100,
+      concurrency: 1,
+      store,
+      fetchImpl: dumpAndImages({ products: [product], images: { '*': jpeg } }),
+      artifactDir: tmpDir(),
+      log: () => {},
+    });
+    assert.equal(summary.mirrored, 1);
+    assert.equal(mirrored[0].key.includes('.p2.jpg'), true);
+    assert.notEqual(mirrored[0].key, p1key);
+    assert.ok(store.objects.has(p1key), 'p1 object must not be deleted');
+    assert.equal(store.objects.get(p1key).toString(), 'old-p1-bytes');
+    const imagePuts = store.puts.filter((p) => p.key.startsWith('front/'));
+    assert.equal(imagePuts.length, 1);
+    assert.equal(imagePuts[0].key, mirrored[0].key);
+    const firstManifestAfter = store.puts.findIndex((p) => p.key === MANIFEST_KEY
+      && store.puts.findIndex((q) => q.key === imagePuts[0].key) < store.puts.indexOf(p));
+    assert.ok(firstManifestAfter >= 0, 'manifest PUT must follow the p2 image PUT');
+    const saved = parseManifest(await store.getObject(MANIFEST_KEY));
+    assert.equal(saved.entries[product.code].key, mirrored[0].key);
+    assert.equal(saved.entries[product.code].sourceFingerprint, mirrored[0].fingerprint);
+    assert.notEqual(saved.entries[product.code].sourceFingerprint, p1fp);
+    assert.ok(summary.manifestCheckpoints >= 1);
+    assert.ok(summary.manifestCompressedBytes > 0);
+    assert.equal(summary.manifestEntryCount, 1);
+    assert.ok(Object.prototype.hasOwnProperty.call(summary.manifestSerializeMs, 'median'));
+    assert.ok(Object.prototype.hasOwnProperty.call(summary.manifestPutMs, 'max'));
   });
 });

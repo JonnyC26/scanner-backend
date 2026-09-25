@@ -24,6 +24,10 @@ on:
         description: Hard cap on R2 writes (image + manifest PUTs) this run
         required: false
         default: '20000'
+      scope:
+        description: search (default, today's /search universe) or all_us_front (every US product with a selected front)
+        required: false
+        default: 'search'
 
 # Exactly one writer. Never cancel an in-flight run; never overlap shards.
 concurrency:
@@ -70,6 +74,7 @@ jobs:
             --sample_seed "${{ inputs.sample_seed }}" \
             --offset "${{ inputs.offset }}" \
             --write_cap "${{ inputs.write_cap }}" \
+            --scope "${{ inputs.scope }}" \
             --artifact_dir artifact \
             "${extra[@]}"
 
