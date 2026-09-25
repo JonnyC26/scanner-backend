@@ -30,5 +30,16 @@ jobs:
       - name: Syntax-check index.js
         run: node --check index.js
 
+      - name: Prove /search classifier extract is behaviour-neutral
+        run: node test_search_product_type_shared.js
+
       - name: Run test_normalise.py
         run: python3 test_normalise.py
+
+      - name: Install image-mirror dependencies
+        working-directory: tools/image-mirror
+        run: npm install
+
+      - name: Run image-mirror unit tests
+        working-directory: tools/image-mirror
+        run: npm test

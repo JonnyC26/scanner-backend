@@ -377,16 +377,17 @@ const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('// Firestore docs are size-capped');
 if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
 
-const fragStart = src.indexOf('const COSMETIC_CATEGORY_FRAGMENTS');
-const fragEnd = src.indexOf('async function resolveProductType');
-if (fragStart < 0 || fragEnd < 0) throw new Error('could not locate category block');
-
 const block = `
 const fs = require('fs');
 const path = require('path');
 const __cosmeticDir = process.cwd();
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
-${src.slice(fragStart, fragEnd)}
+const {
+  tagIndicatesCosmetic,
+  hasCosmeticCategory,
+  tagIndicatesHousehold,
+  hasHouseholdCategory,
+} = require(path.join(process.cwd(), 'lib/search_product_type'));
 module.exports = {
   parseCosmeticIngredientList,
   scoreCosmeticProduct,
@@ -2654,9 +2655,6 @@ const src = fs.readFileSync(path.join(process.cwd(), 'index.js'), 'utf8');
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('function stringifyIngredientListForCache');
 if (start < 0 || end < 0 || end <= start) throw new Error('could not locate scoring block');
-const fragStart = src.indexOf('const HOUSEHOLD_CATEGORY_FRAGMENTS');
-const fragEnd = src.indexOf('async function resolveProductType');
-if (fragStart < 0 || fragEnd < 0) throw new Error('could not locate household category block');
 const addStart = src.indexOf('function formatAdditivesCountDisplay');
 const addEnd = src.indexOf('async function generateFoodExplanation');
 if (addStart < 0 || addEnd < 0 || addEnd <= addStart) {
@@ -2668,7 +2666,7 @@ const path = require('path');
 const __cosmeticDir = process.cwd();
 const SCAN_LOGIC_VERSION = '1';
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
-${src.slice(fragStart, fragEnd)}
+const { tagIndicatesHousehold, hasHouseholdCategory } = require(path.join(process.cwd(), 'lib/search_product_type'));
 ${src.slice(addStart, addEnd)}
 module.exports = {
   looksLikeHouseholdProduct,
@@ -3028,7 +3026,7 @@ assert(src.includes('missing=${missing}'),
   'unavailable subscore log must include missing=');
 
 const nutStart = src.indexOf('function productHasNutriments');
-const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
+const nutEnd = src.indexOf('// Search-universe classification lives in lib/search_product_type.js');
 if (nutStart < 0 || nutEnd < 0) throw new Error('could not locate nutriment helpers');
 
 const scoreStart = src.indexOf('function calculateScore');
@@ -3828,7 +3826,10 @@ module.exports = {
   CACHE_TTL_MS: ${CACHE_TTL_MS},
   buildFoodExplanationPromptSource: ${JSON.stringify(src.slice(foodPromptStart, foodPromptEnd))},
 };
-`;
+`.replace(
+  /require\('\.\/lib\/search_product_type'\)/g,
+  "require(path.join(process.cwd(), 'lib/search_product_type'))"
+);
 fs.writeFileSync('/tmp/batch_c_helpers.js', block);
 delete require.cache['/tmp/batch_c_helpers.js'];
 const g = require('/tmp/batch_c_helpers.js');
@@ -4125,7 +4126,7 @@ assert(src.includes("basisLabel") && src.includes('per 100g'),
   'prompt must support per 100g basis label');
 
 const nutStart = src.indexOf('function productHasNutriments');
-const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
+const nutEnd = src.indexOf('// Search-universe classification lives in lib/search_product_type.js');
 if (nutStart < 0 || nutEnd < 0) throw new Error('could not locate nutriment helpers');
 
 const scoreStart = src.indexOf('function calculateScore');
@@ -5441,9 +5442,6 @@ assert(searchBody.includes('slice(0, SEARCH_RESULT_LIMIT)'),
 const start = src.indexOf('const cosmeticTable = JSON.parse');
 const end = src.indexOf('// Firestore docs are size-capped');
 if (start < 0 || end < 0) throw new Error('could not locate cosmetic block');
-const fragStart = src.indexOf('const COSMETIC_CATEGORY_FRAGMENTS');
-const fragEnd = src.indexOf('async function resolveProductType');
-if (fragStart < 0 || fragEnd < 0) throw new Error('could not locate category fragments');
 const helperStart = src.indexOf('// Photo-rescued cache docs have no upstream');
 const helperEnd = src.indexOf('async function scanAndCache(barcode');
 if (helperStart < 0 || helperEnd < 0) throw new Error('could not locate photo cache helpers');
@@ -5451,7 +5449,6 @@ if (helperStart < 0 || helperEnd < 0) throw new Error('could not locate photo ca
 const scoreStart = src.indexOf('function calculateScore');
 const scoreEnd = src.indexOf('// OFF labels_tags is crowd-entered');
 if (scoreStart < 0 || scoreEnd < 0) throw new Error('could not locate calculateScore');
-
 const block = `
 const fs = require('fs');
 const path = require('path');
@@ -5459,7 +5456,11 @@ const __cosmeticDir = process.cwd();
 const SCAN_LOGIC_VERSION = '18';
 function applyNutrientPlausibilityBounds(nutriments) { return nutriments; }
 ${src.slice(start, end).replace(/path\.join\(__dirname,/g, 'path.join(__cosmeticDir,')}
-${src.slice(fragStart, fragEnd)}
+const {
+  classifySearchProductType,
+  tagIndicatesCosmetic,
+  tagIndicatesHousehold,
+} = require(path.join(process.cwd(), 'lib/search_product_type'));
 ${src.slice(helperStart, helperEnd)}
 ${src.slice(scoreStart, scoreEnd)}
 module.exports = {
@@ -5748,7 +5749,7 @@ const fbEnd = src.indexOf('async function scanAndCache(barcode');
 if (fbStart < 0 || fbEnd < 0) throw new Error('could not locate staleCacheFallbackPayload');
 
 const nutStart = src.indexOf('function productHasNutriments');
-const nutEnd = src.indexOf('// Explicit beauty/hygiene category fragments');
+const nutEnd = src.indexOf('// Search-universe classification lives in lib/search_product_type.js');
 const scoreStart = src.indexOf('function calculateScore');
 const scoreEnd = src.indexOf('// OFF labels_tags is crowd-entered');
 const fmtStart = src.indexOf('function parseServingQuantity');
@@ -6713,12 +6714,9 @@ assert(searchBody.includes('categories_tags:*'), 'exists filter in /search query
 assert(searchBody.includes("classifySearchProductType(p.categories_tags) === 'food'"),
   'post-filter keeps food only');
 
-const fragStart = src.indexOf('const COSMETIC_CATEGORY_FRAGMENTS');
-const fragEnd = src.indexOf('async function resolveProductType');
-if (fragStart < 0 || fragEnd < 0) throw new Error('could not locate category fragments');
+const sharedSrc = fs.readFileSync(path.join(process.cwd(), 'lib/search_product_type.js'), 'utf8');
 const block = `
-${src.slice(fragStart, fragEnd)}
-module.exports = { classifySearchProductType };
+${sharedSrc}
 `;
 fs.writeFileSync('/tmp/search_food_us_helpers.js', block);
 delete require.cache['/tmp/search_food_us_helpers.js'];
