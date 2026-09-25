@@ -1,6 +1,8 @@
 'use strict';
 
-const PIPELINE_VERSION = 'p1';
+const PIPELINE_VERSION = 'p2';
+const SCOPE_SEARCH = 'search';
+const SCOPE_ALL_US_FRONT = 'all_us_front';
 const OUTPUT_SIZE = 200;
 const JPEG_QUALITY = 82;
 const MANIFEST_KEY = 'manifest/v1.json.gz';
@@ -16,6 +18,8 @@ const CONTACT_SHEET_TRANSFORM_CAP = 40;
 
 module.exports = {
   PIPELINE_VERSION,
+  SCOPE_SEARCH,
+  SCOPE_ALL_US_FRONT,
   OUTPUT_SIZE,
   JPEG_QUALITY,
   MANIFEST_KEY,

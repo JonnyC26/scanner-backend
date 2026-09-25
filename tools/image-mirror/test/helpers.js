@@ -143,11 +143,82 @@ function dumpAndImages({ products, images = {}, missing = new Set() }) {
   };
 }
 
+/** Asymmetric 2×2 colour quadrants: TL red, TR green, BL blue, BR yellow. */
+async function quadrantJpeg(width, height) {
+  const buf = Buffer.alloc(width * height * 3);
+  const midX = Math.floor(width / 2);
+  const midY = Math.floor(height / 2);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 3;
+      const right = x >= midX;
+      const bottom = y >= midY;
+      if (!right && !bottom) { buf[i] = 220; buf[i + 1] = 20; buf[i + 2] = 20; }
+      else if (right && !bottom) { buf[i] = 20; buf[i + 1] = 200; buf[i + 2] = 20; }
+      else if (!right && bottom) { buf[i] = 20; buf[i + 1] = 40; buf[i + 2] = 220; }
+      else { buf[i] = 230; buf[i + 1] = 210; buf[i + 2] = 20; }
+    }
+  }
+  return sharp(buf, { raw: { width, height, channels: 3 } }).jpeg({ quality: 95 }).toBuffer();
+}
+
+async function jpegWithOrientation(sourceBuffer, orientation) {
+  return sharp(sourceBuffer, { failOn: 'none' })
+    .withMetadata({ orientation })
+    .jpeg({ quality: 95 })
+    .toBuffer();
+}
+
+function cornerMeans(raw, width, height, channels) {
+  const sample = (sx, sy) => {
+    let r = 0; let g = 0; let b = 0; let n = 0;
+    for (let y = sy; y < sy + 20 && y < height; y++) {
+      for (let x = sx; x < sx + 20 && x < width; x++) {
+        const i = (y * width + x) * channels;
+        r += raw[i]; g += raw[i + 1]; b += raw[i + 2];
+        n += 1;
+      }
+    }
+    return { r: r / n, g: g / n, b: b / n };
+  };
+  return {
+    tl: sample(8, 8),
+    tr: sample(width - 28, 8),
+    bl: sample(8, height - 28),
+    br: sample(width - 28, height - 28),
+  };
+}
+
+function dominantCorner(means) {
+  const score = {
+    red: (c) => c.r - (c.g + c.b) / 2,
+    green: (c) => c.g - (c.r + c.b) / 2,
+    blue: (c) => c.b - (c.r + c.g) / 2,
+    yellow: (c) => (c.r + c.g) / 2 - c.b,
+  };
+  let best = null;
+  let bestVal = -Infinity;
+  for (const [corner, c] of Object.entries(means)) {
+    for (const [color, fn] of Object.entries(score)) {
+      const v = fn(c);
+      if (v > bestVal) {
+        bestVal = v;
+        best = `${corner}:${color}`;
+      }
+    }
+  }
+  return best;
+}
+
 module.exports = {
   usFood,
   solidJpeg,
   gradientJpeg,
   splitJpeg,
+  quadrantJpeg,
+  jpegWithOrientation,
+  cornerMeans,
+  dominantCorner,
   gzipDump,
   memoryStore,
   dumpAndImages,

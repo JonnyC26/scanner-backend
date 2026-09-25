@@ -1,10 +1,19 @@
 'use strict';
 
 const { classifySearchProductType } = require('../../../lib/search_product_type');
+const { SCOPE_SEARCH, SCOPE_ALL_US_FRONT } = require('./constants');
+
+function normalizeScope(scope) {
+  return scope === SCOPE_ALL_US_FRONT ? SCOPE_ALL_US_FRONT : SCOPE_SEARCH;
+}
+
+function isUnitedStates(product) {
+  const countries = product && product.countries_tags;
+  return Array.isArray(countries) && countries.includes('en:united-states');
+}
 
 function isSearchUniverse(product) {
-  const countries = product && product.countries_tags;
-  if (!Array.isArray(countries) || !countries.includes('en:united-states')) return false;
+  if (!isUnitedStates(product)) return false;
   const cats = product.categories_tags;
   if (!Array.isArray(cats) || cats.length === 0) return false;
   return classifySearchProductType(cats) === 'food';
@@ -169,8 +178,13 @@ function rotationAngle(generation) {
   return n === 0 ? 0 : n;
 }
 
-function selectCandidate(product) {
-  if (!isSearchUniverse(product)) return null;
+function selectCandidate(product, scope) {
+  const normalized = normalizeScope(scope);
+  if (normalized === SCOPE_SEARCH) {
+    if (!isSearchUniverse(product)) return null;
+  } else if (!isUnitedStates(product)) {
+    return null;
+  }
   const fronts = extractFronts(product.images);
   const chosen = pickFront(fronts, product.lang || product.lc);
   if (!chosen || !chosen.imgid) return null;
@@ -221,6 +235,8 @@ function offThumbUrl(code, lc, rev) {
 }
 
 module.exports = {
+  normalizeScope,
+  isUnitedStates,
   isSearchUniverse,
   extractFronts,
   pickFront,

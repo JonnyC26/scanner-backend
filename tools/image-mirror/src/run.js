@@ -21,6 +21,7 @@ const {
   sourcePlan,
   offSourceUrl,
   rotationAngle,
+  normalizeScope,
 } = require('./select');
 const { processToSquare, sourceShorterSide } = require('./process');
 const { sourceFingerprint } = require('./fingerprint');
@@ -54,6 +55,15 @@ function parseProduct(line) {
   } catch {
     return null;
   }
+}
+
+function timingStats(values) {
+  if (!values.length) return { median: 0, max: 0 };
+  const sorted = values.slice().sort((a, b) => a - b);
+  return {
+    median: sorted[Math.floor((sorted.length - 1) / 2)],
+    max: sorted[sorted.length - 1],
+  };
 }
 
 function reservoirSample(limit, seed) {
@@ -120,7 +130,7 @@ async function mapPool(items, concurrency, fn) {
   return out;
 }
 
-async function collectCandidates({ dumpUrl, limit, sampleSeed, offset, fetchImpl, onProgress }) {
+async function collectCandidates({ dumpUrl, limit, sampleSeed, offset, fetchImpl, onProgress, scope }) {
   const reservoir = limit > 0 ? reservoirSample(limit, sampleSeed) : null;
   const sequential = [];
   let eligible = 0;
@@ -130,7 +140,7 @@ async function collectCandidates({ dumpUrl, limit, sampleSeed, offset, fetchImpl
     if (onProgress && scanned % 200000 === 0) onProgress({ scanned, eligible });
     const product = parseProduct(line);
     if (!product) continue;
-    const candidate = selectCandidate(product);
+    const candidate = selectCandidate(product, scope);
     if (!candidate || !candidate.code) continue;
     eligible += 1;
     if (reservoir) {
@@ -209,7 +219,9 @@ async function runMirror(opts) {
     fetchImpl = fetch,
     artifactDir = path.join(process.cwd(), 'artifact'),
     log = console.log,
+    scope: scopeInput,
   } = opts;
+  const scope = normalizeScope(scopeInput);
 
   const started = Date.now();
   const skipCounts = {};
@@ -217,13 +229,14 @@ async function runMirror(opts) {
     skipCounts[reason] = (skipCounts[reason] || 0) + 1;
   };
 
-  log(`collecting candidates limit=${limit || 'none'} seed=${sampleSeed} offset=${offset}`);
+  log(`collecting candidates limit=${limit || 'none'} seed=${sampleSeed} offset=${offset} scope=${scope}`);
   const { items, scanned, eligible } = await collectCandidates({
     dumpUrl,
     limit,
     sampleSeed,
     offset,
     fetchImpl,
+    scope,
     onProgress: (p) => log(`dump scanned=${p.scanned} eligible=${p.eligible}`),
   });
   log(`dump done scanned=${scanned} eligible=${eligible} selected=${items.length}`);
@@ -245,6 +258,8 @@ async function runMirror(opts) {
   const sizes = [];
   let writeCapHit = false;
   let writeLock = Promise.resolve();
+  const checkpointTimings = [];
+  let lastManifestSave = null;
 
   const reserveFinalManifest = dryRun ? 0 : 1;
   const canImagePut = () => dryRun || (imagePuts + manifestPuts + 1 + reserveFinalManifest) <= writeCap;
@@ -319,7 +334,8 @@ async function runMirror(opts) {
           key: result.key,
         });
         if (imagePuts % MANIFEST_CHECKPOINT_EVERY === 0) {
-          await saveManifest(store, manifest);
+          lastManifestSave = await saveManifest(store, manifest);
+          checkpointTimings.push(lastManifestSave);
           manifestPuts += 1;
         }
       }
@@ -344,7 +360,8 @@ async function runMirror(opts) {
   });
 
   if (!dryRun) {
-    await saveManifest(store, manifest);
+    lastManifestSave = await saveManifest(store, manifest);
+    checkpointTimings.push(lastManifestSave);
     manifestPuts += 1;
   }
 
@@ -376,6 +393,12 @@ async function runMirror(opts) {
     wallSeconds: Math.round(wallMs / 100) / 10,
     throughputPerMinute: wallMs > 0 ? Math.round(mirrored.length / (wallMs / 60000) * 10) / 10 : 0,
     writeCapHit,
+    scope,
+    manifestCompressedBytes: lastManifestSave ? lastManifestSave.bytes : 0,
+    manifestEntryCount: Object.keys((manifest && manifest.entries) || {}).length,
+    manifestCheckpoints: checkpointTimings.length,
+    manifestSerializeMs: timingStats(checkpointTimings.map((t) => t.serializeMs)),
+    manifestPutMs: timingStats(checkpointTimings.map((t) => t.putMs)),
   };
 
   fs.mkdirSync(artifactDir, { recursive: true });

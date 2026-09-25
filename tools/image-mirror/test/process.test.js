@@ -4,7 +4,12 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const sharp = require('sharp');
 const { processToSquare, centerSquare, cropRect } = require('../src/process');
-const { solidJpeg, gradientJpeg } = require('./helpers');
+const { solidJpeg, gradientJpeg, quadrantJpeg, jpegWithOrientation, cornerMeans } = require('./helpers');
+
+function isRed(c) { return c.r > 140 && c.r > c.g + 40 && c.r > c.b + 40; }
+function isGreen(c) { return c.g > 140 && c.g > c.r + 40 && c.g > c.b + 40; }
+function isBlue(c) { return c.b > 140 && c.b > c.r + 40 && c.b > c.g + 40; }
+function isYellow(c) { return c.r > 140 && c.g > 140 && c.b < 90; }
 
 describe('processToSquare', () => {
   it('emits a 200×200 JPEG from an uncropped source', async () => {
@@ -75,17 +80,14 @@ describe('processToSquare', () => {
     assert.equal(out.skip, 'unmapped_coordinate_space');
   });
 
-  it('rotates 90° before cropping so coords stay in the defined space', async () => {
-    const src = await gradientJpeg(400, 200, {
-      leftRgb: [220, 20, 20],
-      rightRgb: [20, 40, 220],
-    });
+  it('rotates 90° clockwise (ImageMagick / Product Opener) before cropping', async () => {
+    const src = await quadrantJpeg(400, 400);
     const out = await processToSquare({
       sourceBuffer: src,
       generation: {
-        x1: 0,
+        x1: 200,
         y1: 0,
-        x2: 200,
+        x2: 400,
         y2: 200,
         angle: 90,
         coordinates_image_size: '400',
@@ -93,9 +95,66 @@ describe('processToSquare', () => {
       sourceKind: '400',
     });
     assert.ok(!out.skip, JSON.stringify(out));
-    const meta = await sharp(out.buffer).metadata();
-    assert.equal(meta.width, 200);
-    assert.equal(meta.height, 200);
+    const { data, info } = await sharp(out.buffer).raw().toBuffer({ resolveWithObject: true });
+    const means = cornerMeans(data, info.width, info.height, info.channels);
+    // 90° CW moves red TL → TR; the TR crop is that red block.
+    assert.ok(isRed(means.tl) || isRed(means.tr) || isRed(means.bl) || isRed(means.br), JSON.stringify(means));
+    assert.ok(isRed(means.tl) && isRed(means.tr) && isRed(means.bl) && isRed(means.br),
+      `crop after 90° CW should be the red quadrant, got ${JSON.stringify(means)}`);
+  });
+});
+
+describe('OFF rotation direction', () => {
+  async function meansAfter(angle) {
+    const src = await quadrantJpeg(400, 400);
+    const out = await processToSquare({
+      sourceBuffer: src,
+      generation: { angle },
+      sourceKind: '400',
+    });
+    assert.ok(!out.skip, JSON.stringify(out));
+    const { data, info } = await sharp(out.buffer).raw().toBuffer({ resolveWithObject: true });
+    return cornerMeans(data, info.width, info.height, info.channels);
+  }
+
+  it('rotates 90° clockwise — red TL moves to TR', async () => {
+    const m = await meansAfter(90);
+    assert.ok(isRed(m.tr), `TR should be red after 90° CW: ${JSON.stringify(m)}`);
+    assert.ok(isBlue(m.tl), `TL should be blue after 90° CW: ${JSON.stringify(m)}`);
+  });
+  it('rotates 180° — red TL moves to BR', async () => {
+    const m = await meansAfter(180);
+    assert.ok(isRed(m.br), `BR should be red after 180°: ${JSON.stringify(m)}`);
+    assert.ok(isYellow(m.tl) || isGreen(m.tl) === false, JSON.stringify(m));
+    assert.ok(isYellow(m.tl), `TL should be yellow after 180°: ${JSON.stringify(m)}`);
+  });
+  it('rotates 270° clockwise — red TL moves to BL', async () => {
+    const m = await meansAfter(270);
+    assert.ok(isRed(m.bl), `BL should be red after 270° CW: ${JSON.stringify(m)}`);
+    assert.ok(isGreen(m.tl), `TL should be green after 270° CW: ${JSON.stringify(m)}`);
+  });
+});
+
+describe('EXIF orientation', () => {
+  it('ignores EXIF Orientation so there is no double rotation with generation.angle', async () => {
+    const raw = await quadrantJpeg(400, 400);
+    // Orientation 3 = 180°. Combined with generation 90 that would be 270 if applied.
+    const tagged = await jpegWithOrientation(raw, 3);
+    const taggedMeta = await sharp(tagged, { failOn: 'none' }).metadata();
+    assert.equal(taggedMeta.orientation, 3);
+
+    const out = await processToSquare({
+      sourceBuffer: tagged,
+      generation: { angle: 90 },
+      sourceKind: '400',
+    });
+    assert.ok(!out.skip, JSON.stringify(out));
+    const { data, info } = await sharp(out.buffer).raw().toBuffer({ resolveWithObject: true });
+    const m = cornerMeans(data, info.width, info.height, info.channels);
+    // Product Opener crop path: Rotate(generation) only. 90° CW → red at TR.
+    // Double rotation (EXIF 180 + 90) would put red at BL.
+    assert.ok(isRed(m.tr), `expected generation-only 90° CW (red at TR), got ${JSON.stringify(m)}`);
+    assert.ok(!isRed(m.bl), `double rotation would put red at BL: ${JSON.stringify(m)}`);
   });
 });
 

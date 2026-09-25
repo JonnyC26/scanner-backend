@@ -79,6 +79,7 @@ function writeContactSheet({ outDir, mirrored, seed, summary }) {
   <title>Purla image-mirror contact sheet</title>
   <style>
     body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 24px; color: #111; }
+    .notice { background: #fef3c7; border: 1px solid #f59e0b; padding: 10px 14px; border-radius: 8px; font-weight: 600; }
     .summary { background: #f4f4f5; padding: 12px 16px; border-radius: 8px; margin-bottom: 24px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
     .card { border: 1px solid #e4e4e7; border-radius: 8px; padding: 12px; margin: 0; }
@@ -92,6 +93,7 @@ function writeContactSheet({ outDir, mirrored, seed, summary }) {
   </style>
 </head>
 <body>
+  <p class="notice">Extract the zip before opening this file. Images are referenced by relative path and appear broken otherwise.</p>
   <h1>Image mirror contact sheet</h1>
   <div class="summary">
     <div>seed: ${escapeHtml(summary.sampleSeed)}</div>
